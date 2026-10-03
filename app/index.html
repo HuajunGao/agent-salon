@@ -312,6 +312,7 @@
       <label class="switch" title="Jev 判断观点已收敛时，请一位成员总结后结束本轮">收敛后自动收尾 <input id="s-autoStop" type="checkbox"></label>
       <label title="收敛度达到这个值就收尾；“大体一致且只在附和/重复”也会收尾">收敛阈值（%） <input id="s-convergeAt" type="number" min="50" max="100" step="5"></label>
       <label class="switch" title="见仁见智的问题如果没人认真反对就达成一致，收尾前请一位成员唱反调（每轮一次）">太快一致时唱反调 <input id="s-devil" type="checkbox"></label>
+      <label class="switch" id="execrow" title="成员可以在各自的工作目录里写文件、运行代码来验证观点；只在服务器以独立的普通用户运行成员时可用">允许执行代码 <input id="s-exec" type="checkbox"></label>
       <label class="switch" title="每轮结束后，把你说过的长期有用的信息整理进“关于你”，新讨论里的成员都会先读到">跨讨论记住我 <input id="s-memory" type="checkbox"></label>
       <label class="switch" title="同样的论点来回重复、没有进展时暂停，等你定方向（每轮一次）">原地打转时暂停 <input id="s-circlePause" type="checkbox"></label>
     </div>
@@ -534,6 +535,7 @@ function renderMembers() {
 function renderState() {
   const now = Date.now() - clockSkew;
   renderHistory(); renderModerator(); renderMemory();
+  $('#s-exec').disabled = !S.sandboxed; $('#execrow').style.opacity = S.sandboxed ? '' : '.45';
   const cur = S.chats.find(c => c.id === S.chatId);
   $('#title').textContent = cur?.title || '';
   setHTML('#members', renderMembers()) && document.querySelectorAll('[data-live]').forEach(d => {
@@ -554,7 +556,7 @@ function renderState() {
   if (S.holding) info.push('你在输入，暂缓发布');
   else if (S.readLeft > 0 && S.queue.length) info.push(`阅读中，还剩 ${fmtSecs(S.readLeft)}`);
   $('#info').textContent = info.join('，');
-  for (const k of ['autoStop', 'devil', 'circlePause', 'memory']) $('#s-' + k).checked = S.settings[k];
+  for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec']) $('#s-' + k).checked = S.settings[k];
   for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin']) {
     const el = $('#s-' + k);
     if (document.activeElement !== el) el.value = S.settings[k];
@@ -612,7 +614,7 @@ document.addEventListener('change', e => {
   if (d.enable) post('/api/settings', { enabled: { [d.enable]: e.target.checked } });
   if (d.model) post('/api/settings', { models: { [d.model]: e.target.value } });
 });
-for (const k of ['autoStop', 'devil', 'circlePause', 'memory']) $('#s-' + k).onchange = e => post('/api/settings', { [k]: e.target.checked });
+for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec']) $('#s-' + k).onchange = e => post('/api/settings', { [k]: e.target.checked });
 for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin'])
   $('#s-' + k).addEventListener('change', e => post('/api/settings', { [k]: e.target.value }));
 

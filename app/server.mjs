@@ -1,10 +1,10 @@
 // agent-chat server: SQLite + SSE + scheduler + reading-pace publish queue. No npm dependencies.
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, chmodSync, chownSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { AGENTS, runTurn, listModels } from './agents.mjs';
+import { AGENTS, runTurn, listModels, runAs } from './agents.mjs';
 import { judge, novelty } from './moderator.mjs';
 import { curate } from './memory.mjs';
 
@@ -13,11 +13,17 @@ const DATA = join(ROOT, 'data'), WORK = join(ROOT, 'workspace');
 // Every discussion is archived as data/discussions/<id>.md plus an index, so agents can look up earlier ones.
 const ARCHIVE = join(DATA, 'discussions'), MEMORY = join(DATA, 'memory.md');
 mkdirSync(ARCHIVE, { recursive: true }); mkdirSync(WORK, { recursive: true });
+// AGENT_USER (Linux, server as root): the CLIs run as that user, each in its own workspace it may write and execute in;
+// the database stays root-only, the archive and memory are readable. Without it (e.g. Windows) all share workspace/.
+const RUNAS = process.env.AGENT_USER ? runAs(process.env.AGENT_USER) : null;
+const wsOf = a => (RUNAS ? join(WORK, a) : WORK);
+if (RUNAS) for (const a of Object.keys(AGENTS)) { mkdirSync(wsOf(a), { recursive: true }); chownSync(wsOf(a), RUNAS.uid, RUNAS.gid); }
 const PORT = +process.env.PORT || 3517, HOST = process.env.HOST || '127.0.0.1'; // HOST=0.0.0.0 to serve the LAN
 const NAMES = Object.keys(AGENTS);
 
 // ---------- storage ----------
 const db = new DatabaseSync(join(DATA, 'chat.db'));
+if (RUNAS) chmodSync(join(DATA, 'chat.db'), 0o600); // agents can't read the database (incl. other discussions' sessions)
 db.exec(`
 CREATE TABLE IF NOT EXISTS chats(id INTEGER PRIMARY KEY, title TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, paused INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, chat_id INTEGER, sender TEXT, kind TEXT, text TEXT,
@@ -35,7 +41,7 @@ const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
 const run = (sql, ...a) => db.prepare(sql).run(...a);
 
-const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true, memory: true,
+const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true, memory: true, exec: true,
   enabled: Object.fromEntries(NAMES.map(n => [n, true])), models: Object.fromEntries(NAMES.map(n => [n, AGENTS[n].defaultModel])) };
 let S = { ...DEFAULTS, ...JSON.parse(q1(`SELECT value FROM settings WHERE key='s'`)?.value || '{}') };
 S.models = { ...DEFAULTS.models, ...S.models };
@@ -243,6 +249,13 @@ async function maybeCurate(force = false) {
 
 // Codex reads files only through shell commands and runs in a read-only sandbox; the others have file tools,
 // and headless agy ends its turn with no reply when a command is denied.
+// Executing code is only offered when the OS confines the agents (AGENT_USER) and the setting is on.
+const execOn = () => !!RUNAS && S.exec;
+const toolRule = a => (execOn()
+  ? `You have your own workspace, ${wsOf(a)} (your current directory): you may create files and run code there to check a
+  claim, e.g. a small script, a quick benchmark, or installing a package locally. Keep it quick: a turn should finish within
+  a couple of minutes. Stay inside your workspace; the discussion files are read-only for you.`
+  : `The discussion is read-only: don't create, edit or delete files. ${SHELL_RULE[a] || SHELL_RULE.default}`);
 const SHELL_RULE = {
   codex: 'Your sandbox is read-only: read-only shell commands (cat, rg, ls) are fine for reading files.',
   default: "Don't run shell commands (they are denied, and a denied action ends your turn without a reply).",
@@ -258,7 +271,7 @@ Rules:
 - The user is a participant: when the user has spoken, engage with their points first.
 - If you have nothing worth adding right now, answer exactly PASS. If a message @mentions someone else and not you, usually PASS.
 - To speak again after others respond, end your message with [HAND]. To ask a member something, @mention them.
-- The discussion is read-only: you may search the web, read web pages and read files to inform it, but don't create, edit or delete files. ${SHELL_RULE[a] || SHELL_RULE.default}
+- You may search the web, read web pages and read files to inform the discussion. ${toolRule(a)}
 - This discussion's full transcript is ${archiveFile(chat)}. Earlier discussions are archived in ${ARCHIVE}: index.md lists
   them with their conclusions, <id>.md is one discussion. When the user refers to something discussed before, look it up
   there (read / search the files) instead of guessing.
@@ -293,12 +306,13 @@ async function startTurn(a, retried = false) {
   else if (floor && !summary) prompt += `\n\nThe user has given you the floor: please speak now.`;
   if (invited) prompt += `\n\nThe moderator invited you to speak: you seem to have something new to add here.`;
   prompt += `\n\n(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later. `
-    + `${a === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.'})`;
+    + (execOn() ? `You may run code in your workspace ${wsOf(a)} to check claims; keep it quick.)`
+      : `${a === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.'})`);
   sendState();
 
   const model = S.models[a];
   const res = await runTurn(a, prompt, s.cli_session_id, {
-    cwd: WORK, dataDir: DATA, model,
+    cwd: wsOf(a), dataDir: DATA, model, exec: execOn(),
     onLive: log => { rt[a].live = log; sendStateSoon(); },
   });
   if (!q1('SELECT 1 FROM chats WHERE id=?', chat)) { rt[a].status = 'idle'; return pump(); } // discussion deleted meanwhile
@@ -449,6 +463,7 @@ function state() {
     type: 'state', now, chatId, paused, mod, wrapped: !!wrapRound && wrapRound === lastUserId(chatId), settings: S, readLeft: Math.max(0, readUntil - now),
     holding: now - typingAt < 15e3,
     chats: listChats(),
+    sandboxed: !!RUNAS,
     memory: { text: readMemory(), curating: memo.curating, at: memo.at, error: memo.error },
     jev: { on: jevOn(), assessing: jev.assessing, judging: jev.judging, ms: jev.ms, down: S.scheduler === 'jev' && !jevOn() },
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
@@ -503,7 +518,7 @@ const routes = {
   'POST /api/lower'({ agent }) { if (AGENTS[agent]) rt[agent].hand = null; },
   'POST /api/settings'(body) {
     for (const k of ['language', 'scheduler']) if (typeof body[k] === 'string' && body[k]) S[k] = body[k];
-    for (const k of ['autoStop', 'devil', 'circlePause', 'memory']) if (typeof body[k] === 'boolean') S[k] = body[k];
+    for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec']) if (typeof body[k] === 'boolean') S[k] = body[k];
     for (const k of ['turnCap', 'readSpeed', 'maxThinkers', 'convergeAt', 'noveltyMin']) if (+body[k] > 0) S[k] = +body[k];
     if (body.enabled) S.enabled = { ...S.enabled, ...body.enabled };
     // Only models a CLI listed (or its default) are accepted; the next turn uses it and resumes the same session.

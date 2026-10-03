@@ -5,10 +5,25 @@ import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, rmSync,
 import { homedir, tmpdir } from 'node:os';
 import { join, dirname, delimiter } from 'node:path';
 
-const H = homedir();
+let H = homedir();
 const WIN = process.platform === 'win32';
+
+// Optional (Linux, server running as root): run every CLI as an unprivileged user, so agents can be given write and
+// execute rights while the OS keeps them away from the database and the server's files. Set from AGENT_USER.
+let RUNAS = null; // {name, uid, gid, home}
+export function runAs(name) {
+  const line = readFileSync('/etc/passwd', 'utf8').split('\n').find(l => l.startsWith(name + ':'));
+  if (!line) throw new Error(`AGENT_USER ${name} does not exist`);
+  const [, , uid, gid, , home] = line.split(':');
+  H = home;
+  return (RUNAS = { name, uid: +uid, gid: +gid, home });
+}
+const userEnv = env => (RUNAS ? { ...env, HOME: RUNAS.home, USER: RUNAS.name, LOGNAME: RUNAS.name,
+  PATH: [join(RUNAS.home, '.local/bin'), join(RUNAS.home, '.opencode/bin'), env.PATH].join(delimiter) } : env);
+const asUser = () => (RUNAS ? { uid: RUNAS.uid, gid: RUNAS.gid } : {});
+
 // All matches for `name` on PATH (Windows: also name.exe / name.cmd).
-const where = name => (process.env.PATH || '').split(delimiter).filter(Boolean)
+const where = name => (userEnv(process.env).PATH || '').split(delimiter).filter(Boolean)
   .flatMap(d => (WIN ? ['.exe', '.cmd', ''] : ['']).map(ext => join(d, name + ext))).filter(existsSync);
 const exe = name => (WIN ? where(name).find(p => /\.exe$/i.test(p)) : where(name)[0]) || name;
 
@@ -72,6 +87,8 @@ function opencodeNoMcp() {
   return (ocNoMcp = JSON.stringify({ mcp: Object.fromEntries(names.map(n => [n, { type: 'local', command: ['none'], enabled: false }])) }));
 }
 
+const CLAUDE_TOOLS = exec => ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', ...(exec ? ['Bash', 'Edit', 'Write'] : [])];
+
 const short = (s, n = 200) => (s.length > n ? s.slice(0, n) + '…' : s);
 
 export const AGENTS = {
@@ -88,8 +105,8 @@ export const AGENTS = {
         '--settings', glm ? glmSettingsFile() : '{"disableAllHooks":true}', '--add-dir', o.dataDir,
         ...(model ? ['--model', model] : []),
         // --tools limits what exists; --allowedTools pre-approves it (-p can't ask, so web tools were refused).
-        '--tools', 'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
-        '--allowedTools', 'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
+        // exec mode (only when the OS confines the agent user) adds editing and Bash.
+        '--tools', ...CLAUDE_TOOLS(o.exec), '--allowedTools', ...CLAUDE_TOOLS(o.exec),
         ...(sid ? ['--resume', sid] : [])] };
     },
     parse(ev, st) {
@@ -108,7 +125,9 @@ export const AGENTS = {
       // Plain Codex: --ignore-user-config skips ~/.codex/config.toml (plugins, MCP servers, reasoning effort);
       // auth still comes from CODEX_HOME. Model and sandbox are passed every time (resume would not keep them).
       args: ['exec', '--json', '--skip-git-repo-check', '--ignore-user-config', '-m', o.model || 'gpt-6.1-sol',
-        '-c', 'sandbox_mode=read-only', '-c', 'web_search="live"',
+        // exec mode: Codex's own OS sandbox confines writes to its workspace (verified in the LXC); network for installs.
+        ...(o.exec ? ['-c', 'sandbox_mode=workspace-write', '-c', 'sandbox_workspace_write.network_access=true']
+          : ['-c', 'sandbox_mode=read-only']), '-c', 'web_search="live"',
         ...(sid ? ['resume', sid] : []), prompt],
     }),
     parse(ev, st) {
@@ -127,8 +146,9 @@ export const AGENTS = {
     label: 'Antigravity', color: '#4285f4', defaultModel: 'gemini-3.8-flash-medium',
     cmd: (prompt, sid, o) => ({
       bin: exe('agy'), env: process.env,
-      args: ['-p', prompt, '--model', o.model || 'gemini-3.8-flash-medium', '--output-format', 'stream-json', '--mode', 'plan',
-        ...(sid ? ['--conversation', sid] : [])],
+      // Read-only: plan mode. exec mode: approve everything (headless agy can't ask; the OS user is the boundary).
+      args: ['-p', prompt, '--model', o.model || 'gemini-3.8-flash-medium', '--output-format', 'stream-json',
+        ...(o.exec ? ['--dangerously-skip-permissions'] : ['--mode', 'plan']), ...(sid ? ['--conversation', sid] : [])],
     }),
     parse(ev, st) {
       if (ev.conversation_id) st.sid = ev.conversation_id;
@@ -152,7 +172,9 @@ export const AGENTS = {
       // `run`). v2 dropped --pure and runs through a shared background service by default; --standalone gives each
       // run a private server, so this run's environment (output cap, MCP off) applies.
       env: { ...process.env, OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: '131072', OPENCODE_CONFIG_CONTENT: opencodeNoMcp() },
-      args: ['run', opencodeV2() ? '--standalone' : '--pure', '--agent', 'plan', '-m', o.model || 'zai-coding-plan/glm-5.3',
+      // Read-only: the plan agent. exec mode: the build agent, auto-approving (v2 --auto) inside the OS-confined user.
+      args: ['run', opencodeV2() ? '--standalone' : '--pure', '--agent', o.exec ? 'build' : 'plan',
+        ...(o.exec && opencodeV2() ? ['--auto'] : []), '-m', o.model || 'zai-coding-plan/glm-5.3',
         '--format', 'json', ...(sid ? ['-s', sid] : []), prompt],
     }),
     parse(ev, st) {
@@ -180,9 +202,9 @@ const FAIL = [
 const IDLE_MS = 5 * 60e3, TOTAL_MS = 15 * 60e3;
 
 // Run one turn. onLive(text) receives a readable live log. Resolves {text, sid, error, ms}.
-export function runTurn(agent, prompt, sid, { cwd, dataDir, model, onLive }) {
+export function runTurn(agent, prompt, sid, { cwd, dataDir, model, exec, onLive }) {
   const a = AGENTS[agent];
-  const { bin, args, env } = a.cmd(prompt, sid, { dataDir, model });
+  const { bin, args, env } = a.cmd(prompt, sid, { dataDir, model, exec });
   const t0 = Date.now();
   let log = '';
   const st = {
@@ -192,7 +214,7 @@ export function runTurn(agent, prompt, sid, { cwd, dataDir, model, onLive }) {
   return new Promise(resolve => {
     let raw = '', buf = '', killed = '';
     // On Linux the CLI gets its own process group so a timeout can kill everything it started.
-    const p = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: !WIN });
+    const p = spawn(bin, args, { cwd, env: userEnv(env), ...asUser(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: !WIN });
     const kill = why => {
       killed = why;
       if (WIN) spawn('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true });
@@ -232,7 +254,7 @@ export function runTurn(agent, prompt, sid, { cwd, dataDir, model, onLive }) {
 const out = (bin, args) => new Promise(res => {
   const f = join(tmpdir(), `agent-chat-out-${process.pid}-${Math.random().toString(36).slice(2)}`), fd = openSync(f, 'w');
   const read = () => { closeSync(fd); let s = ''; try { s = readFileSync(f, 'utf8'); rmSync(f, { force: true }); } catch {} return s; };
-  const p = spawn(bin, args, { stdio: ['ignore', fd, 'ignore'], windowsHide: true });
+  const p = spawn(bin, args, { env: userEnv(process.env), ...asUser(), stdio: ['ignore', fd, 'ignore'], windowsHide: true });
   const t = setTimeout(() => p.kill(), 90e3);
   p.on('close', () => { clearTimeout(t); res(read()); }); p.on('error', () => { clearTimeout(t); res(read()); });
 });
