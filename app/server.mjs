@@ -10,7 +10,7 @@ import { judge, novelty } from './moderator.mjs';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DATA = join(ROOT, 'data'), WORK = join(ROOT, 'workspace'), TRANSCRIPT = join(DATA, 'transcript.md');
 mkdirSync(DATA, { recursive: true }); mkdirSync(WORK, { recursive: true });
-const PORT = +process.env.PORT || 3517;
+const PORT = +process.env.PORT || 3517, HOST = process.env.HOST || '127.0.0.1'; // HOST=0.0.0.0 to serve the LAN
 const NAMES = Object.keys(AGENTS);
 
 // ---------- storage ----------
@@ -531,6 +531,6 @@ http.createServer((req, res) => {
     try { h(body ? JSON.parse(body) : {}); pump(); res.writeHead(200).end('{}'); }
     catch (e) { console.error(e); res.writeHead(500).end(JSON.stringify({ error: e.message })); }
   });
-}).listen(PORT, '127.0.0.1', () => console.log(`agent-chat on http://localhost:${PORT}`));
+}).listen(PORT, HOST, () => console.log(`agent-chat on http://${HOST}:${PORT}`));
 
 setInterval(pump, 1000); // thinking timers, reading countdown, typing hold expiry

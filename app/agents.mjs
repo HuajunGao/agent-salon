@@ -1,18 +1,20 @@
 // CLI adapters: one headless process per turn, resuming the agent's own CLI session.
 // Flags and pitfalls: see PLAN.md and ~/.claude/skills/delegate-agents/run-agent.sh.
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, delimiter } from 'node:path';
 
 const H = homedir();
-const where = name => {
-  try { return execFileSync('where.exe', [name], { encoding: 'utf8' }).split(/\r?\n/).filter(Boolean); } catch { return []; }
-};
-const exe = name => where(name).find(p => /\.exe$/i.test(p)) || name;
+const WIN = process.platform === 'win32';
+// All matches for `name` on PATH (Windows: also name.exe / name.cmd).
+const where = name => (process.env.PATH || '').split(delimiter).filter(Boolean)
+  .flatMap(d => (WIN ? ['.exe', '.cmd', ''] : ['']).map(ext => join(d, name + ext))).filter(existsSync);
+const exe = name => (WIN ? where(name).find(p => /\.exe$/i.test(p)) : where(name)[0]) || name;
 
 // The codex on PATH lags the Codex app's bundled CLI and rejects new models: use the newest bundled one.
 function codexBin() {
+  if (!WIN) return exe('codex');
   const d = join(H, 'AppData/Local/OpenAI/Codex/bin');
   try {
     const bins = readdirSync(d).map(x => join(d, x, 'codex.exe')).filter(existsSync);
@@ -22,6 +24,7 @@ function codexBin() {
 }
 // opencode on PATH is an npm .cmd shim; spawn the real exe so arguments aren't re-parsed by cmd.exe.
 function opencodeBin() {
+  if (!WIN) return exe('opencode');
   const cmd = where('opencode').find(p => /\.cmd$/i.test(p));
   const bin = cmd && join(dirname(cmd), 'node_modules/opencode-ai/bin/opencode.exe');
   return bin && existsSync(bin) ? bin : exe('opencode');
@@ -52,9 +55,9 @@ let ocNoMcp;
 function opencodeNoMcp() {
   if (ocNoMcp != null) return ocNoMcp;
   let names = [];
-  try {
-    const text = readFileSync(join(H, '.config/opencode/opencode.jsonc'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
-    names = Object.keys(JSON.parse(text).mcp || {});
+  for (const f of ['opencode.jsonc', 'opencode.json']) try {
+    const text = readFileSync(join(H, '.config/opencode', f), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+    names.push(...Object.keys(JSON.parse(text).mcp || {}));
   } catch {}
   return (ocNoMcp = JSON.stringify({ mcp: Object.fromEntries(names.map(n => [n, { type: 'local', command: ['none'], enabled: false }])) }));
 }
@@ -175,8 +178,13 @@ export function runTurn(agent, prompt, sid, { cwd, dataDir, model, onLive }) {
   };
   return new Promise(resolve => {
     let raw = '', buf = '', killed = '';
-    const p = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-    const kill = why => { killed = why; spawn('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true }); };
+    // On Linux the CLI gets its own process group so a timeout can kill everything it started.
+    const p = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: !WIN });
+    const kill = why => {
+      killed = why;
+      if (WIN) spawn('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true });
+      else try { process.kill(-p.pid, 'SIGKILL'); } catch {}
+    };
     let idle = setTimeout(() => kill('idle timeout'), IDLE_MS);
     const total = setTimeout(() => kill('total timeout'), TOTAL_MS);
     const onData = d => {
@@ -224,7 +232,8 @@ export async function listModels() {
   return {
     // Claude Code has no list command: aliases resolve to the latest model of each family.
     claude: [{ id: '', name: 'default（你的 Claude Code 默认）' }, ...['fable', 'opus', 'sonnet', 'haiku'].map(id => ({ id, name: id })),
-      { id: 'glm:opus', name: 'GLM 5.3（settings-glm.json）' }, { id: 'glm:haiku', name: 'GLM 5.3 FlashX（settings-glm.json）' }],
+      ...(existsSync(join(H, '.claude/settings-glm.json'))
+        ? [{ id: 'glm:opus', name: 'GLM 5.3（settings-glm.json）' }, { id: 'glm:haiku', name: 'GLM 5.3 FlashX（settings-glm.json）' }] : [])],
     codex: codexList,
     agy: lines(agy).filter(l => l.includes('\t')).map(l => { const [id, name] = l.split('\t'); return { id, name }; }),
     opencode: lines(oc).filter(l => /^[\w.-]+\/\S+$/.test(l)).map(id => ({ id, name: id })),
