@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "agent-chat", "runtimeExecutable": "node", "runtimeArgs": ["app/server.mjs"], "port": 3517 }
+  ]
+}
