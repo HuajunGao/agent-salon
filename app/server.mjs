@@ -241,6 +241,12 @@ async function maybeCurate(force = false) {
   sendState();
 }
 
+// Codex reads files only through shell commands and runs in a read-only sandbox; the others have file tools,
+// and headless agy ends its turn with no reply when a command is denied.
+const SHELL_RULE = {
+  codex: 'Your sandbox is read-only: read-only shell commands (cat, rg, ls) are fine for reading files.',
+  default: "Don't run shell commands (they are denied, and a denied action ends your turn without a reply).",
+};
 function intro(a, chat) {
   const memory = S.memory ? readMemory().trim() : '';
   return `You are ${describe(a)}, one member of a live group chat running on the user's machine.
@@ -252,7 +258,7 @@ Rules:
 - The user is a participant: when the user has spoken, engage with their points first.
 - If you have nothing worth adding right now, answer exactly PASS. If a message @mentions someone else and not you, usually PASS.
 - To speak again after others respond, end your message with [HAND]. To ask a member something, @mention them.
-- The discussion is read-only: you may search the web, read web pages and read files to inform it, but don't create, edit or delete files and don't run shell commands (they are denied, and a denied action ends your turn without a reply).
+- The discussion is read-only: you may search the web, read web pages and read files to inform it, but don't create, edit or delete files. ${SHELL_RULE[a] || SHELL_RULE.default}
 - This discussion's full transcript is ${archiveFile(chat)}. Earlier discussions are archived in ${ARCHIVE}: index.md lists
   them with their conclusions, <id>.md is one discussion. When the user refers to something discussed before, look it up
   there (read / search the files) instead of guessing.
@@ -287,7 +293,7 @@ async function startTurn(a, retried = false) {
   else if (floor && !summary) prompt += `\n\nThe user has given you the floor: please speak now.`;
   if (invited) prompt += `\n\nThe moderator invited you to speak: you seem to have something new to add here.`;
   prompt += `\n\n(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later. `
-    + `No shell commands: use web search, web pages and file reading only.)`;
+    + `${a === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.'})`;
   sendState();
 
   const model = S.models[a];
