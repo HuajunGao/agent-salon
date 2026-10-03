@@ -194,6 +194,16 @@ logged in once (`claude auth login`); the desktop app's own login isn't usable b
   its stdout is lost through a Node pipe on exit (one-shot commands now write to a temp file).
 - agy on the server needed `read_url(*)` and `read_file(*)` allow rules plus the workspace in trustedWorkspaces
   (headless denials end a turn with an empty reply). Codex's read-only sandbox works inside the LXC.
+- **Agents run as the unprivileged user `agent`** (`AGENT_USER=agent` in /etc/agent-chat.env; one-time
+  `deploy/setup-agent-user.sh` creates it and copies the CLIs and their logins from root, ZFS block cloning makes the
+  copy nearly free). The service stays root and spawns each CLI with agent's uid/gid/HOME and `PWD` set to its
+  workspace (opencode 2 and agy take the project directory from PWD, not the real cwd). Each member has
+  workspace/<member> (agent-owned, read/write/execute); chat.db is mode 600 (root only); the archive and memory are
+  readable; /root, /etc/agent-chat.env and the app are out of reach — all verified as agent.
+- "允许执行代码" (setting `exec`, on by default, only effective with AGENT_USER): Claude gets Bash/Edit/Write,
+  Codex `workspace-write` + network (its own OS sandbox, verified: writes outside are "Read-only file system"), agy
+  drops plan mode for `--dangerously-skip-permissions`, OpenCode uses the build agent with `--auto`. Verified in a
+  real discussion: all four wrote and ran benchmarks in their own workspaces and checked each other's numbers.
 - The app has no login: keep it on the LAN (or Tailscale / a reverse proxy with auth), never port-forward it.
 
 ## Phases
