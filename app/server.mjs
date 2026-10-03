@@ -163,9 +163,9 @@ let readUntil = 0, typingAt = 0;
 let speakingAt = 0, ttsActiveAt = 0;
 // Each member's own voice: chosen in the UI, else the Azure pool by member order (stable: creation order).
 const voiceOf = a => S.ttsVoices?.[a] || defaultVoice(Math.max(0, NAMES.indexOf(a)));
-// "#58" is read as the name of whoever wrote #58 ("你" for the user); unknown numbers are dropped.
+// "#58" is read as the name of whoever wrote #58 (the user: the name set under 关于你, else 用户); unknown numbers are dropped.
 const refName = id => { const s = q1('SELECT sender FROM messages WHERE id=?', id)?.sender;
-  return s === 'user' ? '你' : s && memberConfigs[s] ? aliasOf(s) : null; };
+  return s === 'user' ? (S.userName || '用户') : s && memberConfigs[s] ? aliasOf(s) : null; };
 // No "name:" prefix: each member has its own voice.
 const spoken = (a, text) => speakable(text, refName);
 let mod = null;                         // latest Jev judgment this round: {convergence, stalling, msgId}
@@ -733,6 +733,7 @@ const routes = {
   'POST /api/lower'({ agent }) { if (NAMES.includes(agent)) rt[agent].hand = null; },
   'POST /api/settings'(body) {
     for (const k of ['language', 'scheduler']) if (typeof body[k] === 'string' && body[k]) S[k] = body[k];
+    if (typeof body.userName === 'string') S.userName = body.userName.trim().slice(0, 20); // '' = 用户
     for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind']) if (typeof body[k] === 'boolean') S[k] = body[k];
     for (const k of ['turnCap', 'readSpeed', 'maxThinkers', 'convergeAt', 'noveltyMin']) if (+body[k] > 0) S[k] = +body[k];
     if (body.enabled) S.enabled = { ...S.enabled, ...body.enabled };
