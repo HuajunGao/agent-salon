@@ -105,6 +105,14 @@ The conversation must move at the user's reading speed, not as fast as agents ca
   cooldown. Candidates at or above the novelty threshold (UI, default 45%) are invited; follow-up hands below it
   are dropped without launching a CLI. The user's own wake-ups, @mentions and floor are never second-guessed; a
   user message still wakes everyone. On a Jev error it falls back to the algorithm for one minute.
+- **Implemented: devil's advocate and circling** — three more Nouls in the same convergence request (no extra
+  call): `debatable` (judgment call vs factual question), `challenged` (did anyone seriously push back),
+  `circling` (same arguments back and forth without progress). On a stop decision with debatable ≥ 0.6 and
+  challenged < 0.4, the quietest member argues the other side first (once per round; the others are invited to
+  answer, and no wrap-up until they have). Circling ≥ 0.7 pauses and hands direction to the user (once per round;
+  the user's next message resumes). Validation: factual rounds scored debatable 0.03–0.32; the quick-consensus
+  judgment round 0.95 with challenged 0.07; a constructed back-and-forth circling 0.96 vs 0.08 when progressing.
+  Messages from these requests carry `role` = devil | summary (tags in the UI). UI toggles for both.
 - **Moderator presence**: moderator notes are their own message kind (shown as 🧭 pills, never fed to agents or
   Jev): invitations with novelty, the convergence wrap-up, and "nobody has anything new: your turn" when the room
   goes quiet without converging. A moderator card shows its status, the convergence and restating meters with
@@ -122,7 +130,10 @@ The conversation must move at the user's reading speed, not as fast as agents ca
 - Show every moderator decision in the chat ("🧭 invite GLM (0.71)"). A human @mention always overrides.
 
 ### Web UI
-- **Implemented layout**: left = discussion history (newest activity first, latest question as preview, message
+- The current discussion is server-wide (shared by all windows); a send carries the chat the sender is looking at
+  and is refused if it no longer matches. Per-window discussions would need chatId per SSE client.
+- **Implemented layout**: left = collapsible discussion history (ChatGPT-style toggle, Ctrl+Shift+S, remembered;
+  collapsed by default under 1100px), (newest activity first, latest question as preview, message
   count, auto-title from the first question, full-text search over titles and messages with jump-to-message,
   rename, Markdown export, delete with confirmation); middle = chat; right = moderator card, members (harness +
   model picker), settings.

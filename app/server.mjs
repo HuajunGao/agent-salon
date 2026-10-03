@@ -26,12 +26,13 @@ CREATE TABLE IF NOT EXISTS agent_sessions(chat_id INTEGER, agent TEXT, cli_sessi
 CREATE TABLE IF NOT EXISTS decisions(id INTEGER PRIMARY KEY, chat_id INTEGER, at TEXT DEFAULT CURRENT_TIMESTAMP, mode TEXT,
   event TEXT, agent TEXT, score REAL, detail TEXT, based_on INTEGER, message_id INTEGER, latency_ms INTEGER);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);`);
-if (!db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === 'model')) db.exec('ALTER TABLE messages ADD COLUMN model TEXT');
+for (const col of ['model', 'role']) // role: 'devil' | 'summary' for moderator-requested turns
+  if (!db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === col)) db.exec(`ALTER TABLE messages ADD COLUMN ${col} TEXT`);
 const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
 const run = (sql, ...a) => db.prepare(sql).run(...a);
 
-const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45,
+const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true,
   enabled: Object.fromEntries(NAMES.map(n => [n, true])), models: Object.fromEntries(NAMES.map(n => [n, AGENTS[n].defaultModel])) };
 let S = { ...DEFAULTS, ...JSON.parse(q1(`SELECT value FROM settings WHERE key='s'`)?.value || '{}') };
 S.models = { ...DEFAULTS.models, ...S.models };
@@ -55,9 +56,9 @@ function logDecision(event, agent, extra = {}) {
 }
 
 function insertMsg(m) {
-  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model)
-    VALUES(?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
-    m.latency_ms ?? null, m.turn_no ?? null, m.stale ? 1 : 0, m.model ?? null).lastInsertRowid);
+  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model, role)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
+    m.latency_ms ?? null, m.turn_no ?? null, m.stale ? 1 : 0, m.model ?? null, m.role ?? null).lastInsertRowid);
   const msg = q1('SELECT * FROM messages WHERE id=?', id);
   writeTranscript(m.chat_id);
   if (m.chat_id === chatId) send({ type: 'msg', msg });
@@ -79,7 +80,8 @@ let ready = [];          // finished replies waiting to be published: {chat, age
 let readUntil = 0, typingAt = 0;
 let mod = null;                         // latest Jev judgment this round: {convergence, stalling, msgId}
 let wrapRound = 0;                      // round (= last user message id) already wrapped up
-const jev = { assessing: false, again: false, judging: false, ms: null, downAt: 0, idleNoted: 0 }; // moderator activity
+// Moderator activity. devilAt / circledAt: the round in which devil's advocate / the circling pause already happened.
+const jev = { assessing: false, again: false, judging: false, ms: null, downAt: 0, idleNoted: 0, devilAt: 0, circledAt: 0, circlePaused: false };
 
 // Only user and agent messages are the discussion; system/moderator notes are for the UI.
 const TALK = `kind IN ('user','agent')`;
@@ -214,8 +216,9 @@ Rules:
 
 async function startTurn(a, retried = false) {
   const chat = chatId, s = sess(chat, a), basedOn = maxId(chat);
-  const floor = rt[a].hand?.r >= 100, summary = rt[a].hand?.why === 'summary', invited = rt[a].hand?.why === 'Jev';
-  Object.assign(rt[a], { status: 'thinking', started: Date.now(), live: '', hand: null, note: '', error: '' });
+  const why = rt[a].hand?.why, floor = rt[a].hand?.r >= 100, summary = why === 'summary', invited = why === 'Jev';
+  const role = summary ? 'summary' : why === 'devil' ? 'devil' : null;
+  Object.assign(rt[a], { status: 'thinking', started: Date.now(), live: '', hand: null, note: '', error: '', role });
   let msgs, prompt;
   if (s.cli_session_id) {
     msgs = q(`SELECT * FROM messages WHERE chat_id=? AND id>? AND sender<>? AND ${TALK} ORDER BY id`, chat, s.last_seen_id, a);
@@ -232,7 +235,10 @@ async function startTurn(a, retried = false) {
     + `the conclusion, who agreed (cite #N), and caveats still open. No new arguments, no @mentions, no [HAND].`;
   else prompt += `\n\n(Your turn ${k} of at most ${S.turnCap} since the user's last message; ${n} new message(s).`
     + (k >= S.turnCap && !floor ? ' This is your last turn here: PASS unless something essential is missing.)' : ')');
-  if (floor && !summary) prompt += `\n\nThe user has given you the floor: please speak now.`;
+  if (role === 'devil') prompt += `\n\nThe moderator asks you to play devil's advocate: the group agreed quickly and nobody `
+    + `pushed back. Argue the strongest case against the emerging consensus, concretely (cite #N): when would it be wrong, `
+    + `what does it cost, what is the best alternative? Say briefly that you are taking the opposing side on request.`;
+  else if (floor && !summary) prompt += `\n\nThe user has given you the floor: please speak now.`;
   if (invited) prompt += `\n\nThe moderator invited you to speak: you seem to have something new to add here.`;
   prompt += `\n\n(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later.)`;
   sendState();
@@ -264,7 +270,7 @@ async function startTurn(a, retried = false) {
       rt[a].note = 'PASS';
       logDecision('pass', a, { based_on: basedOn, latency_ms: res.ms });
     } else {
-      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, model: model || 'default', done: Date.now() });
+      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, model: model || 'default', role, done: Date.now() });
       logDecision('ready', a, { based_on: basedOn, latency_ms: res.ms, detail: { hand, chars: text.length } });
     }
   }
@@ -293,7 +299,7 @@ function publishOne(r) {
   const turnNo = q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=?', r.chat, r.agent).n + 1;
   const stale = !!q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user' AND id>? LIMIT 1`, r.chat, r.basedOn);
   const m = insertMsg({ chat_id: r.chat, sender: r.agent, kind: 'agent', text: r.text, based_on: r.basedOn,
-    latency_ms: r.ms, turn_no: turnNo, stale, model: r.model });
+    latency_ms: r.ms, turn_no: turnNo, stale, model: r.model, role: r.role });
   run('UPDATE agent_sessions SET turns=turns+1 WHERE chat_id=? AND agent=?', r.chat, r.agent);
   logDecision('publish', r.agent, { based_on: r.basedOn, message_id: m.id, latency_ms: r.ms,
     detail: { stale, turn_no: turnNo, waited_ms: Date.now() - r.done } });
@@ -301,6 +307,8 @@ function publishOne(r) {
   if (r.chat === chatId && wrapRound !== lastUserId(chatId)) {
     if (S.scheduler === 'broadcast') for (const n of NAMES) { if (n !== r.agent) raise(n, 1, 'broadcast'); }
     if (r.hand) raise(r.agent, 1.5, '[HAND]');
+    // The consensus has to answer the devil's advocate (in jev mode, only those with something new).
+    if (r.role === 'devil') for (const n of NAMES) if (n !== r.agent) raise(n, 1.5, 'answer the devil');
     for (const n of mentions(r.text)) if (n !== r.agent) raise(n, 2, `@ by ${r.agent}`);
     checkConvergence(); // after raising hands: someone just @mentioned hasn't had their say yet
     assess();           // jev mode: who has something new to add now?
@@ -311,23 +319,53 @@ function publishOne(r) {
 // ---------- moderator: stop when views have converged ----------
 async function checkConvergence() {
   const round = lastUserId(chatId);
-  const msgs = q(`SELECT id, sender, kind, text FROM messages WHERE chat_id=? AND id>=? AND ${TALK} ORDER BY id`, chatId, round);
+  const msgs = q(`SELECT id, sender, kind, text, role FROM messages WHERE chat_id=? AND id>=? AND ${TALK} ORDER BY id`, chatId, round);
   // Only judge once everyone woken this round has weighed in: a slow agent still thinking, queued, or waiting
   // for a free slot may yet disagree. (Agents that passed or failed are idle without a hand, so they don't block.)
-  const pending = a => S.enabled[a] && !msgs.some(m => m.sender === a)
-    && (rt[a].status === 'thinking' || rt[a].hand || inQueue(a));
-  if (!S.autoStop || !round || !msgs.some(m => m.kind === 'agent') || NAMES.some(pending)) return;
+  // After a devil's advocate, everyone still busy gets to answer first.
+  const busy = a => rt[a].status === 'thinking' || rt[a].hand || inQueue(a);
+  const devilOpen = msgs.at(-1)?.role === 'devil' || NAMES.some(n => rt[n].role === 'devil' && rt[n].status === 'thinking')
+    || NAMES.some(n => rt[n].hand?.why === 'devil') || ready.some(r => r.role === 'devil');
+  const pending = a => S.enabled[a] && busy(a) && (devilOpen || !msgs.some(m => m.sender === a));
+  if ((!S.autoStop && !S.circlePause) || !round || !msgs.some(m => m.kind === 'agent') || NAMES.some(pending)) return;
+  if (NAMES.some(n => rt[n].hand?.why === 'devil' || (rt[n].role === 'devil' && rt[n].status === 'thinking'))) return;
   jev.judging = true; sendState();
   const j = await judge(msgs);
   jev.judging = false;
   // The round moved on while Jev answered (a new message or a new speaker): the next check will cover it.
   if (lastTalkId() !== msgs.at(-1).id || wrapRound === round || NAMES.some(pending)) return pump();
   if (j.error) { logDecision('judge-error', null, { detail: j }); return pump(); }
-  mod = { convergence: j.convergence, stalling: j.stalling, msgId: msgs.at(-1).id };
+  const { ms, ...judgment } = j;
+  mod = { ...judgment, msgId: msgs.at(-1).id };
+  const pc = x => `${Math.round(x * 100)}%`;
   // Fully converged, or mostly converged while the latest messages only agree/restate.
-  const stop = j.convergence >= S.convergeAt / 100 || (j.convergence >= 0.67 && j.stalling >= 0.6);
+  const stop = S.autoStop && (j.convergence >= S.convergeAt / 100 || (j.convergence >= 0.67 && j.stalling >= 0.6));
   logDecision('judge', null, { score: j.convergence, message_id: mod.msgId, latency_ms: j.ms, detail: { ...j, stop } });
+
+  // Going in circles: pause and let the user steer (once per round).
+  if (!stop && S.circlePause && j.circling >= 0.7 && jev.circledAt !== round) {
+    jev.circledAt = round; jev.circlePaused = paused = true; run('UPDATE chats SET paused=1 WHERE id=?', chatId);
+    for (const n of NAMES) rt[n].hand = null;
+    logDecision('circling', null, { score: j.circling, message_id: mod.msgId, detail: j });
+    note(`🧭 讨论在原地打转（${pc(j.circling)}）：同样的论点在来回重复，没有新进展。已暂停，请你定方向：`
+      + `补充信息或约束、@某人回答一个具体问题，或者点“继续”。`);
+    return pump();
+  }
   if (!stop) return pump();
+
+  // Agreed too easily on a judgment call: before wrapping up, someone argues the other side (once per round).
+  if (S.devil && j.debatable >= 0.6 && j.challenged < 0.4 && jev.devilAt !== round) {
+    jev.devilAt = round;
+    for (const n of NAMES) rt[n].hand = null;
+    // The quietest member this round takes the opposing side; ties at random.
+    const devil = NAMES.filter(n => S.enabled[n]).map(n => [n, turnsSinceUser(n), Math.random()])
+      .sort((x, y) => x[1] - y[1] || x[2] - y[2])[0][0];
+    rt[devil].hand = { r: 100, since: Date.now(), why: 'devil' };
+    logDecision('devil', devil, { score: j.debatable, message_id: mod.msgId, detail: j });
+    note(`🧭 大家很快就达成了一致（收敛度 ${pc(j.convergence)}，几乎没人反对），但这是见仁见智的问题。`
+      + `收尾前请 @${devil} 唱反调：站到对立面，给出最有力的反驳。`);
+    return pump();
+  }
   wrapRound = round;
   for (const n of NAMES) rt[n].hand = null;
   // The member most engaged in this round writes the summary; ties go to whoever has summarized least, then random.
@@ -347,7 +385,7 @@ const send = ev => { const s = `data: ${JSON.stringify(ev)}\n\n`; for (const c o
 function state() {
   const now = Date.now();
   return {
-    type: 'state', now, chatId, paused, mod, wrapped: wrapRound === lastUserId(chatId), settings: S, readLeft: Math.max(0, readUntil - now),
+    type: 'state', now, chatId, paused, mod, wrapped: !!wrapRound && wrapRound === lastUserId(chatId), settings: S, readLeft: Math.max(0, readUntil - now),
     holding: now - typingAt < 15e3,
     chats: listChats(),
     jev: { on: jevOn(), assessing: jev.assessing, judging: jev.judging, ms: jev.ms, down: S.scheduler === 'jev' && !jevOn() },
@@ -373,10 +411,13 @@ const sendStateSoon = () => { stateTimer ??= setTimeout(() => { stateTimer = nul
 
 // ---------- HTTP ----------
 const routes = {
-  'POST /api/send'({ text, reply_to }) {
+  'POST /api/send'({ text, reply_to, chat_id }) {
     text = String(text || '').trim();
     if (!text) return;
+    // The current discussion is shared by all windows: refuse a message typed while looking at another one.
+    if (chat_id && +chat_id !== chatId) throw new Error('当前讨论已在别的窗口切换，消息未发送，请确认后重发。');
     typingAt = 0; mod = null;
+    if (jev.circlePaused) { jev.circlePaused = paused = false; run('UPDATE chats SET paused=0 WHERE id=?', chatId); } // the user set a direction
     // An untitled discussion is named after its first question.
     const c = q1('SELECT title FROM chats WHERE id=?', chatId);
     if (/^讨论 \d+$/.test(c.title) && !q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user'`, chatId))
@@ -390,7 +431,7 @@ const routes = {
   },
   'POST /api/typing'({ typing }) { typingAt = typing ? Date.now() : 0; },
   'POST /api/next'() { readUntil = 0; publish(true); },
-  'POST /api/pause'({ paused: p }) { paused = !!p; run('UPDATE chats SET paused=? WHERE id=?', +paused, chatId); },
+  'POST /api/pause'({ paused: p }) { paused = !!p; jev.circlePaused = false; run('UPDATE chats SET paused=? WHERE id=?', +paused, chatId); },
   'POST /api/stop'() {
     paused = true; run('UPDATE chats SET paused=1 WHERE id=?', chatId);
     for (const n of NAMES) rt[n].hand = null;
@@ -400,7 +441,7 @@ const routes = {
   'POST /api/lower'({ agent }) { if (AGENTS[agent]) rt[agent].hand = null; },
   'POST /api/settings'(body) {
     for (const k of ['language', 'scheduler']) if (typeof body[k] === 'string' && body[k]) S[k] = body[k];
-    if (typeof body.autoStop === 'boolean') S.autoStop = body.autoStop;
+    for (const k of ['autoStop', 'devil', 'circlePause']) if (typeof body[k] === 'boolean') S[k] = body[k];
     for (const k of ['turnCap', 'readSpeed', 'maxThinkers', 'convergeAt', 'noveltyMin']) if (+body[k] > 0) S[k] = +body[k];
     if (body.enabled) S.enabled = { ...S.enabled, ...body.enabled };
     // Only models a CLI listed (or its default) are accepted; the next turn uses it and resumes the same session.
@@ -443,7 +484,7 @@ const getRoutes = {
 };
 const maxChat = () => q1('SELECT coalesce(max(id),0) m FROM chats').m;
 function switchChat(id) {
-  chatId = id; paused = !!q1('SELECT paused FROM chats WHERE id=?', id).paused;
+  chatId = id; paused = !!q1('SELECT paused FROM chats WHERE id=?', id).paused; jev.circlePaused = false;
   for (const n of NAMES) rt[n].hand = null;
   readUntil = 0; mod = null; writeTranscript(id);
   send(init());
