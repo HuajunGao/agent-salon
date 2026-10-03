@@ -3,6 +3,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, rmSync, openSync, closeSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { join, dirname, delimiter } from 'node:path';
 import { providerConfig } from './members.mjs';
 
@@ -23,7 +24,7 @@ export function runAs(name) {
 // always the app's variables (moderator, speech, search keys); on the server also anything named like a credential,
 // since its systemd environment holds nothing the CLIs need (they log in through files in the agent user's home).
 // A harness lists the variables it does need in `keep`.
-const APP_ENV = /^(TYPESAFE_|SPEECH_|FIRECRAWL_API_KEY$|AGENT_USER$|HOST$|PORT$)/;
+const APP_ENV = /^(TYPESAFE_|SPEECH_|HERMES_|FIRECRAWL_API_KEY$|AGENT_USER$|HOST$|PORT$)/;
 const SECRET = /KEY|TOKEN|SECRET|PASSW|CREDENTIAL/i;
 export const agentEnv = (env, keep = [], server = !!RUNAS) => Object.fromEntries(Object.entries(env)
   .filter(([k]) => keep.includes(k) || !(APP_ENV.test(k) || (server && SECRET.test(k)))));
@@ -217,11 +218,33 @@ const FAIL = [
 
 const IDLE_MS = 5 * 60e3, TOTAL_MS = 15 * 60e3;
 
+// Hermes Agent (the user's own assistant, on another host) through its OpenAI-compatible API server: HERMES_BASE_URL,
+// HERMES_API_KEY, both server-side only. Its backend keeps each conversation's transcript, keyed by the
+// X-Hermes-Session-Id header, so like a resumed CLI session it only gets the new messages.
+AGENTS.hermes = {
+  label: 'Hermes', color: '#b45309', defaultModel: '', optional: true,
+  async http(prompt, sid) {
+    const base = (process.env.HERMES_BASE_URL || '').replace(/\/+$/, '');
+    if (!base) return { sid, error: 'HERMES_BASE_URL 未配置' };
+    sid ||= `agent-chat-${randomUUID()}`;
+    const r = await fetch(base + '/chat/completions', { method: 'POST', signal: AbortSignal.timeout(TOTAL_MS),
+      headers: { authorization: `Bearer ${process.env.HERMES_API_KEY || ''}`, 'content-type': 'application/json', 'X-Hermes-Session-Id': sid },
+      body: JSON.stringify({ model: 'hermes-agent', messages: [{ role: 'user', content: prompt }] }) });
+    if (!r.ok) return { sid, error: r.status === 401 ? 'auth' : `hermes ${r.status}: ${short(await r.text(), 200)}` };
+    return { sid, text: (await r.json()).choices?.[0]?.message?.content || '' };
+  },
+};
+
 // Run one turn. onLive(text) receives a readable live log. Resolves {text, sid, error, ms}.
 export function runTurn(agent, prompt, sid, { cwd, dataDir, model, exec, member, onLive }) {
   const a = AGENTS[agent];
-  const { bin, args, env, keep } = a.cmd(prompt, sid, { dataDir, model, exec, member });
   const t0 = Date.now();
+  if (a.http) {
+    onLive('…');
+    return a.http(prompt, sid, { model }).catch(e => ({ sid, error: `${agent}: ${e.message}` }))
+      .then(r => ({ text: (r.text || '').trim(), sid: r.sid ?? sid, error: r.error || (r.text?.trim() ? '' : 'no reply'), ms: Date.now() - t0 }));
+  }
+  const { bin, args, env, keep } = a.cmd(prompt, sid, { dataDir, model, exec, member });
   let log = '';
   const st = {
     sid, text: '', error: '', parts: [],
@@ -289,5 +312,6 @@ export async function listModels() {
     codex: codexList,
     agy: lines(agy).filter(l => l.includes('\t')).map(l => { const [id, name] = l.split('\t'); return { id, name }; }),
     opencode: lines(oc).filter(l => /^[\w.-]+\/\S+$/.test(l)).map(id => ({ id, name: id })),
+    hermes: [{ id: '', name: 'Hermes 自己配置的模型' }],
   };
 }
