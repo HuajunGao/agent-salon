@@ -402,10 +402,8 @@ let messages = [], S = null, replyTo = null, clockSkew = 0, jumpTo = null;
 const member = n => S?.members.find(m => m.name === n);
 const label = n => n === 'user' ? '我' : n === 'system' ? '系统' : n === 'moderator' ? '主持人' : (member(n)?.label || n);
 // Agent accents: used only for avatars, the message rail and mini-bars.
-const ACCENT = { claude: '#C2703D', codex: '#14906C', agy: '#3A72E0' };
-const MONO = { claude: 'Cl', codex: 'Cx', agy: 'Ag' };
-const color = n => ACCENT[n] || member(n)?.color || '';
-const av = n => `<span class="av" style="--c:${color(n)}">${MONO[n] || esc(label(n).slice(0, 2))}</span>`;
+const color = n => member(n)?.color || 'var(--ink-3)';
+const av = n => `<span class="av" style="--c:${color(n)}">${esc(label(n).slice(0, 2))}</span>`;
 const utc = s => new Date(s.replace(' ', 'T') + 'Z');
 const hm = s => utc(s).toTimeString().slice(0, 5);
 const when = s => { if (!s) return ''; const d = utc(s), now = new Date();
@@ -450,11 +448,11 @@ function renderMsg(m) {
 
 const IDEAS = ['单元测试应该 mock 数据库，还是连真实的测试库？', '三个人做内部工具，后端选 Node 还是 Go？', '什么时候值得把单体应用拆成微服务？'];
 function emptyState() {
-  const names = S?.members.filter(m => m.enabled).map(m => m.name) || Object.keys(ACCENT);
+  const names = S?.members.filter(m => m.enabled).map(m => m.name) || [];
   return `<div class="empty">
     <div class="members">${names.map(av).join('')}</div>
     <h1>开一场讨论</h1>
-    <p>提一个问题，${names.length} 位编码助手会各自给出观点、互相补充和反驳；主持人 Jev 安排发言顺序，观点收敛时请人总结。你随时可以插话。</p>
+    <p>${names.length ? `提一个问题，${names.length} 位参与成员会各自给出观点、互相补充和反驳；主持人安排发言顺序，观点收敛时请人总结。你随时可以插话。` : '添加或启用一位成员，开始讨论。'}</p>
     <div class="ideas">${IDEAS.map(t => `<button class="idea" data-idea="${esc(t)}">${esc(t)}</button>`).join('')}</div>
   </div>`;
 }
@@ -599,7 +597,7 @@ function renderMembers() {
       <div class="mdetail">
         ${m.configurable ? `<button data-member-edit="${m.name}">配置成员</button><small>通过 OpenCode</small>` : ''}
         <button data-member-delete="${m.name}">移除成员</button>
-        <select data-model="${m.name}" title="模型（下一轮生效，会话保留）">${modelOptions(m)}</select>
+        <select data-model="${m.name}" title="模型（下一轮生效，会话保留）">${modelOptions(m)}<option value="__custom__">自定义模型…</option></select>
         <div class="kv">
           <label class="switch"><input type="checkbox" data-enable="${m.name}" ${m.enabled ? 'checked' : ''}>参与</label>
           <span>本轮 ${m.sinceUser}/${S.settings.turnCap}</span><span>共 ${m.turns} 次</span>
@@ -614,6 +612,7 @@ function renderMembers() {
 
 function renderState() {
   const now = Date.now() - clockSkew;
+  if (!messages.length) setHTML('#msgs', emptyState());
   renderHistory(); renderModerator(); renderMemory();
   $('#s-exec').disabled = !S.sandboxed; $('#execrow').style.opacity = S.sandboxed ? '' : '.45';
   const cur = S.chats.find(c => c.id === S.chatId);
@@ -786,7 +785,12 @@ memberForm.onsubmit = async e => {
 document.addEventListener('change', e => {
   const d = e.target.dataset;
   if (d.enable) post('/api/settings', { enabled: { [d.enable]: e.target.checked } });
-  if (d.model) post('/api/settings', { models: { [d.model]: e.target.value } });
+  if (d.model) {
+    let value = e.target.value;
+    if (value === '__custom__') { value = prompt('填写真实模型 ID（OpenCode 使用 provider/model）', member(d.model)?.model || '');
+      if (value === null || !value.trim()) { e.target.value = member(d.model)?.model || ''; return; } value = value.trim(); }
+    post('/api/settings', { models: { [d.model]: value } });
+  }
 });
 for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec']) $('#s-' + k).onchange = e => post('/api/settings', { [k]: e.target.checked });
 for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin'])

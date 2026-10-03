@@ -2,8 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-A local "agent group chat": the user asks a question and four coding-agent CLIs (Claude Code, Codex, Antigravity `agy`,
-OpenCode/GLM) discuss it in a web UI, paced for human reading, with TypeSafe Jev as a cheap moderator. PLAN.md holds the
+A local "agent group chat": the user asks a question and configurable members, each using a CLI harness and model,
+discuss it in a web UI, paced for human reading, with TypeSafe as a moderator. PLAN.md holds the
 design decisions, the hard-won CLI details and the home-server deployment notes; read the relevant section before
 changing scheduling, adapters or deployment. The user communicates in Chinese; UI text and agent prompts' output
 language follow the `language` setting (default 中文).
@@ -30,13 +30,14 @@ Restart the server only when no agent is thinking (check `/events` state) — th
 
 - **app/server.mjs** — everything stateful: SQLite (`data/chat.db`: chats, messages, agent_sessions with each agent's
   CLI session id, decisions log, settings), SSE to the UI, the scheduler, the reading-pace publish queue, the moderator
-  hooks, memory curation and the HTTP API. One "current chat" is global to the server.
+  hooks, memory curation and the HTTP API. Members and their configurations live in the members table.
+  One "current chat" is global to the server.
 - **app/agents.mjs** — one adapter per CLI (`AGENTS[name].cmd` builds argv/env, `.parse` consumes one JSON event).
   `runTurn` spawns one headless process per turn, resuming the agent's own CLI session and pushing only unseen
   messages. Also `listModels` (each CLI's model list) and `runAs` (spawn as an unprivileged user).
 - **app/moderator.mjs** — Jev calls: `judge` (one request: convergence Score + stalling/debatable/challenged/circling
   Nouls) and `novelty` (one Noul per candidate: would it add something new?).
-- **app/memory.mjs** — `curate`: Claude Haiku folds the user's new messages into `data/memory.md` (or NO_CHANGE).
+- **app/memory.mjs** — `curate`: a configured active member folds the user's new messages into `data/memory.md` (or NO_CHANGE).
 - **app/index.html** — the whole UI (no framework); renders SSE `init`/`state`/`msg` events, re-renders regions only
   when their HTML changes (`setHTML`) so the 1 s state tick doesn't swallow clicks.
 
@@ -54,6 +55,10 @@ never sent to agents or Jev (`TALK` filter).
 Agents' context: a new CLI session gets `intro()` (rules, members, archive location, the user memory) plus recent
 history; resumed sessions get only unseen messages plus a per-turn footer. Discussions are archived as
 `data/discussions/<id>.md` + `index.md` so agents can look up earlier ones.
+Every turn's roster uses currently enabled members, their aliases, harnesses and configured model IDs.
+Never infer membership from adapter names or assume a fixed participant count/model. Empty model IDs use CLI defaults.
+Memory curation uses the first enabled idle member in display order, with its configured model and credentials.
+The moderator model is supplied by TYPESAFE_MODEL in the service environment.
 
 ## CLI adapter rules (learned the hard way)
 

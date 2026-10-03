@@ -29,6 +29,8 @@ const QUESTIONS = {
 async function ask(messages, questions) {
   const key = process.env.TYPESAFE_API_KEY;
   if (!key) return { error: 'TYPESAFE_API_KEY not set' };
+  const model = process.env.TYPESAFE_MODEL;
+  if (!model) return { error: 'TYPESAFE_MODEL not set' };
   const state = { discussion: { question: messages[0].text,
     messages: messages.map(m => ({ id: m.id, from: m.sender === 'user' ? 'user' : `@${m.sender}`, text: m.text })) } };
   const t0 = Date.now();
@@ -36,7 +38,7 @@ async function ask(messages, questions) {
     const r = await fetch('https://api.typesafe.ai/v1/systemone', {
       method: 'POST', signal: AbortSignal.timeout(20e3),
       headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'jev-latest', state, questions }),
+      body: JSON.stringify({ model, state, questions }),
     });
     if (!r.ok) return { error: `jev ${r.status}: ${(await r.text()).slice(0, 200)}` };
     return { answers: (await r.json()).answers, ms: Date.now() - t0 };

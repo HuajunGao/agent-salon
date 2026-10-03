@@ -45,7 +45,8 @@ const memberConfigs = Object.create(null);
 // Seed once; from then on the database, rather than adapter names, defines membership.
 if (!q1("SELECT 1 FROM settings WHERE key='members-seeded'")) {
   for (const [harness, adapter] of Object.entries(AGENTS)) {
-    const name = harness === 'opencode' ? 'glm' : harness;
+    const legacy = harness === 'opencode' && q1("SELECT 1 FROM messages WHERE sender='opencode' LIMIT 1");
+    const name = legacy ? 'glm' : harness;
     const m = { name, harness, label: '',
       color: adapter.color, model: adapter.defaultModel, baseURL: '', protocol: 'responses', apiKey: '', persona: '' };
     run('INSERT OR IGNORE INTO members VALUES(?,?)', name, JSON.stringify(m));
@@ -83,8 +84,10 @@ const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 
 let S = { ...DEFAULTS, ...JSON.parse(q1(`SELECT value FROM settings WHERE key='s'`)?.value || '{}') };
 S.models = { ...DEFAULTS.models, ...S.models };
 S.enabled = { ...DEFAULTS.enabled, ...S.enabled };
-if (S.models.opencode) { S.models.glm = S.models.opencode; delete S.models.opencode; }
-if (typeof S.enabled.opencode === 'boolean') { S.enabled.glm = S.enabled.opencode; delete S.enabled.opencode; }
+if (NAMES.includes('glm') && !NAMES.includes('opencode')) {
+  if (S.models.opencode) { S.models.glm = S.models.opencode; delete S.models.opencode; }
+  if (typeof S.enabled.opencode === 'boolean') { S.enabled.glm = S.enabled.opencode; delete S.enabled.opencode; }
+}
 const modelOf = a => S.models[a] || 'default';
 let modelLists = {};  // read once from each CLI at startup
 listModels().then(l => { modelLists = l; send(init()); });
@@ -280,8 +283,12 @@ async function maybeCurate(force = false) {
   if (!pending.length) return;
   const quiet = NAMES.every(n => rt[n].status !== 'thinking') && !ready.length;
   if (!force && (!quiet || Date.now() - new Date(pending.at(-1).created_at.replace(' ', 'T') + 'Z') < 20e3)) return;
+  const curator = memberOrder().find(n => S.enabled[n] && rt[n].status === 'idle');
+  if (!curator) { if (force) { memo.error = '请先启用一位空闲成员来整理记忆'; sendState(); } return; }
+  const member = { ...memberConfigs[curator], model: S.models[curator] || '' };
   memo.curating = true; sendState();
-  const r = await curate(readMemory(), pending, { language: S.language, cwd: WORK, dataDir: DATA });
+  const r = await curate(readMemory(), pending, { language: S.language, cwd: wsOf(curator), dataDir: DATA,
+    harness: member.harness, model: member.model, member });
   memo.curating = false; memo.error = r.error || ''; memo.retryAt = r.error ? Date.now() + 10 * 60e3 : 0; // back off after a failure
   if (r.text) { writeFileSync(MEMORY, r.text); memo.at = Date.now(); }
   if (!r.error) run(`INSERT OR REPLACE INTO settings VALUES('memoryAt', ?)`, String(pending.at(-1).id));
@@ -305,7 +312,7 @@ const SHELL_RULE = {
 function intro(a, chat) {
   const memory = S.memory ? readMemory().trim() : '';
   return `You are ${describe(a)}, one member of a live group chat running on the user's machine.
-Members: the user (a human, full participant) and the agents ${NAMES.map(describe).join(', ')}.
+Members: the user (a human, full participant) and the participating agents ${memberOrder().filter(n => S.enabled[n]).map(describe).join(', ')}.
 ${memberConfigs[a]?.persona ? `Your role: ${memberConfigs[a].persona}` : ''}
 Each turn you receive the messages you haven't seen yet, numbered #N. Your reply is posted to the chat as one message.
 Rules:
@@ -351,7 +358,7 @@ async function startTurn(a, retried = false) {
   prompt += `\n\n(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later. `
     + (execOn() ? `You may run code in your workspace ${wsOf(a)} to check claims; keep it quick.)`
       : `${memberConfigs[a].harness === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.'})`);
-  prompt += `\nCurrent members: ${NAMES.filter(n => S.enabled[n]).map(describe).join(', ')}. Use these exact @handles when addressing them.`;
+  prompt += `\nCurrent participating members (${NAMES.filter(n => S.enabled[n]).length}): ${memberOrder().filter(n => S.enabled[n]).map(describe).join(', ')}. This roster overrides earlier rosters. Use these exact @handles when addressing them.`;
   sendState();
 
   const model = S.models[a];
@@ -620,7 +627,7 @@ const routes = {
     if (body.enabled) S.enabled = { ...S.enabled, ...body.enabled };
     // Only models a CLI listed (or its default) are accepted; the next turn uses it and resumes the same session.
     for (const [a, m] of Object.entries(body.models || {}))
-      if (NAMES.includes(a) && (m === memberConfigs[a].model || modelLists[memberConfigs[a].harness]?.some(x => x.id === m))) {
+      if (NAMES.includes(a) && typeof m === 'string' && (m === '' || (m.length <= 200 && /^\S+$/.test(m)))) {
         S.models[a] = m; logDecision('model', a, { detail: { model: m } });
       }
     saveSettings();

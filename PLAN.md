@@ -21,7 +21,7 @@ A cheap judgment model (TypeSafe Jev) acts as moderator. Slow models must still 
 ### Configurable members
 
 Members are stored in SQLite `members(name, config)`, independently of the CLI adapters in `app/agents.mjs`.
-The initial four members are seeded once; the old `opencode` identity migrates to `glm` along with history and
+Initial members are seeded once from the harness registry, using CLI default models; the old `opencode` identity migrates to `glm` along with history and
 session records. After initialization, adding/removing members changes the database rather than source code.
 `@` mentions match configured handles exactly (case-insensitive); there are no automatic harness/model aliases.
 
@@ -42,6 +42,9 @@ resumed sessions learn about membership changes. No service restart is needed to
 
 Validation: `node --test app/members.test.mjs` covers dynamic mentions, credential handling, v1/v2 provider
 configuration and the HTTP lifecycle with temporary SQLite and a simulated harness (no paid model calls).
+Runtime prompts use enabled members and their current models on every turn. Avatars and empty-state counts come
+from member configuration. Memory uses the first enabled idle member in display order. The moderator model is
+configured with `TYPESAFE_MODEL`; historical model names elsewhere in this plan are examples, not runtime defaults.
 
 ### Storage: SQLite (`data/chat.db`)
 Use Node's built-in `node:sqlite` (`DatabaseSync`, works on this machine's Node v25.9; no npm dependency).

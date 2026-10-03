@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { memberMentions, providerConfig, validateMember } from './members.mjs';
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -42,8 +42,9 @@ test('HTTP member lifecycle persists, keeps credentials private and routes @hand
     copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
   // Exercise the actual server and SQLite with a deterministic harness, without calling paid models.
   writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
+    import {writeFileSync} from 'node:fs';
     export async function listModels(){return {opencode:[]}};
-    export async function runTurn(h,p,s,o){return {text:'PASS', sid:s || o.member.name+'-session', ms:1}};`);
+    export async function runTurn(h,p,s,o){writeFileSync(${JSON.stringify(join(root,'turn.json'))},JSON.stringify({h,p,model:o.model}));return {text:'PASS', sid:s || o.member.name+'-session', ms:1}};`);
   const portServer = net.createServer(); portServer.listen(0, '127.0.0.1'); await once(portServer, 'listening');
   const port = portServer.address().port; await new Promise(r => portServer.close(r));
   const url = `http://127.0.0.1:${port}`;
@@ -93,6 +94,12 @@ test('HTTP member lifecycle persists, keeps credentials private and routes @hand
     }
     assert.equal(s.state.members.find(m => m.name === 'gpt').sid, 'gpt-session');
     assert.equal(s.state.members.find(m => m.name === 'reviewer').sid, null);
+    const turn = JSON.parse(readFileSync(join(root, 'turn.json'), 'utf8'));
+    assert.equal(turn.h, 'opencode');
+    assert.equal(turn.model, 'openai/test');
+    assert.ok(turn.p.includes('Current participating members (6):'));
+    assert.ok(turn.p.includes('@reviewer'));
+    assert.ok(!turn.p.includes('glm-5.3'));
     assert.equal((await post('/api/member/alias', { name: 'gpt', label: '小智' })).status, 200);
     s = await state();
     assert.equal(s.state.members.find(m => m.name === 'gpt').label, '小智');

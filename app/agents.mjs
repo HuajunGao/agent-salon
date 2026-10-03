@@ -120,12 +120,12 @@ export const AGENTS = {
     },
   },
   codex: {
-    label: 'Codex', color: '#10a37f', defaultModel: 'gpt-6.1-sol',
+    label: 'Codex', color: '#10a37f', defaultModel: '',
     cmd: (prompt, sid, o) => ({
       bin: codexBin(), env: process.env,
       // Plain Codex: --ignore-user-config skips ~/.codex/config.toml (plugins, MCP servers, reasoning effort);
       // auth still comes from CODEX_HOME. Model and sandbox are passed every time (resume would not keep them).
-      args: ['exec', '--json', '--skip-git-repo-check', '--ignore-user-config', '-m', o.model || 'gpt-6.1-sol',
+      args: ['exec', '--json', '--skip-git-repo-check', '--ignore-user-config', ...(o.model ? ['-m', o.model] : []),
         // exec mode: Codex's own OS sandbox confines writes to its workspace (verified in the LXC); network for installs.
         ...(o.exec ? ['-c', 'sandbox_mode=workspace-write', '-c', 'sandbox_workspace_write.network_access=true']
           : ['-c', 'sandbox_mode=read-only']), '-c', 'web_search="live"',
@@ -144,11 +144,11 @@ export const AGENTS = {
     },
   },
   agy: {
-    label: 'Antigravity', color: '#4285f4', defaultModel: 'gemini-3.8-flash-medium',
+    label: 'Antigravity', color: '#4285f4', defaultModel: '',
     cmd: (prompt, sid, o) => ({
       bin: exe('agy'), env: process.env,
       // Read-only: plan mode. exec mode: approve everything (headless agy can't ask; the OS user is the boundary).
-      args: ['-p', prompt, '--model', o.model || 'gemini-3.8-flash-medium', '--output-format', 'stream-json',
+      args: ['-p', prompt, ...(o.model ? ['--model', o.model] : []), '--output-format', 'stream-json',
         ...(o.exec ? ['--dangerously-skip-permissions'] : ['--mode', 'plan']), ...(sid ? ['--conversation', sid] : [])],
     }),
     parse(ev, st) {
@@ -166,7 +166,7 @@ export const AGENTS = {
     },
   },
   opencode: {
-    label: 'OpenCode', color: '#7c5cff', defaultModel: 'zai-coding-plan/glm-5.3',
+    label: 'OpenCode', color: '#7c5cff', defaultModel: '',
     cmd: (prompt, sid, o) => ({
       bin: opencodeBin(),
       // 32k default output cap truncates GLM. v1: --pure (oh-my-openagent hands work to background tasks that die with
@@ -176,7 +176,7 @@ export const AGENTS = {
         OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...JSON.parse(opencodeNoMcp()), ...providerConfig(o.member, opencodeV2()) }) },
       // Read-only: the plan agent. exec mode: the build agent, auto-approving (v2 --auto) inside the OS-confined user.
       args: ['run', opencodeV2() ? '--standalone' : '--pure', '--agent', o.exec ? 'build' : 'plan',
-        ...(o.exec && opencodeV2() ? ['--auto'] : []), '-m', o.model || 'zai-coding-plan/glm-5.3',
+        ...(o.exec && opencodeV2() ? ['--auto'] : []), ...(o.model ? ['-m', o.model] : []),
         '--format', 'json', ...(sid ? ['-s', sid] : []), prompt],
     }),
     parse(ev, st) {
@@ -271,9 +271,7 @@ export async function listModels() {
   try { codexList = JSON.parse(codex).models.filter(m => m.visibility === 'list').map(m => ({ id: m.slug, name: m.display_name })); } catch {}
   return {
     // Claude Code has no list command: aliases resolve to the latest model of each family.
-    claude: [{ id: '', name: 'default（你的 Claude Code 默认）' }, ...['fable', 'opus', 'sonnet', 'haiku'].map(id => ({ id, name: id })),
-      ...(existsSync(join(H, '.claude/settings-glm.json'))
-        ? [{ id: 'glm:opus', name: 'GLM 5.3（settings-glm.json）' }, { id: 'glm:haiku', name: 'GLM 5.3 FlashX（settings-glm.json）' }] : [])],
+    claude: [{ id: '', name: 'CLI 默认模型（可手动填写模型）' }],
     codex: codexList,
     agy: lines(agy).filter(l => l.includes('\t')).map(l => { const [id, name] = l.split('\t'); return { id, name }; }),
     opencode: lines(oc).filter(l => /^[\w.-]+\/\S+$/.test(l)).map(id => ({ id, name: id })),
