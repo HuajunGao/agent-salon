@@ -13,21 +13,42 @@ const QUESTIONS = {
       false: 'Recent messages still add new substance.' } },
 };
 
-// messages: the user's latest message and everything after it. Returns {convergence 0..1, stalling 0..1, ms} or {error}.
-export async function judge(messages) {
+async function ask(messages, questions) {
   const key = process.env.TYPESAFE_API_KEY;
   if (!key) return { error: 'TYPESAFE_API_KEY not set' };
   const state = { discussion: { question: messages[0].text,
-    messages: messages.map(m => ({ id: m.id, from: m.sender, text: m.text })) } };
+    messages: messages.map(m => ({ id: m.id, from: m.sender === 'user' ? 'user' : `@${m.sender}`, text: m.text })) } };
   const t0 = Date.now();
   try {
     const r = await fetch('https://api.typesafe.ai/v1/systemone', {
       method: 'POST', signal: AbortSignal.timeout(20e3),
       headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'jev-latest', state, questions: QUESTIONS }),
+      body: JSON.stringify({ model: 'jev-latest', state, questions }),
     });
     if (!r.ok) return { error: `jev ${r.status}: ${(await r.text()).slice(0, 200)}` };
-    const { answers: a } = await r.json();
-    return { convergence: a.convergence.score / 3, stalling: a.stalling.noul, ms: Date.now() - t0 };
+    return { answers: (await r.json()).answers, ms: Date.now() - t0 };
   } catch (e) { return { error: `jev: ${e.message}` }; }
+}
+
+// messages: the user's latest message and everything after it. Returns {convergence 0..1, stalling 0..1, ms} or {error}.
+export async function judge(messages) {
+  const r = await ask(messages, QUESTIONS);
+  return r.error ? r : { convergence: r.answers.convergence.score / 3, stalling: r.answers.stalling.noul, ms: r.ms };
+}
+
+// Relevance/novelty for the scheduler: would each candidate add something new if it spoke next?
+// agents: [{name, harness, model}]. Returns {novelty: {name: 0..1}, ms} or {error}.
+export async function novelty(messages, agents) {
+  const questions = Object.fromEntries(agents.map(a => [a.name, { type: 'noul',
+    instructions: {
+      candidate: { handle: `@${a.name}`, runs: `${a.harness} with model ${a.model}` },
+      question: 'If `candidate` spoke next in `discussion`, would it likely add something new and useful: answer a point or '
+        + 'question addressed to it, disagree with or correct a claim, or add a missing fact, risk or alternative?',
+    },
+    criteria: {
+      true: 'Likely adds substance: it was addressed, has not given its view yet, or there is a disputed or missing point it can take up.',
+      false: 'Likely repeats what was said: its view is already stated and nothing new is addressed to it or left open for it.',
+    } }]));
+  const r = await ask(messages, questions);
+  return r.error ? r : { novelty: Object.fromEntries(agents.map(a => [a.name, r.answers[a.name].noul])), ms: r.ms };
 }

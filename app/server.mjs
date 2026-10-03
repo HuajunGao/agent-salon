@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { AGENTS, runTurn, listModels } from './agents.mjs';
-import { judge } from './moderator.mjs';
+import { judge, novelty } from './moderator.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DATA = join(ROOT, 'data'), WORK = join(ROOT, 'workspace'), TRANSCRIPT = join(DATA, 'transcript.md');
@@ -31,7 +31,7 @@ const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
 const run = (sql, ...a) => db.prepare(sql).run(...a);
 
-const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80,
+const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45,
   enabled: Object.fromEntries(NAMES.map(n => [n, true])), models: Object.fromEntries(NAMES.map(n => [n, AGENTS[n].defaultModel])) };
 let S = { ...DEFAULTS, ...JSON.parse(q1(`SELECT value FROM settings WHERE key='s'`)?.value || '{}') };
 S.models = { ...DEFAULTS.models, ...S.models };
@@ -79,6 +79,12 @@ let ready = [];          // finished replies waiting to be published: {chat, age
 let readUntil = 0, typingAt = 0;
 let mod = null;                         // latest Jev judgment this round: {convergence, stalling, msgId}
 let wrapRound = 0;                      // round (= last user message id) already wrapped up
+const jev = { assessing: false, again: false, judging: false, ms: null, downAt: 0, idleNoted: 0 }; // moderator activity
+
+// Only user and agent messages are the discussion; system/moderator notes are for the UI.
+const TALK = `kind IN ('user','agent')`;
+const lastTalkId = () => q1(`SELECT coalesce(max(id),0) m FROM messages WHERE chat_id=? AND ${TALK}`, chatId).m;
+const note = text => insertMsg({ chat_id: chatId, sender: 'moderator', kind: 'moderator', text });
 
 const MENTION = { claude: 'claude', codex: 'codex', agy: 'agy', gemini: 'agy', opencode: 'opencode', glm: 'opencode' };
 const mentions = text => [...new Set([...text.matchAll(/@(\w+)/g)].map(m => MENTION[m[1].toLowerCase()]).filter(Boolean))];
@@ -86,25 +92,31 @@ const mentions = text => [...new Set([...text.matchAll(/@(\w+)/g)].map(m => MENT
 function raise(a, r, why) {
   if (!S.enabled[a]) return;
   const h = rt[a].hand;
-  rt[a].hand = { r: Math.max(r, h?.r || 0), since: h?.since || Date.now(), why: h && h.r > r ? h.why : why };
+  rt[a].hand = { r: Math.max(r, h?.r || 0), since: h?.since || Date.now(), why: h && h.r >= r ? h.why : why };
 }
 
 // ---------- scheduler ----------
 // Fairness modifies priority, it doesn't decide it: score = relevance × fairness × freshness − cooldown.
-// Relevance comes from explicit signals now; the Jev scheduler (Phase 2) will supply it as a judgment.
+// Relevance comes from explicit signals; in jev mode it is scaled by Jev's novelty judgment (0.5 = neutral).
+// Explicit user choices (@mention ≥ 10, floor ≥ 100) are never second-guessed.
+const jevOn = () => S.scheduler === 'jev' && Date.now() - jev.downAt > 60e3; // fall back to algorithm for 1 min after an error
+const novFresh = a => rt[a].nov?.at >= lastTalkId();
 function score(a) {
   const h = rt[a].hand;
-  const msgs = q('SELECT id, sender FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT 50', chatId);
+  const nov = jevOn() && h.r < 10 && novFresh(a) ? rt[a].nov.p : null;
+  const msgs = q(`SELECT id, sender FROM messages WHERE chat_id=? AND ${TALK} ORDER BY id DESC LIMIT 50`, chatId);
   const silence = msgs.findIndex(m => m.sender === a);               // messages since a last spoke
   const fairness = 1 + 0.1 * Math.min(silence < 0 ? 10 : silence, 10); // capped: silence helps, but only so much
   const freshness = 1 / (1 + (Date.now() - h.since) / 300e3);         // hands decay over minutes
   const sinceUser = turnsSinceUser(a);
   const cooldown = (silence >= 0 && silence < 2 ? 0.4 : 0) + 0.2 * sinceUser;
-  const s = h.r * fairness * freshness - cooldown;
-  return { s, r: h.r, why: h.why, fairness: +fairness.toFixed(2), freshness: +freshness.toFixed(2), cooldown, sinceUser };
+  const relevance = nov == null ? h.r : h.r * 2 * nov;
+  const s = relevance * fairness * freshness - cooldown;
+  return { s, r: h.r, why: h.why, nov, relevance: +relevance.toFixed(2), fairness: +fairness.toFixed(2),
+    freshness: +freshness.toFixed(2), cooldown, sinceUser };
 }
 const turnsSinceUser = a => q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=? AND id>?', chatId, a, lastUserId(chatId)).n;
-const hasUnseen = a => !!q1('SELECT 1 FROM messages WHERE chat_id=? AND id>? AND sender<>? LIMIT 1', chatId, sess(chatId, a).last_seen_id, a);
+const hasUnseen = a => !!q1(`SELECT 1 FROM messages WHERE chat_id=? AND id>? AND sender<>? AND ${TALK} LIMIT 1`, chatId, sess(chatId, a).last_seen_id, a);
 const inQueue = a => ready.some(r => r.chat === chatId && r.agent === a);
 
 function eligible(a) {
@@ -124,14 +136,66 @@ function pump() {
     cands.sort(S.scheduler === 'broadcast' ? (x, y) => rt[x.a].hand.since - rt[y.a].hand.since : (x, y) => y.s - x.s);
     for (const c of cands) {
       if (inflight() >= S.maxThinkers) break;
+      // jev mode: follow-up hands wait for a fresh novelty judgment; the user's own wake-ups don't.
+      const followUp = c.r < 10 && c.why !== 'user message';
+      if (jevOn() && followUp && !novFresh(c.a)) { assess(); continue; }
+      if (jevOn() && followUp && c.nov < S.noveltyMin / 100) {
+        logDecision('skip', c.a, { score: c.s, detail: { ...c, reason: 'jev: nothing new' } }); rt[c.a].hand = null; continue;
+      }
       if (S.scheduler !== 'broadcast' && c.s <= 0 && c.r < 100) {
         logDecision('skip', c.a, { score: c.s, detail: c }); rt[c.a].hand = null; continue;
       }
       logDecision('start', c.a, { score: c.s, detail: { ...c, candidates: cands.map(x => [x.a, +x.s.toFixed(2)]) } });
+      if (c.why === 'Jev') note(`🧭 请 @${c.a} 发言（新意 ${Math.round(c.nov * 100)}%）`);
       startTurn(c.a);
     }
   }
+  floorBack();
   sendState();
+}
+
+// ---------- Jev scheduler: who would add something new? ----------
+async function assess() {
+  const round = lastUserId(chatId);
+  if (!jevOn() || !round || wrapRound === round) return;
+  const at = lastTalkId();
+  if (jev.assessing) return void (jev.again ||= at !== jev.at); // re-ask only if the discussion moved on
+  jev.at = at;
+  const cands = NAMES.filter(a => S.enabled[a] && rt[a].status === 'idle' && !inQueue(a)
+    && (turnsSinceUser(a) < S.turnCap || rt[a].hand?.r >= 10) && hasUnseen(a));
+  if (!cands.length) return;
+  jev.assessing = true; sendState();
+  const msgs = q(`SELECT id, sender, text FROM messages WHERE chat_id=? AND id>=? AND ${TALK} ORDER BY id`, chatId, round);
+  const r = await novelty(msgs, cands.map(a => ({ name: a, harness: AGENTS[a].label, model: modelOf(a) })));
+  jev.assessing = false;
+  if (r.error) {
+    jev.downAt = Date.now();
+    logDecision('jev-error', null, { detail: r });
+    note(`🧭 Jev 暂时不可用（${r.error.slice(0, 80)}），1 分钟内改用算法调度。`);
+  } else if (lastUserId(chatId) === round && wrapRound !== round) {
+    jev.ms = r.ms;
+    for (const a of cands) rt[a].nov = { p: r.novelty[a], at };
+    logDecision('novelty', null, { latency_ms: r.ms, message_id: at, detail: r.novelty });
+    for (const a of cands) if (r.novelty[a] >= S.noveltyMin / 100) raise(a, 1, 'Jev');
+  }
+  if (jev.again) { jev.again = false; return assess(); }
+  pump();
+}
+
+// When the room goes quiet without wrapping up, the moderator hands the floor back to the user (once per lull).
+let floorTimer;
+function floorBack() {
+  const quiet = () => !paused && !jev.assessing && !jev.judging && wrapRound !== lastUserId(chatId)
+    && NAMES.every(n => rt[n].status !== 'thinking' && !rt[n].hand) && !ready.some(r => r.chat === chatId)
+    && q1(`SELECT kind FROM messages WHERE chat_id=? AND ${TALK} ORDER BY id DESC LIMIT 1`, chatId)?.kind === 'agent';
+  if (!quiet() || jev.idleNoted === lastTalkId()) return;
+  clearTimeout(floorTimer);
+  floorTimer = setTimeout(() => {  // give a pending Jev call a moment
+    if (!quiet() || jev.idleNoted === lastTalkId()) return;
+    jev.idleNoted = lastTalkId();
+    const c = mod ? `收敛度 ${Math.round(mod.convergence * 100)}%，` : '';
+    note(`🧭 暂时没有人要发言了（${c}没人举手）。轮到你：可以追问、反驳，或 @某人。`);
+  }, 1500);
 }
 
 function intro(a) {
@@ -150,15 +214,15 @@ Rules:
 
 async function startTurn(a, retried = false) {
   const chat = chatId, s = sess(chat, a), basedOn = maxId(chat);
-  const floor = rt[a].hand?.r >= 100, summary = rt[a].hand?.why === 'summary';
+  const floor = rt[a].hand?.r >= 100, summary = rt[a].hand?.why === 'summary', invited = rt[a].hand?.why === 'Jev';
   Object.assign(rt[a], { status: 'thinking', started: Date.now(), live: '', hand: null, note: '', error: '' });
   let msgs, prompt;
   if (s.cli_session_id) {
-    msgs = q('SELECT * FROM messages WHERE chat_id=? AND id>? AND sender<>? ORDER BY id', chat, s.last_seen_id, a);
+    msgs = q(`SELECT * FROM messages WHERE chat_id=? AND id>? AND sender<>? AND ${TALK} ORDER BY id`, chat, s.last_seen_id, a);
     prompt = `New messages since your last turn:\n\n`;
   } else {
     // New (or lost) session: seed with the recent history, trimmed to stay under the Windows command-line limit.
-    msgs = q('SELECT * FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT 40', chat).reverse();
+    msgs = q(`SELECT * FROM messages WHERE chat_id=? AND ${TALK} ORDER BY id DESC LIMIT 40`, chat).reverse();
     while (msgs.map(fmt).join('').length > 16000) msgs.shift();
     prompt = intro(a) + `Conversation so far:\n\n`;
   }
@@ -169,6 +233,7 @@ async function startTurn(a, retried = false) {
   else prompt += `\n\n(Your turn ${k} of at most ${S.turnCap} since the user's last message; ${n} new message(s).`
     + (k >= S.turnCap && !floor ? ' This is your last turn here: PASS unless something essential is missing.)' : ')');
   if (floor && !summary) prompt += `\n\nThe user has given you the floor: please speak now.`;
+  if (invited) prompt += `\n\nThe moderator invited you to speak: you seem to have something new to add here.`;
   prompt += `\n\n(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later.)`;
   sendState();
 
@@ -177,6 +242,7 @@ async function startTurn(a, retried = false) {
     cwd: WORK, dataDir: DATA, model,
     onLive: log => { rt[a].live = log; sendStateSoon(); },
   });
+  if (!q1('SELECT 1 FROM chats WHERE id=?', chat)) { rt[a].status = 'idle'; return pump(); } // discussion deleted meanwhile
   // A resume that fails for a non-quota/auth reason: start a fresh session seeded from our own history.
   if (res.error && s.cli_session_id && !retried && !/quota|auth/.test(res.error)) {
     run('UPDATE agent_sessions SET cli_session_id=NULL WHERE chat_id=? AND agent=?', chat, a);
@@ -212,7 +278,7 @@ const readMs = text => Math.max(3000, (text.length / S.readSpeed) * 60e3);
 let publishTimer;
 function publish(force = false) {
   // Replies finished for a chat the user isn't looking at go straight in.
-  for (const r of ready.filter(r => r.chat !== chatId)) publishOne(r);
+  for (const r of ready.filter(r => r.chat !== chatId)) if (q1('SELECT 1 FROM chats WHERE id=?', r.chat)) publishOne(r);
   ready = ready.filter(r => r.chat === chatId);
   if (!force && (Date.now() < readUntil || Date.now() - typingAt < 15e3 || paused)) return;
   const r = ready.shift();
@@ -237,6 +303,7 @@ function publishOne(r) {
     if (r.hand) raise(r.agent, 1.5, '[HAND]');
     for (const n of mentions(r.text)) if (n !== r.agent) raise(n, 2, `@ by ${r.agent}`);
     checkConvergence(); // after raising hands: someone just @mentioned hasn't had their say yet
+    assess();           // jev mode: who has something new to add now?
   }
   return m;
 }
@@ -244,22 +311,23 @@ function publishOne(r) {
 // ---------- moderator: stop when views have converged ----------
 async function checkConvergence() {
   const round = lastUserId(chatId);
-  const msgs = q(`SELECT id, sender, kind, text FROM messages WHERE chat_id=? AND id>=? AND kind<>'system' ORDER BY id`, chatId, round);
+  const msgs = q(`SELECT id, sender, kind, text FROM messages WHERE chat_id=? AND id>=? AND ${TALK} ORDER BY id`, chatId, round);
   // Only judge once everyone woken this round has weighed in: a slow agent still thinking, queued, or waiting
   // for a free slot may yet disagree. (Agents that passed or failed are idle without a hand, so they don't block.)
   const pending = a => S.enabled[a] && !msgs.some(m => m.sender === a)
     && (rt[a].status === 'thinking' || rt[a].hand || inQueue(a));
   if (!S.autoStop || !round || !msgs.some(m => m.kind === 'agent') || NAMES.some(pending)) return;
+  jev.judging = true; sendState();
   const j = await judge(msgs);
+  jev.judging = false;
   // The round moved on while Jev answered (a new message or a new speaker): the next check will cover it.
-  const lastNow = q1(`SELECT max(id) m FROM messages WHERE chat_id=? AND kind<>'system'`, chatId).m;
-  if (lastNow !== msgs.at(-1).id || wrapRound === round || NAMES.some(pending)) return;
-  if (j.error) return logDecision('judge-error', null, { detail: j });
+  if (lastTalkId() !== msgs.at(-1).id || wrapRound === round || NAMES.some(pending)) return pump();
+  if (j.error) { logDecision('judge-error', null, { detail: j }); return pump(); }
   mod = { convergence: j.convergence, stalling: j.stalling, msgId: msgs.at(-1).id };
   // Fully converged, or mostly converged while the latest messages only agree/restate.
   const stop = j.convergence >= S.convergeAt / 100 || (j.convergence >= 0.67 && j.stalling >= 0.6);
   logDecision('judge', null, { score: j.convergence, message_id: mod.msgId, latency_ms: j.ms, detail: { ...j, stop } });
-  if (!stop) return sendState();
+  if (!stop) return pump();
   wrapRound = round;
   for (const n of NAMES) rt[n].hand = null;
   // The member most engaged in this round writes the summary; ties go to whoever has summarized least, then random.
@@ -268,8 +336,8 @@ async function checkConvergence() {
     .sort((x, y) => y[1] - x[1] || x[2] - y[2] || x[3] - y[3])[0][0];
   rt[writer].hand = { r: 100, since: Date.now(), why: 'summary' };
   logDecision('converged', writer, { score: j.convergence, message_id: mod.msgId, detail: j });
-  insertMsg({ chat_id: chatId, sender: 'system', kind: 'system', text: `🧭 主持人：观点已收敛（收敛度 ${Math.round(j.convergence * 100)}%，`
-    + `重复度 ${j.stalling.toFixed(2)}）。等思考中的成员说完后请 ${AGENTS[writer].label} 总结，本轮结束；发新消息可继续讨论。` });
+  note(`🧭 观点已收敛（收敛度 ${Math.round(j.convergence * 100)}%，重复度 ${j.stalling.toFixed(2)}）。`
+    + `请 @${writer} 总结，本轮到此结束；发新消息可继续讨论。`);
   pump();
 }
 
@@ -281,15 +349,24 @@ function state() {
   return {
     type: 'state', now, chatId, paused, mod, wrapped: wrapRound === lastUserId(chatId), settings: S, readLeft: Math.max(0, readUntil - now),
     holding: now - typingAt < 15e3,
-    chats: q('SELECT id, title FROM chats ORDER BY id DESC'),
+    chats: listChats(),
+    jev: { on: jevOn(), assessing: jev.assessing, judging: jev.judging, ms: jev.ms, down: S.scheduler === 'jev' && !jevOn() },
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
     members: NAMES.map(n => ({
       name: n, label: AGENTS[n].label, color: AGENTS[n].color, ...rt[n], enabled: S.enabled[n], model: S.models[n],
       sid: sess(chatId, n).cli_session_id, turns: q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=?', chatId, n).n,
       sinceUser: turnsSinceUser(n), score: rt[n].hand && rt[n].status === 'idle' ? +score(n).s.toFixed(2) : null,
+      nov: novFresh(n) ? rt[n].nov.p : null,
     })),
   };
 }
+// History list: newest activity first, with size and the latest question as a preview.
+const listChats = () => q(`SELECT c.id, c.title, c.created_at,
+    (SELECT count(*) FROM messages WHERE chat_id=c.id AND ${TALK}) n,
+    (SELECT max(created_at) FROM messages WHERE chat_id=c.id) last,
+    (SELECT text FROM messages WHERE chat_id=c.id AND kind='user' ORDER BY id DESC LIMIT 1) preview
+  FROM chats c ORDER BY coalesce(last, c.created_at) DESC, c.id DESC`)
+  .map(c => ({ ...c, preview: c.preview?.slice(0, 60) || '' }));
 const sendState = () => send(state());
 let stateTimer;
 const sendStateSoon = () => { stateTimer ??= setTimeout(() => { stateTimer = null; sendState(); }, 400); };
@@ -300,6 +377,10 @@ const routes = {
     text = String(text || '').trim();
     if (!text) return;
     typingAt = 0; mod = null;
+    // An untitled discussion is named after its first question.
+    const c = q1('SELECT title FROM chats WHERE id=?', chatId);
+    if (/^讨论 \d+$/.test(c.title) && !q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user'`, chatId))
+      run('UPDATE chats SET title=? WHERE id=?', text.replace(/\s+/g, ' ').slice(0, 30), chatId);
     const m = insertMsg({ chat_id: chatId, sender: 'user', kind: 'user', text, reply_to: reply_to || null });
     const at = mentions(text);
     const target = reply_to && q1('SELECT sender FROM messages WHERE id=?', reply_to)?.sender;
@@ -320,7 +401,7 @@ const routes = {
   'POST /api/settings'(body) {
     for (const k of ['language', 'scheduler']) if (typeof body[k] === 'string' && body[k]) S[k] = body[k];
     if (typeof body.autoStop === 'boolean') S.autoStop = body.autoStop;
-    for (const k of ['turnCap', 'readSpeed', 'maxThinkers', 'convergeAt']) if (+body[k] > 0) S[k] = +body[k];
+    for (const k of ['turnCap', 'readSpeed', 'maxThinkers', 'convergeAt', 'noveltyMin']) if (+body[k] > 0) S[k] = +body[k];
     if (body.enabled) S.enabled = { ...S.enabled, ...body.enabled };
     // Only models a CLI listed (or its default) are accepted; the next turn uses it and resumes the same session.
     for (const [a, m] of Object.entries(body.models || {}))
@@ -333,6 +414,32 @@ const routes = {
     switchChat(Number(run('INSERT INTO chats(title) VALUES(?)', title || `讨论 ${maxChat() + 1}`).lastInsertRowid));
   },
   'POST /api/chat/switch'({ id }) { if (q1('SELECT 1 FROM chats WHERE id=?', +id)) switchChat(+id); },
+  'POST /api/chat/rename'({ id, title }) {
+    title = String(title || '').trim().slice(0, 80);
+    if (title) run('UPDATE chats SET title=? WHERE id=?', title, +id);
+  },
+  // Deletes the discussion with its messages, agent session records and decision log (CLI sessions stay in each CLI).
+  'POST /api/chat/delete'({ id }) {
+    id = +id;
+    if (!q1('SELECT 1 FROM chats WHERE id=?', id)) return;
+    for (const t of ['messages', 'agent_sessions', 'decisions']) run(`DELETE FROM ${t} WHERE chat_id=?`, id);
+    run('DELETE FROM chats WHERE id=?', id);
+    ready = ready.filter(r => r.chat !== id);
+    if (id === chatId) switchChat(q1('SELECT max(id) m FROM chats').m || Number(run(`INSERT INTO chats(title) VALUES('讨论 1')`).lastInsertRowid));
+  },
+};
+// GET routes return data instead of acting.
+const getRoutes = {
+  // Full-text search over titles and messages: [{chat_id, title, id, sender, snippet}]
+  '/api/search'(p) {
+    const s = String(p.get('q') || '').trim();
+    if (!s) return [];
+    const like = `%${s.replace(/[%_\\]/g, '\\$&')}%`;
+    return q(`SELECT m.chat_id, c.title, m.id, m.sender, m.text FROM messages m JOIN chats c ON c.id=m.chat_id
+      WHERE (m.text LIKE ? ESCAPE '\\' OR c.title LIKE ? ESCAPE '\\') AND m.kind IN ('user','agent') ORDER BY m.id DESC LIMIT 50`, like, like)
+      .map(m => { const i = Math.max(0, m.text.toLowerCase().indexOf(s.toLowerCase()) - 20);
+        return { chat_id: m.chat_id, title: m.title, id: m.id, sender: m.sender, snippet: m.text.slice(i, i + 80) }; });
+  },
 };
 const maxChat = () => q1('SELECT coalesce(max(id),0) m FROM chats').m;
 function switchChat(id) {
@@ -353,6 +460,20 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
     clients.add(res); req.on('close', () => clients.delete(res));
     return res.write(`data: ${JSON.stringify(init())}\n\n`);
+  }
+  const url = new URL(req.url, 'http://x');
+  if (req.method === 'GET' && getRoutes[url.pathname]) {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify(getRoutes[url.pathname](url.searchParams)));
+  }
+  if (key === 'GET /api/export') { // markdown download of one discussion
+    const c = q1('SELECT * FROM chats WHERE id=?', +url.searchParams.get('id'));
+    if (!c) { res.writeHead(404); return res.end(); }
+    const body = `# ${c.title}\n\n` + q('SELECT * FROM messages WHERE chat_id=? ORDER BY id', c.id)
+      .map(m => m.kind === 'moderator' ? `> ${m.text}` : `**${fmt(m).replace(/^(#\d+ \S+)/, '$1**')}`).join('\n\n') + '\n';
+    res.writeHead(200, { 'content-type': 'text/markdown; charset=utf-8',
+      'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(c.title)}.md` });
+    return res.end(body);
   }
   const h = routes[key];
   if (!h) { res.writeHead(404); return res.end(); }

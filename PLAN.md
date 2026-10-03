@@ -99,6 +99,16 @@ The conversation must move at the user's reading speed, not as fast as agents ca
   slow agents still thinking have published, the member most engaged this round writes a summary. A new user
   message starts a new round. Measured: ~230–320 ms per request, ~1.1–1.6k input tokens.
   On the first three test chats it separated "still arguing" (14–74%) from "everyone gave the same answer" (97–100%).
+- **Implemented: Jev scheduler** (`jev` mode). After each published message, one request asks a Noul per idle
+  candidate (enabled, under the cap, has unseen messages): "would @x add something new if it spoke next?". Novelty
+  becomes the relevance term (relevance = signal × 2 × novelty; 0.5 = neutral) in score × fairness × freshness −
+  cooldown. Candidates at or above the novelty threshold (UI, default 45%) are invited; follow-up hands below it
+  are dropped without launching a CLI. The user's own wake-ups, @mentions and floor are never second-guessed; a
+  user message still wakes everyone. On a Jev error it falls back to the algorithm for one minute.
+- **Moderator presence**: moderator notes are their own message kind (shown as 🧭 pills, never fed to agents or
+  Jev): invitations with novelty, the convergence wrap-up, and "nobody has anything new: your turn" when the room
+  goes quiet without converging. A moderator card shows its status, the convergence and restating meters with
+  the threshold, and per-member novelty bars.
 - `POST https://api.typesafe.ai/v1/systemone`, `Authorization: Bearer <key>`, model `jev-latest`; body
   `{state, model, questions}`; answers carry probabilities/confidence. The key is in a `TYPESAFE*` env var
   (keep server-side). Read https://docs.typesafe.ai/llms.txt and the API/primitive pages before coding.
@@ -112,6 +122,10 @@ The conversation must move at the user's reading speed, not as fast as agents ca
 - Show every moderator decision in the chat ("🧭 invite GLM (0.71)"). A human @mention always overrides.
 
 ### Web UI
+- **Implemented layout**: left = discussion history (newest activity first, latest question as preview, message
+  count, auto-title from the first question, full-text search over titles and messages with jump-to-message,
+  rename, Markdown export, delete with confirmation); middle = chat; right = moderator card, members (harness +
+  model picker), settings.
 - Single `index.html` (no framework) + SSE from the server. Left: members with status (idle / ✋ thinking Ns /
   paused), per-agent live CLI output (expandable), usage vs limit. Right: messages with sender, latency, "↪ #N",
   moderator notes. Input with @mentions; Pause, Summarize, Stop.

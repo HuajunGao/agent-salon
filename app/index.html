@@ -4,33 +4,68 @@
 <meta charset="utf-8">
 <title>agent-chat</title>
 <style>
-  :root { --bg:#f6f5f2; --panel:#fff; --line:#e3e0da; --ink:#22211f; --mute:#7a766f; --accent:#2f6fde; }
+  :root { --bg:#f6f5f2; --panel:#fff; --line:#e3e0da; --ink:#22211f; --mute:#7a766f; --accent:#2f6fde;
+    --mod:#0f766e; --mod-bg:#ecf8f5; --mod-line:#bfe3da; }
   * { box-sizing: border-box; }
   body { margin:0; font:14px/1.55 system-ui, "Microsoft YaHei", sans-serif; color:var(--ink); background:var(--bg); height:100vh; display:flex; }
-  aside { width:330px; border-right:1px solid var(--line); background:var(--panel); overflow:auto; padding:12px; display:flex; flex-direction:column; gap:12px; }
+  aside { background:var(--panel); overflow:auto; padding:12px; display:flex; flex-direction:column; gap:12px; }
+  #left { width:250px; border-right:1px solid var(--line); padding:10px 8px; gap:8px; }
+  #right { width:330px; border-left:1px solid var(--line); }
   main { flex:1; display:flex; flex-direction:column; min-width:0; }
   h3 { margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); }
   button { font:inherit; border:1px solid var(--line); background:#fff; border-radius:6px; padding:3px 9px; cursor:pointer; }
   button:hover { border-color:var(--accent); }
   button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
   input, select, textarea { font:inherit; border:1px solid var(--line); border-radius:6px; padding:3px 6px; background:#fff; }
+  /* history */
+  #search { width:100%; padding:5px 8px; }
+  .chat { padding:7px 8px; border-radius:8px; cursor:pointer; position:relative; }
+  .chat:hover { background:#f3f1ec; }
+  .chat.on { background:#e9effc; }
+  .chat .t { font-weight:600; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-right:4px; }
+  .chat .p { font-size:12px; color:var(--mute); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .chat .m { font-size:11px; color:var(--mute); }
+  .chat .acts { position:absolute; right:6px; top:6px; display:none; gap:2px; background:inherit; }
+  .chat:hover .acts { display:flex; }
+  .chat .acts span { cursor:pointer; padding:0 4px; border-radius:4px; font-size:12px; }
+  .chat .acts span:hover { background:#fff; }
+  .hit { padding:6px 8px; border-radius:8px; cursor:pointer; font-size:12px; }
+  .hit:hover { background:#f3f1ec; }
+  .hit b { font-size:12px; }
+  mark { background:#fff1a8; }
+  /* members */
   .member { border:1px solid var(--line); border-radius:8px; padding:8px; margin-bottom:6px; }
   .member.off { opacity:.5; }
   .member .top { display:flex; align-items:center; gap:6px; }
   .dot { width:10px; height:10px; border-radius:50%; flex:none; }
   .member .name { font-weight:600; }
-  .member .st { margin-left:auto; font-size:12px; color:var(--mute); }
+  .member .st { margin-left:auto; font-size:12px; color:var(--mute); text-align:right; }
   .member .meta { font-size:12px; color:var(--mute); margin-top:3px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .member pre { max-height:180px; overflow:auto; white-space:pre-wrap; font-size:11px; background:#faf9f7; padding:6px; margin:4px 0 0; border-radius:4px; }
   .err { color:#b3261e; font-size:12px; }
+  /* moderator */
+  .modcard { border:1px solid var(--mod-line); background:var(--mod-bg); border-radius:10px; padding:10px; }
+  .modcard .hd { display:flex; align-items:center; gap:6px; color:var(--mod); font-weight:600; }
+  .modcard .hd .s { margin-left:auto; font-weight:400; font-size:12px; }
+  .meter { margin-top:6px; font-size:12px; color:var(--mute); }
+  .meter .lbl { display:flex; justify-content:space-between; }
+  .track { height:6px; background:#d9ece7; border-radius:3px; position:relative; overflow:visible; margin-top:2px; }
+  .fill { height:100%; border-radius:3px; background:var(--mod); transition:width .4s; }
+  .tick { position:absolute; top:-3px; width:2px; height:12px; background:#b3261e; opacity:.6; }
+  .pulse { animation:pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity:.35; } }
   .settings label { display:flex; justify-content:space-between; align-items:center; margin:3px 0; gap:8px; }
   .settings input[type=number] { width:70px; }
+  /* chat */
   .bar { display:flex; gap:8px; align-items:center; padding:8px 14px; border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
+  .bar .title { font-weight:600; font-size:15px; cursor:pointer; max-width:40%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .bar .info { color:var(--mute); font-size:13px; }
   #msgs { flex:1; overflow:auto; padding:14px 18px; }
   .msg { max-width:820px; margin:0 0 12px; padding:9px 12px; background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--c, var(--line)); border-radius:8px; }
   .msg.user { margin-left:auto; background:#eef3fd; border-left-color:var(--accent); }
   .msg.system { background:transparent; border:none; color:var(--mute); font-size:13px; padding:2px 12px; }
+  .msg.moderator { max-width:640px; margin:4px auto 14px; padding:6px 14px; background:var(--mod-bg); border:1px solid var(--mod-line);
+    border-radius:16px; color:var(--mod); font-size:13px; text-align:center; }
   .msg .hd { font-size:12px; color:var(--mute); display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
   .msg .hd b { color:var(--c, var(--ink)); }
   .msg .tx { white-space:pre-wrap; word-wrap:break-word; margin-top:3px; }
@@ -40,6 +75,7 @@
   .tag { font-size:11px; padding:0 5px; border-radius:4px; background:#f1efea; }
   .tag.warn { background:#fff1d6; color:#8a5a00; }
   a.ref { color:var(--accent); cursor:pointer; text-decoration:none; }
+  .empty { color:var(--mute); text-align:center; margin-top:20vh; }
   footer { border-top:1px solid var(--line); background:var(--panel); padding:8px 14px; }
   #quote { font-size:12px; color:var(--mute); margin-bottom:4px; display:none; }
   #input { width:100%; resize:vertical; min-height:58px; }
@@ -47,29 +83,14 @@
 </style>
 </head>
 <body>
-<aside>
-  <section>
-    <h3>讨论</h3>
-    <div class="row" style="margin:0"><select id="chats" style="flex:1"></select><button id="newChat">新讨论</button></div>
-  </section>
-  <section><h3>成员</h3><div id="members"></div></section>
-  <section class="settings">
-    <h3>设置（立即生效）</h3>
-    <label>讨论语言 <input id="s-language" size="8"></label>
-    <label>每人每轮发言上限 <input id="s-turnCap" type="number" min="1"></label>
-    <label>阅读速度（字/分钟） <input id="s-readSpeed" type="number" min="50" step="50"></label>
-    <label>同时思考人数 <input id="s-maxThinkers" type="number" min="1" max="4"></label>
-    <label>调度方式 <select id="s-scheduler">
-      <option value="algorithm">algorithm（相关性×公平×新鲜−冷却）</option>
-      <option value="broadcast">broadcast（每条都唤醒所有人）</option>
-      <option value="jev">jev（第二阶段；暂同 algorithm）</option>
-    </select></label>
-    <label title="Jev 判断观点已收敛时，请一位成员总结后暂停">收敛后自动收尾 <input id="s-autoStop" type="checkbox"></label>
-    <label title="收敛度达到这个值就收尾；“大体一致且只在附和/重复”也会收尾">收敛阈值（%） <input id="s-convergeAt" type="number" min="50" max="100" step="5"></label>
-  </section>
+<aside id="left">
+  <button class="primary" id="newChat">＋ 新讨论</button>
+  <input id="search" placeholder="搜索标题和消息…" type="search">
+  <div id="history"></div>
 </aside>
 <main>
   <div class="bar">
+    <span class="title" id="title" title="点击重命名"></span>
     <button id="pause"></button>
     <button id="stop" title="暂停并取消所有举手">停止</button>
     <button id="next" title="读完了，放下一条">下一条 ▶</button>
@@ -86,14 +107,37 @@
     </div>
   </footer>
 </main>
+<aside id="right">
+  <section id="moderator"></section>
+  <section><h3>成员</h3><div id="members"></div></section>
+  <section class="settings">
+    <h3>设置（立即生效）</h3>
+    <label>讨论语言 <input id="s-language" size="8"></label>
+    <label>每人每轮发言上限 <input id="s-turnCap" type="number" min="1"></label>
+    <label>阅读速度（字/分钟） <input id="s-readSpeed" type="number" min="50" step="50"></label>
+    <label>同时思考人数 <input id="s-maxThinkers" type="number" min="1" max="4"></label>
+    <label>调度方式 <select id="s-scheduler">
+      <option value="jev">jev（Jev 判断谁有新东西可说）</option>
+      <option value="algorithm">algorithm（信号×公平×新鲜−冷却）</option>
+      <option value="broadcast">broadcast（每条都唤醒所有人）</option>
+    </select></label>
+    <label title="jev 模式：新意低于这个值的成员不会被请来接着说（你的消息和 @ 不受影响）">新意阈值（%） <input id="s-noveltyMin" type="number" min="0" max="100" step="5"></label>
+    <label title="Jev 判断观点已收敛时，请一位成员总结后结束本轮">收敛后自动收尾 <input id="s-autoStop" type="checkbox"></label>
+    <label title="收敛度达到这个值就收尾；“大体一致且只在附和/重复”也会收尾">收敛阈值（%） <input id="s-convergeAt" type="number" min="50" max="100" step="5"></label>
+  </section>
+</aside>
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const post = (url, body = {}) => fetch(url, { method: 'POST', body: JSON.stringify(body) });
-let messages = [], S = null, replyTo = null, clockSkew = 0;
+let messages = [], S = null, replyTo = null, clockSkew = 0, jumpTo = null;
 const member = n => S?.members.find(m => m.name === n);
-const label = n => n === 'user' ? '我' : n === 'system' ? '系统' : (member(n)?.label || n);
+const label = n => n === 'user' ? '我' : n === 'system' ? '系统' : n === 'moderator' ? '主持人' : (member(n)?.label || n);
 const color = n => member(n)?.color || '';
+const utc = s => new Date(s.replace(' ', 'T') + 'Z');
+const when = s => { if (!s) return ''; const d = utc(s), now = new Date();
+  return d.toDateString() === now.toDateString() ? d.toTimeString().slice(0, 5) : `${d.getMonth() + 1}/${d.getDate()}`; };
+const pct = x => `${Math.round(x * 100)}%`;
 
 function linkRefs(t) {
   return esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`\n]+)`/g, '<code>$1</code>')
@@ -105,10 +149,12 @@ function renderMsg(m) {
   el.className = `msg ${m.kind}`; el.id = 'm' + m.id;
   if (m.kind === 'agent') el.style.setProperty('--c', color(m.sender));
   if (m.kind === 'system') { el.innerHTML = `#${m.id} ${linkRefs(m.text)}`; return el; }
-  const idx = messages.findIndex(x => x.id === m.id);
-  const between = m.based_on != null ? messages.slice(0, idx).filter(x => x.id > m.based_on) : [];
+  if (m.kind === 'moderator') { el.innerHTML = linkRefs(m.text); el.title = `主持人 · ${when(m.created_at)}`; return el; }
+  const talk = messages.filter(x => x.kind === 'user' || x.kind === 'agent');
+  const idx = talk.findIndex(x => x.id === m.id);
+  const between = m.based_on != null ? talk.slice(0, idx).filter(x => x.id > m.based_on) : [];
   const hd = [`<b>${esc(label(m.sender))}${m.model ? ` · ${esc(m.model)}` : ''}</b>`, `<span>#${m.id}</span>`,
-    `<span>${new Date(m.created_at.replace(' ', 'T') + 'Z').toTimeString().slice(0, 5)}</span>`];
+    `<span>${utc(m.created_at).toTimeString().slice(0, 5)}</span>`];
   if (m.reply_to) hd.push(`<span>回复 <a class="ref" data-id="${m.reply_to}">#${m.reply_to}</a></span>`);
   if (m.latency_ms) hd.push(`<span>⏱ ${Math.round(m.latency_ms / 1000)}s</span>`);
   if (m.based_on != null) hd.push(`<span class="tag" title="开始思考时看到的最后一条">↪ <a class="ref" data-id="${m.based_on}">#${m.based_on}</a>${between.length ? ` (+${between.length} 条更新的)` : ''}</span>`);
@@ -121,8 +167,15 @@ function renderMsg(m) {
 
 function renderAll() {
   const box = $('#msgs'); box.innerHTML = '';
+  if (!messages.length) box.innerHTML = '<div class="empty">提一个问题，四位成员会一起讨论。<br>🧭 主持人 Jev 会安排发言，并在观点收敛时请人总结。</div>';
   for (const m of messages) box.appendChild(renderMsg(m));
   box.scrollTop = box.scrollHeight;
+  if (jumpTo) { flash(jumpTo); jumpTo = null; }
+}
+function flash(id) {
+  const el = $('#m' + id);
+  if (!el) return;
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1500);
 }
 
 function fmtSecs(ms) { return Math.max(0, Math.round(ms / 1000)) + 's'; }
@@ -136,10 +189,53 @@ function modelOptions(m) {
   const opts = list.some(x => x.id === m.model) ? list : [{ id: m.model, name: m.model || 'default' }, ...list];
   return opts.map(x => `<option value="${esc(x.id)}" ${x.id === m.model ? 'selected' : ''}>${esc(x.name === x.id ? x.id : `${x.name} · ${x.id || 'default'}`)}</option>`).join('');
 }
+
+// ---------- history ----------
+let searchQ = '', searchHits = null;
+function renderHistory() {
+  if (searchHits) {
+    const re = new RegExp(searchQ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    return setHTML('#history', searchHits.length ? searchHits.map(h => `<div class="hit" data-hit="${h.chat_id}:${h.id}">
+      <b>${esc(h.title)}</b> · #${h.id} ${esc(label(h.sender))}<div>${esc(h.snippet).replace(re, '<mark>$&</mark>')}</div></div>`).join('')
+      : '<div class="hit">没有找到</div>');
+  }
+  setHTML('#history', S.chats.map(c => `<div class="chat ${c.id === S.chatId ? 'on' : ''}" data-chat="${c.id}">
+    <div class="t" title="${esc(c.title)}">${esc(c.title)}</div>
+    <div class="p">${esc(c.preview) || '（还没有消息）'}</div>
+    <div class="m">${c.n} 条 · ${when(c.last || c.created_at)}</div>
+    <div class="acts"><span data-rename="${c.id}" title="重命名">✎</span><span data-export="${c.id}" title="导出 Markdown">⤓</span><span data-del="${c.id}" title="删除">🗑</span></div>
+  </div>`).join(''));
+}
+let searchTimer;
+$('#search').addEventListener('input', e => {
+  searchQ = e.target.value.trim(); clearTimeout(searchTimer);
+  if (!searchQ) { searchHits = null; delete lastHTML['#history']; return renderHistory(); }
+  searchTimer = setTimeout(async () => { searchHits = await (await fetch('/api/search?q=' + encodeURIComponent(searchQ))).json(); renderHistory(); }, 250);
+});
+
+// ---------- moderator ----------
+function renderModerator() {
+  const j = S.jev, mode = S.settings.scheduler;
+  const status = j.assessing ? '<span class="pulse">正在评估谁有新观点…</span>' : j.judging ? '<span class="pulse">正在判断是否收敛…</span>'
+    : j.down ? 'Jev 暂不可用，临时用算法' : j.ms ? `上次判断 ${j.ms}ms` : '待命';
+  const meter = (name, v, tick, hint) => `<div class="meter"><div class="lbl"><span title="${hint}">${name}</span><span>${v == null ? '—' : pct(v)}</span></div>
+    <div class="track"><div class="fill" style="width:${v == null ? 0 : v * 100}%"></div>${tick != null ? `<div class="tick" style="left:${tick}%"></div>` : ''}</div></div>`;
+  let html = `<div class="modcard"><div class="hd">🧭 主持人 · Jev<span class="s">${status}</span></div>
+    <div style="font-size:12px;color:var(--mute);margin-top:2px">调度：${mode === 'jev' ? 'Jev 判断谁有新东西可说' : mode === 'algorithm' ? '算法（信号×公平×新鲜−冷却）' : '广播'}${S.settings.autoStop ? ' · 收敛后自动收尾' : ''}</div>
+    ${meter('观点收敛度', S.mod?.convergence, S.settings.autoStop ? S.settings.convergeAt : null, '红线是收尾阈值')}
+    ${meter('附和/重复', S.mod?.stalling, null, '最近几条是否只在附和或复述')}`;
+  if (mode === 'jev') html += `<div class="meter" style="margin-top:8px">接下来谁有新东西可说（红线是新意阈值）</div>`
+    + S.members.filter(m => m.enabled).map(m => meter(`<span class="dot" style="display:inline-block;background:${m.color}"></span> ${esc(m.label)}`, m.nov, S.settings.noveltyMin, '')).join('');
+  if (S.wrapped) html += `<div style="margin-top:6px;font-size:12px;color:var(--mod)">本轮已收尾，发新消息可继续讨论。</div>`;
+  setHTML('#moderator', html + '</div>');
+}
+
 const openLive = new Set();
 function renderState() {
   const now = Date.now() - clockSkew;
-  setHTML('#chats', S.chats.map(c => `<option value="${c.id}" ${c.id === S.chatId ? 'selected' : ''}>${esc(c.title)}</option>`).join(''));
+  renderHistory(); renderModerator();
+  const cur = S.chats.find(c => c.id === S.chatId);
+  $('#title').textContent = cur?.title || '';
   setHTML('#members', S.members.map(m => {
     const qi = S.queue.findIndex(x => x.agent === m.name);
     let st = '空闲';
@@ -169,15 +265,13 @@ function renderState() {
   setHTML('#ats', S.members.map(m => `<button data-at="${m.name}">@${m.name}</button>`).join(' '));
   $('#pause').textContent = S.paused ? '▶ 继续' : '⏸ 暂停';
   const info = [];
-  if (S.mod) info.push(`🧭 收敛度 ${Math.round(S.mod.convergence * 100)}% · 重复度 ${S.mod.stalling.toFixed(2)}（截至 #${S.mod.msgId}）`);
-  if (S.wrapped) info.push('已收尾');
-  $('#s-autoStop').checked = S.settings.autoStop;
   if (S.paused) info.push('已暂停（正在思考的会完成，回复保留在队列）');
   if (S.queue.length) info.push(`待发布：${S.queue.map(x => label(x.agent)).join('、')}`);
   if (S.holding) info.push('你在输入，暂缓发布');
   else if (S.readLeft > 0 && S.queue.length) info.push(`阅读时间还剩 ${fmtSecs(S.readLeft)}`);
   $('#info').textContent = info.join(' · ');
-  for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt']) {
+  $('#s-autoStop').checked = S.settings.autoStop;
+  for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin']) {
     const el = $('#s-' + k);
     if (document.activeElement !== el) el.value = S.settings[k];
   }
@@ -186,9 +280,13 @@ function renderState() {
 const es = new EventSource('/events');
 es.onmessage = e => {
   const ev = JSON.parse(e.data);
-  if (ev.type === 'init') { modelLists = ev.modelLists || {}; delete lastHTML['#members']; S = ev.state; clockSkew = Date.now() - S.now; messages = ev.messages; renderState(); renderAll(); }
+  if (ev.type === 'init') {
+    if (ev.modelLists && Object.keys(ev.modelLists).length) modelLists = ev.modelLists;
+    delete lastHTML['#members']; S = ev.state; clockSkew = Date.now() - S.now; messages = ev.messages; renderState(); renderAll();
+  }
   if (ev.type === 'state') { S = ev; clockSkew = Date.now() - S.now; renderState(); }
   if (ev.type === 'msg') {
+    if (!messages.length) $('#msgs').innerHTML = '';
     messages.push(ev.msg);
     const box = $('#msgs'), atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
     box.appendChild(renderMsg(ev.msg));
@@ -196,9 +294,28 @@ es.onmessage = e => {
   }
 };
 
+function rename(id) {
+  const c = S.chats.find(x => x.id === id), t = prompt('重命名讨论', c?.title || '');
+  if (t && t.trim()) post('/api/chat/rename', { id, title: t.trim() });
+}
 document.addEventListener('click', e => {
-  const t = e.target, d = t.dataset;
-  if (d.id) { const el = $('#m' + d.id); if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1200); } }
+  const t = e.target.closest('[data-id],[data-reply],[data-floor],[data-lower],[data-at],[data-chat],[data-hit],[data-rename],[data-export],[data-del]');
+  if (!t) return;
+  const d = t.dataset;
+  if (d.rename) return rename(+d.rename);
+  if (d.export) return void (location.href = '/api/export?id=' + d.export);
+  if (d.del) {
+    const c = S.chats.find(x => x.id === +d.del);
+    if (confirm(`删除「${c?.title}」？消息和决策记录会一起删除，无法恢复。`)) post('/api/chat/delete', { id: +d.del });
+    return;
+  }
+  if (d.chat) { if (+d.chat !== S.chatId) post('/api/chat/switch', { id: +d.chat }); return; }
+  if (d.hit) {
+    const [c, id] = d.hit.split(':').map(Number);
+    if (c === S.chatId) flash(id); else { jumpTo = id; post('/api/chat/switch', { id: c }); }
+    return;
+  }
+  if (d.id) flash(d.id);
   if (d.reply) setReply(+d.reply);
   if (d.floor) post('/api/floor', { agent: d.floor });
   if (d.lower) post('/api/lower', { agent: d.lower });
@@ -210,7 +327,7 @@ document.addEventListener('change', e => {
   if (d.model) post('/api/settings', { models: { [d.model]: e.target.value } });
 });
 $('#s-autoStop').onchange = e => post('/api/settings', { autoStop: e.target.checked });
-for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt'])
+for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin'])
   $('#s-' + k).addEventListener('change', e => post('/api/settings', { [k]: e.target.value }));
 
 function setReply(id) {
@@ -242,8 +359,8 @@ $('#input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shift
 $('#pause').onclick = () => post('/api/pause', { paused: !S.paused });
 $('#stop').onclick = () => post('/api/stop');
 $('#next').onclick = () => post('/api/next');
-$('#chats').onchange = e => post('/api/chat/switch', { id: e.target.value });
-$('#newChat').onclick = () => { const t = prompt('讨论标题', ''); if (t !== null) post('/api/chat/new', { title: t }); };
+$('#title').onclick = () => rename(S.chatId);
+$('#newChat').onclick = () => { post('/api/chat/new'); $('#input').focus(); };
 </script>
 </body>
 </html>
