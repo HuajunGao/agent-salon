@@ -158,6 +158,15 @@ Node.js, no frameworks, no npm dependencies (built-in `node:sqlite`, `node:http`
 | gemini | `agy -p "<msg>" --model gemini-3.8-flash-medium --output-format json` | `--conversation <id>` | JSON output only at the end. Id: `"conversation_id"`. |
 | glm | `opencode run --pure -m zai-coding-plan/glm-5.3 --format json "<msg>"` | `-s <ses_id>` | `--pure` required (oh-my-openagent plugin kills work). Set `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=131072` (32k default truncates GLM thinking; exits 0 anyway). GLM 5.3 is text-only; glm-5.3-flash is multimodal. Alternative harness: `claude-glm` (~/.local/bin). |
 
+**Plain mode (user, 2026-10-03)**: discussion agents run without the user's personal customizations, but keep web
+search. Claude: `--setting-sources project --disable-slash-commands --strict-mcp-config` (no plugins — Ponytail's
+persona made replies terse — no skills, no MCP; OAuth login still works, unlike `--bare`) and
+`--tools`/`--allowedTools Read Glob Grep WebSearch WebFetch` (in `-p` unapproved web tools are refused). Codex:
+`--ignore-user-config` (no plugins/MCP; also drops the user's reasoning-effort setting) and `-c web_search="live"`.
+OpenCode: `--pure` plus `OPENCODE_CONFIG_CONTENT` disabling every MCP server from the global config (Playwright via
+npx cost ~5 s per turn); webfetch and the firecrawl skills stay. Antigravity: no supported override, unchanged (its 4
+MCP servers start each turn). All four verified: answering a web question and resuming the session.
+
 General: never trust exit codes (check `"reason":"length"`, quota/auth errors); add a no-output timeout (a hung
 request once sat for an hour); keep logs outside anything an agent might clean up.
 

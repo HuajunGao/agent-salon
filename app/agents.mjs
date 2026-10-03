@@ -46,6 +46,19 @@ function glmSettingsFile() {
   return glmSettings;
 }
 
+// Plain OpenCode: --pure drops plugins; this switches off every MCP server from the user's global config for
+// agent-chat's runs only (Playwright via npx alone added ~5 s per turn). Built-in webfetch and skills stay.
+let ocNoMcp;
+function opencodeNoMcp() {
+  if (ocNoMcp != null) return ocNoMcp;
+  let names = [];
+  try {
+    const text = readFileSync(join(H, '.config/opencode/opencode.jsonc'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+    names = Object.keys(JSON.parse(text).mcp || {});
+  } catch {}
+  return (ocNoMcp = JSON.stringify({ mcp: Object.fromEntries(names.map(n => [n, { type: 'local', command: ['none'], enabled: false }])) }));
+}
+
 const short = (s, n = 200) => (s.length > n ? s.slice(0, n) + '…' : s);
 
 export const AGENTS = {
@@ -54,11 +67,16 @@ export const AGENTS = {
     // "glm:<alias>" runs Claude Code against GLM through settings-glm.json; anything else is an Anthropic model.
     cmd: (prompt, sid, o) => {
       const glm = o.model?.startsWith('glm:'), model = glm ? o.model.slice(4) : o.model;
+      // Plain Claude Code: no user settings (so no plugins such as Ponytail's "write less" persona), no skills,
+      // no MCP. Login still comes from ~/.claude/.credentials.json. Read-only tools plus web search.
       return { bin: exe('claude'), env: cleanEnv(),
       args: ['-p', prompt, '--output-format', 'stream-json', '--verbose',
+        '--setting-sources', 'project', '--disable-slash-commands', '--strict-mcp-config',
         '--settings', glm ? glmSettingsFile() : '{"disableAllHooks":true}', '--add-dir', o.dataDir,
         ...(model ? ['--model', model] : []),
-        '--disallowedTools', 'Edit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell',
+        // --tools limits what exists; --allowedTools pre-approves it (-p can't ask, so web tools were refused).
+        '--tools', 'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
+        '--allowedTools', 'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
         ...(sid ? ['--resume', sid] : [])] };
     },
     parse(ev, st) {
@@ -74,8 +92,10 @@ export const AGENTS = {
     label: 'Codex', color: '#10a37f', defaultModel: 'gpt-6.1-sol',
     cmd: (prompt, sid, o) => ({
       bin: codexBin(), env: process.env,
-      // resume ignores the original model/sandbox and reads ~/.codex/config.toml: pass them every time.
-      args: ['exec', '--json', '--skip-git-repo-check', '-m', o.model || 'gpt-6.1-sol', '-c', 'sandbox_mode=read-only',
+      // Plain Codex: --ignore-user-config skips ~/.codex/config.toml (plugins, MCP servers, reasoning effort);
+      // auth still comes from CODEX_HOME. Model and sandbox are passed every time (resume would not keep them).
+      args: ['exec', '--json', '--skip-git-repo-check', '--ignore-user-config', '-m', o.model || 'gpt-6.1-sol',
+        '-c', 'sandbox_mode=read-only', '-c', 'web_search="live"',
         ...(sid ? ['resume', sid] : []), prompt],
     }),
     parse(ev, st) {
@@ -113,7 +133,7 @@ export const AGENTS = {
     cmd: (prompt, sid, o) => ({
       bin: opencodeBin(),
       // --pure: oh-my-openagent hands work to background tasks that die with `run`. 32k default output cap truncates GLM.
-      env: { ...process.env, OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: '131072' },
+      env: { ...process.env, OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: '131072', OPENCODE_CONFIG_CONTENT: opencodeNoMcp() },
       args: ['run', '--pure', '--agent', 'plan', '-m', o.model || 'zai-coding-plan/glm-5.3', '--format', 'json',
         ...(sid ? ['-s', sid] : []), prompt],
     }),
