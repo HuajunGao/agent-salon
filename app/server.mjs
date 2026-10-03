@@ -161,7 +161,8 @@ const voiceOf = a => S.ttsVoices?.[a] || defaultVoice(Math.max(0, NAMES.indexOf(
 // "#58" is read as the name of whoever wrote #58 ("你" for the user); unknown numbers are dropped.
 const refName = id => { const s = q1('SELECT sender FROM messages WHERE id=?', id)?.sender;
   return s === 'user' ? '你' : s && memberConfigs[s] ? aliasOf(s) : null; };
-const spoken = (a, text) => speakable(`${aliasOf(a)}：${text}`, refName);
+// No "name:" prefix: each member has its own voice.
+const spoken = (a, text) => speakable(text, refName);
 let mod = null;                         // latest Jev judgment this round: {convergence, stalling, msgId}
 let wrapRound = 0;                      // round (= last user message id) already wrapped up
 // Moderator activity. devilAt / circledAt: the round in which devil's advocate / the circling pause already happened.
