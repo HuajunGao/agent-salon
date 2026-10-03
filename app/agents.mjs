@@ -78,7 +78,8 @@ function glmSettingsFile() {
 // Plain OpenCode: --pure drops plugins; this switches off every MCP server from the user's global config for
 // agent-chat's runs only (Playwright via npx alone added ~5 s per turn). Built-in webfetch and skills stay.
 // OpenCode 2's websearch asks which search provider to use on first use; a headless run can't answer, so every
-// search failed with "Web search cancelled". Unless the user's config picks one, use its keyless rotation.
+// search failed with "Web search cancelled". Unless the user's config picks one: Firecrawl when FIRECRAWL_API_KEY is
+// set (e.g. in /etc/agent-chat.env), else its keyless rotation.
 let ocNoMcp;
 function opencodeNoMcp() {
   if (ocNoMcp != null) return ocNoMcp;
@@ -89,7 +90,7 @@ function opencodeNoMcp() {
     websearch ||= !!cfg.websearch;
   } catch {}
   return (ocNoMcp = JSON.stringify({ mcp: Object.fromEntries(names.map(n => [n, { type: 'local', command: ['none'], enabled: false }])),
-    ...(!websearch && opencodeV2() && { websearch: { provider: 'random' } }) }));
+    ...(!websearch && opencodeV2() && { websearch: { provider: process.env.FIRECRAWL_API_KEY ? 'firecrawl' : 'random' } }) }));
 }
 
 const CLAUDE_TOOLS = exec => ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', ...(exec ? ['Bash', 'Edit', 'Write'] : [])];
