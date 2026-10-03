@@ -627,7 +627,7 @@ function renderMembers() {
       <div class="mdetail">
         <div class="member-actions"><button class="floor-button" data-floor="${m.name}" title="让它马上发言">请发言</button>${m.hand && m.status !== 'thinking' ? `<button data-lower="${m.name}">放下手</button>` : ''}${m.configurable ? `<button data-member-edit="${m.name}">配置成员</button>` : ''}</div>
         <select data-model="${m.name}" title="模型（下一轮生效，会话保留）">${modelOptions(m)}<option value="__custom__">自定义模型…</option></select>
-        ${S.speech?.on ? `<select data-voice="${m.name}" title="朗读声音（OmniVoice 只有一个声音；想区分成员可选 Azure 的声音）">${voiceOptions(m.name)}</select>` : ''}
+        ${S.speech?.on ? `<select data-voice="${m.name}" title="朗读声音：每位成员默认分到一个不同的 Azure 声音">${voiceOptions(m.name)}</select>` : ''}
         <div class="kv">
           <label class="switch"><input type="checkbox" data-enable="${m.name}" ${m.enabled ? 'checked' : ''}>参与</label>
           <span>本轮 ${m.sinceUser}/${S.settings.turnCap}</span><span>共 ${m.turns} 次</span>
@@ -894,8 +894,9 @@ document.addEventListener('keydown', e => {
 
 // ---------- read-aloud (TTS) and voice input (STT) via the server's LAN speech gateway ----------
 function voiceOptions(name) {
-  const cur = S.settings.ttsVoices?.[name] || '';
-  return [{ id: '', label: `默认声音（${S.speech.defaultVoice}）` }, ...S.speech.models.filter(t => t.id !== S.speech.defaultVoice)]
+  const cur = S.settings.ttsVoices?.[name] || '', def = S.speech.defaults[name];
+  const defLabel = S.speech.models.find(t => t.id === def)?.label || def;
+  return [{ id: '', label: `默认：${defLabel}` }, ...S.speech.models]
     .map(t => `<option value="${esc(t.id)}" ${t.id === cur ? 'selected' : ''}>${esc(t.label)}</option>`).join('');
 }
 

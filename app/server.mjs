@@ -8,7 +8,7 @@ import { AGENTS, runTurn, listModels, runAs } from './agents.mjs';
 import { judge, novelty, classifyMode } from './moderator.mjs';
 import { curate } from './memory.mjs';
 import { validateMember, memberMentions } from './members.mjs';
-import { speechOn, loadCatalog, ttsModels, speakable, synth, transcribe, DEFAULT_TTS } from './speech.mjs';
+import { speechOn, loadCatalog, ttsModels, speakable, synth, transcribe, defaultVoice, FALLBACK_TTS } from './speech.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DATA = join(ROOT, 'data'), WORK = join(ROOT, 'workspace');
@@ -156,7 +156,8 @@ let ready = [];          // finished replies waiting to be published: {chat, age
 let readUntil = 0, typingAt = 0;
 // Read-aloud: a browser that is playing a reply holds the publish queue (like typing) so the next one waits for it.
 let speakingAt = 0, ttsActiveAt = 0;
-const voiceOf = a => S.ttsVoices?.[a] || DEFAULT_TTS;
+// Each member's own voice: chosen in the UI, else the Azure pool by member order (stable: creation order).
+const voiceOf = a => S.ttsVoices?.[a] || defaultVoice(Math.max(0, NAMES.indexOf(a)));
 // "#58" is read as the name of whoever wrote #58 ("你" for the user); unknown numbers are dropped.
 const refName = id => { const s = q1('SELECT sender FROM messages WHERE id=?', id)?.sender;
   return s === 'user' ? '你' : s && memberConfigs[s] ? aliasOf(s) : null; };
@@ -568,7 +569,7 @@ function state() {
   return {
     type: 'state', now, chatId, paused, mod, wrapped: !!wrapRound && wrapRound === lastUserId(chatId), settings: S, readLeft: Math.max(0, readUntil - now),
     holding: now - typingAt < 15e3, speaking: now - speakingAt < 20e3,
-    speech: { on: speechOn(), models: ttsModels(), defaultVoice: DEFAULT_TTS },
+    speech: { on: speechOn(), models: ttsModels(), defaults: Object.fromEntries(NAMES.map(n => [n, defaultVoice(NAMES.indexOf(n))])) },
     chats: listChats(),
     sandboxed: !!RUNAS,
     discussionMode: { ...chatMode(chatId), pending: modePending === chatId },
@@ -772,14 +773,14 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(getRoutes[url.pathname](url.searchParams)));
   }
-  // Read-aloud audio for one agent message (proxied from the LAN speech gateway). Falls back to Azure if the
-  // chosen voice fails (OmniVoice needs the GPU and may be unloaded).
+  // Read-aloud audio for one agent message (proxied from the LAN speech gateway). Falls back to OmniVoice if the
+  // member's voice fails.
   if (key === 'GET /api/tts') {
     const m = q1(`SELECT sender, text FROM messages WHERE id=? AND kind='agent'`, +url.searchParams.get('id'));
     if (!speechOn() || !m || !memberConfigs[m.sender]) { res.writeHead(404); return res.end(); }
     ttsActiveAt = Date.now();
     const text = spoken(m.sender, m.text);
-    synth(text, voiceOf(m.sender)).catch(() => synth(text, 'azure:zh-CN-XiaoxiaoMultilingualNeural'))
+    synth(text, voiceOf(m.sender)).catch(() => synth(text, FALLBACK_TTS))
       .then(a => { res.writeHead(200, { 'content-type': a.type, 'cache-control': 'no-store' }); res.end(a.buf); })
       .catch(e => { res.writeHead(502, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: e.message })); });
     return;

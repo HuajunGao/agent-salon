@@ -3,18 +3,32 @@
 // home-speech). The server proxies all calls, so the browser never talks to the gateway directly.
 const BASE = (process.env.SPEECH_BASE_URL || '').replace(/\/+$/, '');
 const KEY = process.env.SPEECH_API_KEY || 'home-speech';
-export const DEFAULT_TTS = 'omnivoice'; // best for mixed Chinese/English; Azure may drop words in mixed text
+// Azure (free, many voices) gives each member its own voice; the gateway accepts any "azure:<voice>". Alternating
+// female/male, the two multilingual voices first (they handle mixed Chinese/English best). All verified on the gateway.
+export const VOICE_POOL = [
+  ['azure:zh-CN-XiaoxiaoMultilingualNeural', 'Azure 晓晓（女，多语言）'], ['azure:zh-CN-YunyiMultilingualNeural', 'Azure 云逸（男，多语言）'],
+  ['azure:zh-CN-XiaochenNeural', 'Azure 晓辰（女）'], ['azure:zh-CN-YunxiNeural', 'Azure 云希（男）'],
+  ['azure:zh-CN-XiaoyiNeural', 'Azure 晓伊（女）'], ['azure:zh-CN-YunjianNeural', 'Azure 云健（男）'],
+  ['azure:zh-CN-XiaohanNeural', 'Azure 晓涵（女）'], ['azure:zh-CN-YunyangNeural', 'Azure 云扬（男）'],
+  ['azure:zh-CN-XiaomoNeural', 'Azure 晓墨（女）'], ['azure:zh-CN-YunfengNeural', 'Azure 云枫（男）'],
+  ['azure:zh-CN-XiaoxuanNeural', 'Azure 晓萱（女）'], ['azure:zh-CN-YunxiaNeural', 'Azure 云夏（男，童声）'],
+].map(([id, label]) => ({ id, label }));
+export const defaultVoice = index => VOICE_POOL[index % VOICE_POOL.length].id;
+export const FALLBACK_TTS = 'omnivoice'; // if Azure fails; OmniVoice keeps mixed text best but has one voice and needs the GPU
 export const speechOn = () => !!BASE;
 
-// TTS model ids the gateway offers (each Azure id is a distinct voice; OmniVoice ignores `voice`).
+// Voices offered per member: the Azure pool plus whatever else the gateway's catalog lists (e.g. OmniVoice).
 let catalog = [];
 export async function loadCatalog() {
   if (!BASE) return [];
+  let extra = [];
   try {
     const r = await fetch(BASE.replace(/\/v1$/, '') + '/v1/test/catalog', { signal: AbortSignal.timeout(10e3) });
-    // MiniMax is left out for now (its plan expired: "insufficient balance").
-    catalog = (await r.json()).tts.filter(t => t.id !== 'tts-1' && t.backend !== 'minimax').map(t => ({ id: t.id, label: t.label }));
-  } catch { catalog = [{ id: DEFAULT_TTS, label: 'OmniVoice' }]; }
+    // MiniMax is left out for now (its plan expired: "insufficient balance"); bare "azure" is just its default voice.
+    extra = (await r.json()).tts.filter(t => !['tts-1', 'azure'].includes(t.id) && t.backend !== 'minimax')
+      .map(t => ({ id: t.id, label: t.label }));
+  } catch { extra = [{ id: FALLBACK_TTS, label: 'OmniVoice' }]; }
+  catalog = [...VOICE_POOL, ...extra.filter(t => !VOICE_POOL.some(v => v.id === t.id))];
   return catalog;
 }
 export const ttsModels = () => catalog;
@@ -37,7 +51,7 @@ export function speakable(text, nameOf = () => null) {
 
 // Small cache so a reply synthesized while it waited in the publish queue plays without delay.
 const cache = new Map(), inflight = new Map();
-export function synth(text, model = DEFAULT_TTS) {
+export function synth(text, model) {
   const key = model + '\n' + text;
   if (cache.has(key)) return Promise.resolve(cache.get(key));
   if (inflight.has(key)) return inflight.get(key);
