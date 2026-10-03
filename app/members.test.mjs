@@ -106,8 +106,13 @@ test('HTTP member lifecycle persists, keeps credentials private and routes @hand
     assert.equal((await state()).state.members.find(m => m.name === 'gpt').sid, null);
     assert.equal((await post('/api/member/save', { ...body, name: 'user' })).status, 500);
     assert.equal((await post('/api/member/delete', { name: 'reviewer' })).status, 200);
+    const order = (await state()).state.members.map(m => m.name).reverse();
+    assert.equal((await post('/api/member/order', { names: order })).status, 200);
+    assert.deepEqual((await state()).state.members.map(m => m.name), order);
+    assert.equal((await post('/api/member/order', { names: ['gpt', 'gpt'] })).status, 500);
     await stop(); await boot();
     s = await state();
+    assert.deepEqual(s.state.members.map(m => m.name), order);
     assert.equal(s.state.members.find(m => m.name === 'gpt').label, 'GPT edited');
     assert.equal(s.state.members.find(m => m.name === 'gpt').config.hasKey, true);
     assert.ok(!s.state.members.some(m => m.name === 'reviewer'));

@@ -89,6 +89,7 @@ const modelOf = a => S.models[a] || 'default';
 let modelLists = {};  // read once from each CLI at startup
 listModels().then(l => { modelLists = l; send(init()); });
 const saveSettings = () => run(`INSERT OR REPLACE INTO settings VALUES('s', ?)`, JSON.stringify(S));
+const memberOrder = () => [...new Set([...(Array.isArray(S.memberOrder) ? S.memberOrder : []), ...NAMES])].filter(n => NAMES.includes(n));
 
 let chatId = q1('SELECT max(id) id FROM chats')?.id || Number(run(`INSERT INTO chats(title) VALUES('讨论 1')`).lastInsertRowid);
 let paused = !!q1('SELECT paused FROM chats WHERE id=?', chatId).paused;
@@ -510,7 +511,7 @@ function state() {
     memory: { text: readMemory(), curating: memo.curating, at: memo.at, error: memo.error },
     jev: { on: jevOn(), assessing: jev.assessing, judging: jev.judging, ms: jev.ms, down: S.scheduler === 'jev' && !jevOn() },
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
-    members: NAMES.map(n => ({
+    members: memberOrder().map(n => ({
       name: n, label: aliasOf(n), alias: memberConfigs[n].label || '', defaultAlias: defaultAlias(n), color: memberConfigs[n].color, ...rt[n], enabled: S.enabled[n], model: S.models[n],
       configurable: memberConfigs[n].harness === 'opencode', harness: memberConfigs[n].harness,
       harnessLabel: AGENTS[memberConfigs[n].harness].label,
@@ -535,6 +536,13 @@ const sendStateSoon = () => { stateTimer ??= setTimeout(() => { stateTimer = nul
 
 // ---------- HTTP ----------
 const routes = {
+  'POST /api/member/order'({ names }) {
+    if (!Array.isArray(names) || names.length !== NAMES.length || new Set(names).size !== NAMES.length || names.some(n => !NAMES.includes(n)))
+      throw new Error('成员列表已变化，请刷新后重新排序');
+    S.memberOrder = names;
+    saveSettings(); logDecision('member-order', null, { detail: { names } });
+    send(init());
+  },
   async 'POST /api/models/refresh'() {
     modelLists = await listModels();
     send(init());

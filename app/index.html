@@ -233,6 +233,15 @@
     background:var(--canvas); padding:var(--s2); margin:var(--s1) 0 0; border-radius:var(--r-sm); }
   #add-member { float:right; color:var(--ink-2); font-size:var(--t-xs); padding:2px 7px; border-radius:6px; }
   #add-member:hover { background:var(--hover); }
+  .member-tools { float:right; display:flex; gap:4px; }
+  #order-members { color:var(--ink-3); font-size:var(--t-xs); padding:2px 7px; border-radius:6px; }
+  #order-members:hover { color:var(--ink); background:var(--hover); }
+  .member-move { display:flex; gap:3px; flex:none; }
+  .member-move button { width:25px; height:27px; border-radius:6px; color:var(--ink-2); background:var(--surface); border:1px solid var(--hair); }
+  .member-move button:hover:not(:disabled) { background:var(--selected); color:var(--ink); }
+  .member-move button:disabled { opacity:.25; cursor:default; }
+  .sorting .macts { display:none; }
+  .sorting .mrow:hover .mright { visibility:visible; }
   .mdetail > button { padding:5px 8px; margin:0 6px 6px 0; border:1px solid var(--hair); border-radius:6px; color:var(--ink-2); }
   #member-dialog { width:min(560px,calc(100vw - 32px)); max-height:calc(100dvh - 40px); padding:0; border:1px solid var(--hair); border-radius:20px; color:var(--ink); background:var(--surface); box-shadow:0 24px 80px rgba(15,17,20,.2); }
   #member-dialog::backdrop { background:rgba(24,28,35,.32); backdrop-filter:blur(4px); }
@@ -328,7 +337,7 @@
 <aside id="right">
   <section id="moderator"></section>
   <section id="memory"></section>
-  <section><div class="sect">成员 <button id="add-member">＋ 新成员</button></div><div id="members"></div></section>
+  <section><div class="sect">成员 <span class="member-tools"><button id="order-members">调整顺序</button><button id="add-member">＋ 新成员</button></span></div><div id="members"></div></section>
   <details class="settings">
     <summary><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m9 5 7 7-7 7"/></svg>讨论设置</summary>
     <div class="grp">
@@ -565,8 +574,9 @@ document.addEventListener('click', e => {
 
 // ---------- members ----------
 const openLive = new Set(), openMem = new Set();
+let orderingMembers = false, savingMemberOrder = false;
 function renderMembers() {
-  return S.members.map(m => {
+  return S.members.map((m, i) => {
     const qi = S.queue.findIndex(x => x.agent === m.name);
     let st = '空闲', cls = '';
     if (!m.enabled) st = '未参与';
@@ -583,6 +593,7 @@ function renderMembers() {
       <div class="mrow" data-expand="${m.name}" title="${esc(m.hand ? `举手原因：${m.hand.why}${m.score != null ? `，得分 ${m.score}` : ''}` : '点击查看模型、会话和实时输出')}">
         ${av(m.name)}<div class="midentity"><div class="mheadline"><button class="mname" data-member-alias="${m.name}" title="编辑别名 · @${esc(m.name)}">${esc(m.label)}</button><span class="mst ${cls}">${st}</span></div><span class="mmeta" title="${esc(m.harnessLabel || m.harness)} · ${esc(m.model || 'CLI 默认模型')}">${esc(m.harnessLabel || m.harness)} · ${esc(m.model || 'CLI 默认模型')}</span></div>
         <span class="mright">${right}</span>
+        ${orderingMembers ? `<span class="member-move"><button data-move-member="${m.name}" data-step="-1" aria-label="上移 ${esc(m.label)}" ${i === 0 || savingMemberOrder ? 'disabled' : ''}>↑</button><button data-move-member="${m.name}" data-step="1" aria-label="下移 ${esc(m.label)}" ${i === S.members.length - 1 || savingMemberOrder ? 'disabled' : ''}>↓</button></span>` : ''}
         <span class="macts"><button data-floor="${m.name}" title="让它马上发言">请发言</button>${m.hand && m.status !== 'thinking' ? `<button data-lower="${m.name}">放下手</button>` : ''}</span>
       </div>
       <div class="mdetail">
@@ -654,7 +665,7 @@ function rename(id) {
   if (t && t.trim()) post('/api/chat/rename', { id, title: t.trim() });
 }
 document.addEventListener('click', e => {
-  if (e.target.closest('[data-member-alias]')) return;
+  if (e.target.closest('[data-member-alias],[data-move-member]')) return;
   const t = e.target.closest('[data-id],[data-reply],[data-floor],[data-lower],[data-at],[data-chat],[data-hit],[data-rename],[data-export],[data-del],[data-idea],[data-expand]');
   if (!t) return;
   const d = t.dataset;
@@ -680,6 +691,24 @@ document.addEventListener('click', e => {
   if (d.at) { const i = $('#input'); i.value = (i.value + ` @${d.at} `).replace(/^ /, ''); i.focus(); grow(); typing(); }
 });
 const memberForm = $('#member-form');
+$('#order-members').onclick = () => {
+  orderingMembers = !orderingMembers;
+  $('#order-members').textContent = orderingMembers ? '完成' : '调整顺序';
+  $('#members').classList.toggle('sorting', orderingMembers);
+  delete lastHTML['#members']; renderState();
+};
+document.addEventListener('click', async e => {
+  const button = e.target.closest('[data-move-member]');
+  if (!button || savingMemberOrder) return;
+  const names = S.members.map(m => m.name), i = names.indexOf(button.dataset.moveMember), j = i + Number(button.dataset.step);
+  if (i < 0 || j < 0 || j >= names.length) return;
+  [names[i], names[j]] = [names[j], names[i]];
+  savingMemberOrder = true; delete lastHTML['#members']; renderState();
+  try { const res = await post('/api/member/order', { names }); const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '排序保存失败');
+  } catch (err) { alert(err.message); }
+  finally { savingMemberOrder = false; delete lastHTML['#members']; renderState(); }
+});
 let aliasOnly = false;
 const modelSelect = $('#member-model-select');
 function populateMemberModels(selected = modelSelect.value) {
