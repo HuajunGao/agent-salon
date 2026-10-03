@@ -51,7 +51,7 @@ the user types → publishing raises new hands ([HAND] marker, @mentions, broadc
 
 Scheduling: score = relevance × fairness × freshness − cooldown (fairness modifies priority, it doesn't decide it);
 modes `broadcast` / `algorithm` / `jev`. Every scheduler event is written to the `decisions` table for later A/B
-analysis — keep logging new decision types there. Research mode opens each question with an independent round: until the first reply is published, every woken member
+analysis — keep logging new decision types there. Research mode opens a discussion with an independent round: until the first reply is published, every woken member
 starts at once (ignoring `maxThinkers`), so nobody answers after reading another's answer (setting `blind`).
 Every reply ends with `[STANCE n%] position`: `parseReply` moves it into `messages.stance`; members and Jev see it
 (`withStance`), the UI shows a stance table, and Jev (`stanceShift`) judges whether a change was backed by a new argument.

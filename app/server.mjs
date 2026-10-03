@@ -234,11 +234,12 @@ async function classifyChat(c) {
 
 const mentions = text => memberMentions(text, NAMES);
 
-// Research mode: until the first reply to a question is published, everyone woken by it starts at once, so each answers
-// without having read another's answer. Most of what multi-agent debate gains comes from independent answers, and
-// discussion mostly adds conformity (Debate or Vote, NeurIPS 2025).
+// Research mode: the discussion's opening question is answered independently: until the first reply is published,
+// everyone woken starts at once, so nobody answers after reading another's answer. Most of what multi-agent debate
+// gains comes from independent answers, and discussion mostly adds conformity (Debate or Vote, NeurIPS 2025).
+// Follow-up questions are discussed normally.
 const blindOpen = () => S.blind && chatMode(chatId).effective === 'research' && lastUserId(chatId) > 0
-  && !q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='agent' AND id>?`, chatId, lastUserId(chatId));
+  && !q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='agent'`, chatId);
 
 function raise(a, r, why) {
   if (!S.enabled[a]) return;

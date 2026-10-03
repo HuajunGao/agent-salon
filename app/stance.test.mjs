@@ -66,6 +66,12 @@ test('research mode: everyone answers the question at once, stances reach the st
     for (const m of done.messages.filter(m => m.kind === 'agent')) assert.equal(m.text, '我的观点。');
     assert.equal(done.state.stances.length, n);
     assert.deepEqual([done.state.stances[0].t, done.state.stances[0].c], ['先查数据再下结论', 65]);
+    // a follow-up is discussed normally: one at a time (maxThinkers 1), not an independent round
+    await post('/api/send', { text: '那 12 月呢？', chat_id: id });
+    const more = await until(() => { const l = readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse).slice(n);
+      return l.length >= 2 && l; }, 400);
+    assert.ok(more.every(t => !t.p.includes('Independent opening')));
+    assert.ok(more[1].at - more[0].at >= 350);
   } finally {
     if (child.exitCode === null) { const e = once(child, 'exit'); child.kill(); await e; }
     rmSync(root, { recursive: true, force: true });
