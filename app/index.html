@@ -365,7 +365,8 @@
       </div>
       <div class="form-section" data-connection>
         <h3>模型连接 · OpenCode</h3>
-        <label class="field">模型<select id="member-model-select" required><option value="">选择模型</option></select><small>选择 OpenCode 可用模型，或填写自定义模型。</small></label>
+        <label class="field">模型<select id="member-model-select" required><option value="">选择模型</option></select></label>
+        <div class="form-help"><span id="model-list-status">选择 OpenCode 可用模型，或填写自定义模型。</span> <button type="button" id="refresh-models" style="color:var(--link)">刷新列表</button></div>
         <label class="field" id="custom-model-field" hidden>自定义模型<input name="model" placeholder="provider/model"><small>填写 API 提供方及真实模型 ID。</small></label>
         <label class="field">API 地址<input name="baseURL" type="url" placeholder="https://api.openai.com/v1"><small>留空沿用提供方默认地址。</small></label>
         <div class="form-grid">
@@ -681,6 +682,21 @@ document.addEventListener('click', e => {
 const memberForm = $('#member-form');
 let aliasOnly = false;
 const modelSelect = $('#member-model-select');
+function populateMemberModels(selected = modelSelect.value) {
+  const models = [...(modelLists.opencode || [])];
+  if (selected && selected !== '__custom__' && !models.some(x => x.id === selected)) models.unshift({ id: selected });
+  modelSelect.innerHTML = '<option value="">选择模型</option>' + models.map(x => `<option value="${esc(x.id)}">${esc(x.id)}</option>`).join('') + '<option value="__custom__">自定义模型…</option>';
+  modelSelect.value = selected;
+  $('#model-list-status').textContent = models.length ? `${models.length} 个可用模型` : '尚未读取到模型，请刷新列表或填写自定义模型。';
+}
+$('#refresh-models').onclick = async () => {
+  const b = $('#refresh-models'); b.disabled = true; b.textContent = '读取中…';
+  try { const res = await post('/api/models/refresh'); const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '读取失败');
+    modelLists = data.modelLists; populateMemberModels();
+  } catch (err) { $('#model-list-status').textContent = err.message; }
+  finally { b.disabled = false; b.textContent = '刷新列表'; }
+};
 function syncMemberModel() {
   const custom = modelSelect.value === '__custom__';
   $('#custom-model-field').hidden = aliasOnly || !custom;
@@ -698,10 +714,7 @@ function editMember(name, onlyAlias = false) {
   memberForm.elements.label.placeholder = m?.defaultAlias || '默认使用 @ 标识';
   $('#alias-help').textContent = m ? `默认：${m.defaultAlias}，留空恢复默认。` : '聊天中显示的名字，留空使用 @ 标识。';
   memberForm.querySelectorAll('[data-connection]').forEach(el => { el.hidden = onlyAlias; });
-  const models = [...(modelLists.opencode || [])];
-  if (m?.model && !models.some(x => x.id === m.model)) models.unshift({ id: m.model, name: m.model });
-  modelSelect.innerHTML = '<option value="">选择模型</option>' + models.map(x => `<option value="${esc(x.id)}">${esc(x.id)}</option>`).join('') + '<option value="__custom__">自定义模型…</option>';
-  modelSelect.value = m?.model || '';
+  populateMemberModels(m?.model || '');
   syncMemberModel();
   memberForm.elements.name.required = !onlyAlias;
   memberForm.querySelector('details').open = false;
@@ -714,6 +727,7 @@ function editMember(name, onlyAlias = false) {
   memberForm.querySelector('[type="submit"]').textContent = m ? '保存修改' : '添加成员';
   $('#member-error').textContent = '';
   $('#member-dialog').showModal();
+  if (!onlyAlias && !(modelLists.opencode || []).length) $('#refresh-models').click();
 }
 $('#add-member').onclick = () => editMember();
 $('#member-cancel').onclick = () => $('#member-dialog').close();

@@ -535,6 +535,11 @@ const sendStateSoon = () => { stateTimer ??= setTimeout(() => { stateTimer = nul
 
 // ---------- HTTP ----------
 const routes = {
+  async 'POST /api/models/refresh'() {
+    modelLists = await listModels();
+    send(init());
+    return { modelLists };
+  },
   'POST /api/member/alias'({ name, label }) {
     if (!NAMES.includes(name)) throw new Error('成员不存在');
     memberConfigs[name].label = String(label || '').trim().slice(0, 60);
@@ -688,8 +693,8 @@ http.createServer((req, res) => {
   if (!h) { res.writeHead(404); return res.end(); }
   let body = '';
   req.on('data', d => (body += d));
-  req.on('end', () => {
-    try { h(body ? JSON.parse(body) : {}); pump(); res.writeHead(200).end('{}'); }
+  req.on('end', async () => {
+    try { const result = await h(body ? JSON.parse(body) : {}); pump(); res.writeHead(200).end(JSON.stringify(result || {})); }
     catch (e) { console.error(e); res.writeHead(500).end(JSON.stringify({ error: e.message })); }
   });
 }).listen(PORT, HOST, () => console.log(`agent-chat on http://${HOST}:${PORT}`));
