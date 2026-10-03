@@ -15,7 +15,7 @@ raw HTML in messages is escaped and only http(s)/mailto links are kept). Node �
 
 - Run locally: `node app/server.mjs` → http://localhost:3517 (`PORT`, `HOST` env; `.claude/launch.json` has a preview config)
 - Syntax check: `node --check app/server.mjs` (and the other `.mjs` files)
-- Tests (real server + SQLite, fake harness, no paid calls): `node --test app/members.test.mjs app/modes.test.mjs`.
+- Tests (real server + SQLite, fake harness, no paid calls): `node --test app/members.test.mjs app/modes.test.mjs app/speech.test.mjs app/stance.test.mjs`.
   Verify adapters by importing them directly, e.g.
   `node -e 'import("./app/agents.mjs").then(async m => console.log(await m.runTurn("codex", "1+1?", null, {cwd: "workspace", dataDir: "data", onLive(){}})))'`
   (a second call with the returned `sid` checks session resume). `moderator.mjs` `judge`/`novelty` and `memory.mjs`
@@ -51,7 +51,11 @@ the user types → publishing raises new hands ([HAND] marker, @mentions, broadc
 
 Scheduling: score = relevance × fairness × freshness − cooldown (fairness modifies priority, it doesn't decide it);
 modes `broadcast` / `algorithm` / `jev`. Every scheduler event is written to the `decisions` table for later A/B
-analysis — keep logging new decision types there. Moderator notes are `kind='moderator'` messages: shown in the UI,
+analysis — keep logging new decision types there. Research mode opens each question with an independent round: until the first reply is published, every woken member
+starts at once (ignoring `maxThinkers`), so nobody answers after reading another's answer (setting `blind`).
+Every reply ends with `[STANCE n%] position`: `parseReply` moves it into `messages.stance`; members and Jev see it
+(`withStance`), the UI shows a stance table, and Jev (`stanceShift`) judges whether a change was backed by a new argument.
+Moderator notes are `kind='moderator'` messages: shown in the UI,
 never sent to agents or Jev (`TALK` filter).
 
 Agents' context: a new CLI session gets `intro()` (rules, members, archive location, the user memory) plus recent

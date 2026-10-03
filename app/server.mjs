@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, chmodSync, 
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { AGENTS, runTurn, listModels, runAs } from './agents.mjs';
-import { judge, novelty, classifyMode } from './moderator.mjs';
+import { judge, novelty, classifyMode, stanceShift, parseReply } from './moderator.mjs';
 import { curate } from './memory.mjs';
 import { validateMember, memberMentions } from './members.mjs';
 import { speechOn, loadCatalog, ttsModels, speakable, synth, transcribe, defaultVoice, FALLBACK_TTS } from './speech.mjs';
@@ -37,8 +37,9 @@ CREATE TABLE IF NOT EXISTS decisions(id INTEGER PRIMARY KEY, chat_id INTEGER, at
   event TEXT, agent TEXT, score REAL, detail TEXT, based_on INTEGER, message_id INTEGER, latency_ms INTEGER);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);`);
 db.exec(`CREATE TABLE IF NOT EXISTS members(name TEXT PRIMARY KEY, config TEXT NOT NULL);`);
-// role: 'devil' | 'summary' for moderator-requested turns; mode: the discussion mode an agent message was written in.
-for (const col of ['model', 'role', 'mode'])
+// role: 'devil' | 'summary' for moderator-requested turns; mode: the discussion mode an agent message was written in;
+// stance: JSON {t: position, c: confidence 0-100, changed?, evidence?: Jev's view of a change} from the reply's [STANCE] line.
+for (const col of ['model', 'role', 'mode', 'stance'])
   if (!db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === col)) db.exec(`ALTER TABLE messages ADD COLUMN ${col} TEXT`);
 // Discussion mode per chat: 'auto' (Jev classifies the first question into auto_mode) or a mode the user chose.
 for (const [col, def] of [['mode', "TEXT DEFAULT 'auto'"], ['auto_mode', 'TEXT']])
@@ -84,7 +85,7 @@ for (const a of NAMES) {
   if (RUNAS) chownSync(wsOf(a), RUNAS.uid, RUNAS.gid);
 }
 
-const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true, memory: true, exec: true,
+const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true, memory: true, exec: true, blind: true,
   enabled: Object.fromEntries(NAMES.map(n => [n, true])), models: Object.fromEntries(NAMES.map(n => [n, memberConfigs[n].model])) };
 let S = { ...DEFAULTS, ...JSON.parse(q1(`SELECT value FROM settings WHERE key='s'`)?.value || '{}') };
 S.models = { ...DEFAULTS.models, ...S.models };
@@ -114,9 +115,10 @@ function logDecision(event, agent, extra = {}) {
 }
 
 function insertMsg(m) {
-  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model, role, mode)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
-    m.latency_ms ?? null, m.turn_no ?? null, m.stale ? 1 : 0, m.model ?? null, m.role ?? null, m.mode ?? null).lastInsertRowid);
+  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model, role, mode, stance)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
+    m.latency_ms ?? null, m.turn_no ?? null, m.stale ? 1 : 0, m.model ?? null, m.role ?? null, m.mode ?? null,
+    m.stance ? JSON.stringify(m.stance) : null).lastInsertRowid);
   const msg = q1('SELECT * FROM messages WHERE id=?', id);
   writeTranscript(m.chat_id);
   if (m.chat_id === chatId) send({ type: 'msg', msg });
@@ -127,7 +129,10 @@ const who = s => (s === 'user' ? '用户 (user)' : `@${s}`);
 const defaultAlias = a => a;
 const aliasOf = a => memberConfigs[a].label || defaultAlias(a);
 const describe = a => `@${a} (${aliasOf(a)}, ${memberConfigs[a].harness} running ${modelOf(a)})`;
-const fmt = m => `#${m.id} ${who(m.sender)}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${m.text}`;
+// Members (and Jev) see each other's stated stance and confidence, as in ReConcile's round table.
+const withStance = m => { const st = m.stance && JSON.parse(m.stance);
+  return st ? `${m.text}\n[STANCE ${st.c}%] ${st.t}` : m.text; };
+const fmt = m => `#${m.id} ${who(m.sender)}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${withStance(m)}`;
 const archiveFile = c => join(ARCHIVE, `${c}.md`);
 function writeTranscript(c) {
   const chat = q1('SELECT title, created_at FROM chats WHERE id=?', c);
@@ -214,6 +219,12 @@ async function classifyChat(c) {
 
 const mentions = text => memberMentions(text, NAMES);
 
+// Research mode: until the first reply to a question is published, everyone woken by it starts at once, so each answers
+// without having read another's answer. Most of what multi-agent debate gains comes from independent answers, and
+// discussion mostly adds conformity (Debate or Vote, NeurIPS 2025).
+const blindOpen = () => S.blind && chatMode(chatId).effective === 'research' && lastUserId(chatId) > 0
+  && !q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='agent' AND id>?`, chatId, lastUserId(chatId));
+
 function raise(a, r, why) {
   if (!S.enabled[a]) return;
   const h = rt[a].hand;
@@ -259,8 +270,9 @@ function pump() {
     const inflight = () => NAMES.filter(n => rt[n].status === 'thinking').length + ready.filter(r => r.chat === chatId).length;
     let cands = NAMES.filter(eligible).map(a => ({ a, ...score(a) }));
     cands.sort(S.scheduler === 'broadcast' ? (x, y) => rt[x.a].hand.since - rt[y.a].hand.since : (x, y) => y.s - x.s);
+    const blind = blindOpen();
     for (const c of cands) {
-      if (inflight() >= S.maxThinkers) break;
+      if (!blind && inflight() >= S.maxThinkers) break;
       // jev mode: follow-up hands wait for a fresh novelty judgment; the user's own wake-ups don't.
       const followUp = c.r < 10 && c.why !== 'user message';
       if (jevOn() && followUp && !novFresh(c.a)) { assess(); continue; }
@@ -270,7 +282,11 @@ function pump() {
       if (S.scheduler !== 'broadcast' && c.s <= 0 && c.r < 100) {
         logDecision('skip', c.a, { score: c.s, detail: c }); rt[c.a].hand = null; continue;
       }
-      logDecision('start', c.a, { score: c.s, detail: { ...c, candidates: cands.map(x => [x.a, +x.s.toFixed(2)]) } });
+      if (blind) {
+        rt[c.a].hand.blind = true;
+        if (jev.blindAt !== lastUserId(chatId)) { jev.blindAt = lastUserId(chatId); note('🧭 研究模式：先请大家各自独立作答（互相看不到），答完再互相讨论。'); }
+      }
+      logDecision('start', c.a, { score: c.s, detail: { ...c, blind, candidates: cands.map(x => [x.a, +x.s.toFixed(2)]) } });
       if (c.why === 'Jev') note(`🧭 请 @${c.a} 发言（新意 ${Math.round(c.nov * 100)}%）`);
       startTurn(c.a);
     }
@@ -291,7 +307,8 @@ async function assess() {
     && (turnsSinceUser(a) < S.turnCap || rt[a].hand?.r >= 10) && hasUnseen(a));
   if (!cands.length) return;
   jev.assessing = true; sendState();
-  const msgs = q(`SELECT id, sender, text FROM messages WHERE chat_id=? AND id>=? AND ${TALK} ORDER BY id`, chatId, round);
+  const msgs = q(`SELECT id, sender, text, stance FROM messages WHERE chat_id=? AND id>=? AND ${TALK} ORDER BY id`, chatId, round)
+    .map(m => ({ ...m, text: withStance(m) }));
   const r = await novelty(msgs, cands.map(a => ({ name: a, harness: memberConfigs[a].harness, model: modelOf(a) })));
   jev.assessing = false;
   if (r.error) {
@@ -384,7 +401,7 @@ says now wins):\n${memory}\n` : ''}\n`;
 
 async function startTurn(a, retried = false) {
   const chat = chatId, s = sess(chat, a), basedOn = maxId(chat);
-  const why = rt[a].hand?.why, floor = rt[a].hand?.r >= 100, summary = why === 'summary', invited = why === 'Jev';
+  const why = rt[a].hand?.why, floor = rt[a].hand?.r >= 100, summary = why === 'summary', invited = why === 'Jev', blind = rt[a].hand?.blind;
   const role = summary ? 'summary' : why === 'devil' ? 'devil' : null;
   Object.assign(rt[a], { status: 'thinking', started: Date.now(), live: '', hand: null, note: '', error: '', role });
   let msgs, prompt;
@@ -408,11 +425,15 @@ async function startTurn(a, retried = false) {
     + `what does it cost, what is the best alternative? Say briefly that you are taking the opposing side on request.`;
   else if (floor && !summary) prompt += `\n\nThe user has given you the floor: please speak now.`;
   if (invited) prompt += `\n\nThe moderator invited you to speak: you seem to have something new to add here.`;
+  if (blind) prompt += `\n\nIndependent opening: every member is answering this question at the same time without seeing the `
+    + `others' answers, so the group first hears independent views. Give your own answer and your reasons; don't PASS.`;
   prompt += `\n\n(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later. `
     + (execOn() ? `You may run code in your workspace ${wsOf(a)} to check claims; keep it quick.)`
       : `${memberConfigs[a].harness === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.'})`);
   // Every turn (not only the session intro), because the user can switch modes mid-discussion.
-  if (!summary) prompt += `\n${MODES[chatMode(chat).effective].prompt}`;
+  if (!summary) prompt += `\nEnd your message with one line: [STANCE n%] your current position on the question in one short `
+    + `sentence, n = your confidence (0-100). Keep your position unless an argument or fact actually convinces you; when it `
+    + `changes, say what convinced you (#N).\n${MODES[chatMode(chat).effective].prompt}`;
   prompt += `\nCurrent participating members (${NAMES.filter(n => S.enabled[n]).length}): ${memberOrder().filter(n => S.enabled[n]).map(describe).join(', ')}. This roster overrides earlier rosters. Use these exact @handles when addressing them.`;
   sendState();
 
@@ -437,14 +458,12 @@ async function startTurn(a, retried = false) {
     logDecision('error', a, { based_on: basedOn, latency_ms: res.ms, detail: { error: res.error } });
     insertMsg({ chat_id: chat, sender: 'system', kind: 'system', text: `⚠ ${memberConfigs[a].label} 出错: ${res.error}`, based_on: basedOn, latency_ms: res.ms });
   } else {
-    const hand = /\[HAND\]\s*$/.test(res.text);
-    // Agents sometimes write a reply and then a stray "PASS" on its own last line: drop it (a bare PASS stays a pass).
-    const text = res.text.replace(/\s*\[HAND\]\s*$/, '').trim().replace(/\n\s*PASS[.。!！]?$/i, '').trim();
+    const { text, hand, stance } = parseReply(res.text);
     if (/^PASS[.。!！]?$/i.test(text) && !summary) {
       rt[a].note = 'PASS';
       logDecision('pass', a, { based_on: basedOn, latency_ms: res.ms });
     } else {
-      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, model: model || 'default', role, done: Date.now() });
+      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, stance, model: model || 'default', role, done: Date.now() });
       // A browser is reading aloud: synthesize while the reply waits in the queue, so it plays without delay.
       if (speechOn() && Date.now() - ttsActiveAt < 120e3) synth(spoken(a, text), voiceOf(a)).catch(() => {});
       logDecision('ready', a, { based_on: basedOn, latency_ms: res.ms, detail: { hand, chars: text.length } });
@@ -480,7 +499,8 @@ function publishOne(r) {
   const turnNo = q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=?', r.chat, r.agent).n + 1;
   const stale = !!q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user' AND id>? LIMIT 1`, r.chat, r.basedOn);
   const m = insertMsg({ chat_id: r.chat, sender: r.agent, kind: 'agent', text: r.text, based_on: r.basedOn,
-    latency_ms: r.ms, turn_no: turnNo, stale, model: r.model, role: r.role, mode: chatMode(r.chat).effective });
+    latency_ms: r.ms, turn_no: turnNo, stale, model: r.model, role: r.role, mode: chatMode(r.chat).effective, stance: r.stance });
+  if (r.stance && r.role !== 'devil' && r.role !== 'summary') checkShift(m);
   run('UPDATE agent_sessions SET turns=turns+1 WHERE chat_id=? AND agent=?', r.chat, r.agent);
   logDecision('publish', r.agent, { based_on: r.basedOn, message_id: m.id, latency_ms: r.ms,
     detail: { stale, turn_no: turnNo, waited_ms: Date.now() - r.done } });
@@ -497,10 +517,37 @@ function publishOne(r) {
   return m;
 }
 
+// ---------- moderator: did a stance change, and why? ----------
+// Compared with the member's previous own stance in this discussion (devil's advocate turns don't count).
+async function checkShift(m) {
+  const prev = q1(`SELECT id, stance FROM messages WHERE chat_id=? AND sender=? AND id<? AND stance IS NOT NULL
+    AND coalesce(role,'') NOT IN ('devil','summary') ORDER BY id DESC LIMIT 1`, m.chat_id, m.sender, m.id);
+  const before = prev && JSON.parse(prev.stance), after = JSON.parse(m.stance);
+  if (!before || before.t === after.t) return;
+  const from = q1(`SELECT coalesce(max(id),0) m FROM messages WHERE chat_id=? AND kind='user' AND id<?`, m.chat_id, prev.id).m;
+  const msgs = q(`SELECT * FROM messages WHERE chat_id=? AND id>=? AND id<=? AND ${TALK} ORDER BY id`, m.chat_id, from, m.id)
+    .slice(-30).map(x => ({ ...x, text: withStance(x) }));
+  const r = await stanceShift(msgs, m.sender, before, after);
+  if (r.error) return logDecision('stance-error', m.sender, { message_id: m.id, detail: r });
+  run('UPDATE messages SET stance=? WHERE id=?', JSON.stringify({ ...after, changed: r.changed, evidence: r.evidence }), m.id);
+  logDecision('stance', m.sender, { score: r.changed, message_id: m.id, latency_ms: r.ms, detail: { before, after, ...r } });
+  sendState();
+}
+// Each member's latest stance in the current discussion, with its previous own stance (for "changed").
+function stances() {
+  const out = {};
+  for (const r of q(`SELECT id, sender, role, stance FROM messages WHERE chat_id=? AND kind='agent' AND stance IS NOT NULL ORDER BY id`, chatId)) {
+    const o = out[r.sender];
+    out[r.sender] = { ...JSON.parse(r.stance), id: r.id, role: r.role, prev: o && o.role !== 'devil' ? { t: o.t, c: o.c } : o?.prev };
+  }
+  return memberOrder().filter(n => out[n]).map(n => ({ name: n, ...out[n] }));
+}
+
 // ---------- moderator: stop when views have converged ----------
 async function checkConvergence() {
   const round = lastUserId(chatId);
-  const msgs = q(`SELECT id, sender, kind, text, role FROM messages WHERE chat_id=? AND id>=? AND ${TALK} ORDER BY id`, chatId, round);
+  const msgs = q(`SELECT id, sender, kind, text, role, stance FROM messages WHERE chat_id=? AND id>=? AND ${TALK} ORDER BY id`, chatId, round)
+    .map(m => ({ ...m, text: withStance(m) }));
   // Only judge once everyone woken this round has weighed in: a slow agent still thinking, queued, or waiting
   // for a free slot may yet disagree. (Agents that passed or failed are idle without a hand, so they don't block.)
   // After a devil's advocate, everyone still busy gets to answer first.
@@ -574,6 +621,7 @@ function state() {
     chats: listChats(),
     sandboxed: !!RUNAS,
     discussionMode: { ...chatMode(chatId), pending: modePending === chatId },
+    stances: stances(),
     memory: { text: readMemory(), curating: memo.curating, at: memo.at, error: memo.error },
     jev: { on: jevOn(), assessing: jev.assessing, judging: jev.judging, ms: jev.ms, down: S.scheduler === 'jev' && !jevOn() },
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
@@ -684,7 +732,7 @@ const routes = {
   'POST /api/lower'({ agent }) { if (NAMES.includes(agent)) rt[agent].hand = null; },
   'POST /api/settings'(body) {
     for (const k of ['language', 'scheduler']) if (typeof body[k] === 'string' && body[k]) S[k] = body[k];
-    for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec']) if (typeof body[k] === 'boolean') S[k] = body[k];
+    for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind']) if (typeof body[k] === 'boolean') S[k] = body[k];
     for (const k of ['turnCap', 'readSpeed', 'maxThinkers', 'convergeAt', 'noveltyMin']) if (+body[k] > 0) S[k] = +body[k];
     if (body.enabled) S.enabled = { ...S.enabled, ...body.enabled };
     // Read-aloud voice per member: a TTS model id from the gateway catalog, '' = default.

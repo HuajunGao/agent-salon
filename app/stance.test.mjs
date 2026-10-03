@@ -1,0 +1,71 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import net from 'node:net';
+import { parseReply } from './moderator.mjs';
+
+test('parseReply takes the stance line and [HAND] off the reply', () => {
+  assert.deepEqual(parseReply('用真实库更可靠，见 #3。\n[STANCE 70%] 集成测试用真实测试库'),
+    { text: '用真实库更可靠，见 #3。', hand: false, stance: { t: '集成测试用真实测试库', c: 70 } });
+  assert.deepEqual(parseReply('同意。\n**[立场：85%]** 拆分要等团队变大 [HAND]'),
+    { text: '同意。', hand: true, stance: { t: '拆分要等团队变大', c: 85 } });
+  assert.deepEqual(parseReply('观点。\n[STANCE 60%] 先上单体\n[HAND]'), { text: '观点。', hand: true, stance: { t: '先上单体', c: 60 } });
+  assert.deepEqual(parseReply('没有立场行 [HAND]'), { text: '没有立场行', hand: true, stance: null });
+  assert.equal(parseReply('PASS').text, 'PASS');
+  assert.equal(parseReply('[STANCE 250%] x').stance.c, 100);
+});
+
+// Real server + SQLite with a fake harness that records when each turn starts; no Jev key.
+test('research mode: everyone answers the question at once, stances reach the state', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'agent-chat-stance-test-'));
+  const app = join(root, 'app'); mkdirSync(app);
+  for (const f of ['server.mjs', 'members.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
+    copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
+  const log = join(root, 'turns.jsonl');
+  writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
+    import {appendFileSync} from 'node:fs';
+    export async function listModels(){return {}};
+    export async function runTurn(h,p,s,o){appendFileSync(${JSON.stringify(log)},JSON.stringify({at:Date.now(),p})+'\\n');
+      await new Promise(r=>setTimeout(r,400));
+      return {text:'我的观点。\\n[STANCE 65%] 先查数据再下结论', sid:'s1', ms:400}};`);
+  const srv = net.createServer(); srv.listen(0, '127.0.0.1'); await once(srv, 'listening');
+  const port = srv.address().port; await new Promise(r => srv.close(r));
+  const url = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, [join(app, 'server.mjs')], { windowsHide: true, stdio: 'ignore',
+    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', AGENT_USER: '', TYPESAFE_API_KEY: '' } });
+  const post = (route, body = {}) => fetch(url + route, { method: 'POST', body: JSON.stringify(body) });
+  const init = async () => {
+    const c = new AbortController(), r = await fetch(url + '/events', { signal: c.signal });
+    const rd = r.body.getReader(); let s = '';
+    while (!s.includes('\n\n')) s += new TextDecoder().decode((await rd.read()).value);
+    c.abort(); return JSON.parse(s.split('\n\n')[0].slice(6));
+  };
+  const until = async (f, n = 200) => { for (let i = 0; i < n; i++) { const v = await f(); if (v) return v; await new Promise(r => setTimeout(r, 30)); } };
+  try {
+    await until(async () => { try { return (await fetch(url)).ok; } catch {} });
+    await post('/api/settings', { memory: false, autoStop: false, devil: false, circlePause: false, scheduler: 'algorithm',
+      readSpeed: 100000, maxThinkers: 1, turnCap: 1 });
+    const s = await init(), id = s.state.chatId, n = s.state.members.filter(m => m.enabled).length;
+    await post('/api/chat/mode', { id, mode: 'research' });
+    await post('/api/send', { text: '澳洲央行 11 月会加息吗？', chat_id: id });
+    const turns = await until(() => existsSync(log) && (() => { const l = readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+      return l.length >= n && l; })());
+    assert.equal(turns.length, n);
+    // maxThinkers is 1, yet everyone started before the first 400 ms turn finished
+    assert.ok(Math.max(...turns.map(t => t.at)) - Math.min(...turns.map(t => t.at)) < 300);
+    for (const t of turns) assert.ok(t.p.includes('Independent opening') && t.p.includes('[STANCE n%]'));
+    const done = await until(async () => { const x = await init(); return x.messages.filter(m => m.kind === 'agent').length === n && x; }, 800); // each publish holds >= 3 s of reading time
+    assert.ok(done.messages.some(m => m.kind === 'moderator' && m.text.includes('独立作答')));
+    for (const m of done.messages.filter(m => m.kind === 'agent')) assert.equal(m.text, '我的观点。');
+    assert.equal(done.state.stances.length, n);
+    assert.deepEqual([done.state.stances[0].t, done.state.stances[0].c], ['先查数据再下结论', 65]);
+  } finally {
+    if (child.exitCode === null) { const e = once(child, 'exit'); child.kill(); await e; }
+    rmSync(root, { recursive: true, force: true });
+  }
+});

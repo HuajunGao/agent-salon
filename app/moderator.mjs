@@ -26,13 +26,13 @@ const QUESTIONS = {
       false: 'The discussion is still making progress, or is simply converging.' } },
 };
 
-async function ask(messages, questions) {
+async function ask(messages, questions, extra = {}) {
   const key = process.env.TYPESAFE_API_KEY;
   if (!key) return { error: 'TYPESAFE_API_KEY not set' };
   const model = process.env.TYPESAFE_MODEL;
   if (!model) return { error: 'TYPESAFE_MODEL not set' };
   const state = { discussion: { question: messages[0].text,
-    messages: messages.map(m => ({ id: m.id, from: m.sender === 'user' ? 'user' : `@${m.sender}`, text: m.text })) } };
+    messages: messages.map(m => ({ id: m.id, from: m.sender === 'user' ? 'user' : `@${m.sender}`, text: m.text })) }, ...extra };
   const t0 = Date.now();
   try {
     const r = await fetch('https://api.typesafe.ai/v1/systemone', {
@@ -86,4 +86,38 @@ export async function classifyMode(question) {
     } } });
   if (r.error) return r;
   return { mode: r.answers.mode.choice, probabilities: r.answers.mode.probabilities, ms: r.ms };
+}
+
+// Did a member's stance really change, and was it moved by substance or by the majority? `messages` run from the user
+// question before the earlier stance to the new message; before/after: {t, c}. Returns {changed, evidence, ms} or {error}.
+export async function stanceShift(messages, member, before, after) {
+  const r = await ask(messages, {
+    changed: { type: 'noul',
+      instructions: '`shift.member` stated its position on `discussion.question` earlier as `shift.before` and now as `shift.after`. Is the main position different, not just refined?',
+      criteria: { true: 'A different main answer: switched sides, reversed or substantially changed its recommendation.',
+        false: 'The same main answer, possibly with more detail, a caveat, a different confidence or other wording.' } },
+    evidence: { type: 'noul',
+      instructions: 'Between its two statements, did `shift.member` receive in `discussion.messages` a specific new fact, source, counterexample or argument that justifies moving from `shift.before` toward `shift.after`, rather than going along with what most others said?',
+      criteria: { true: 'Someone gave it new substance that supports the move.',
+        false: 'No new substance: the move follows agreement, repetition or the majority.' } },
+  }, { shift: { member: `@${member}`, before: `${before.t} (confidence ${before.c}%)`, after: `${after.t} (confidence ${after.c}%)` } });
+  return r.error ? r : { changed: r.answers.changed.noul, evidence: r.answers.evidence.noul, ms: r.ms };
+}
+
+// A reply ends with "[STANCE 70%] the member's position in one sentence" (confidence 0-100), then optionally [HAND].
+// Returns {text, hand, stance: {t, c} | null}; the stance line is removed from the text.
+const STANCE = /^[ \t>*_]*\[(?:STANCE|立场)\s*[:：]?\s*(\d{1,3})\s*%?\][ \t*_:：]*(.*)$/im;
+export function parseReply(raw) {
+  let text = raw, stance = null;
+  const m = text.match(STANCE);
+  if (m) {
+    text = text.replace(m[0], m[2].includes('[HAND]') ? '[HAND]' : '');
+    const t = m[2].replace(/\[HAND\]/g, '').replace(/^[\s*_]+|[\s*_]+$/g, '');
+    if (t) stance = { t: t.slice(0, 300), c: Math.min(100, +m[1]) };
+  }
+  text = text.trim();
+  const hand = /\[HAND\]\s*$/.test(text);
+  // Agents sometimes write a reply and then a stray "PASS" on its own last line: drop it (a bare PASS stays a pass).
+  text = text.replace(/\s*\[HAND\]\s*$/, '').trim().replace(/\n\s*PASS[.。!！]?$/i, '').trim();
+  return { text, hand, stance };
 }

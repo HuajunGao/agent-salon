@@ -244,6 +244,14 @@
   #memedit { width:100%; min-height:160px; padding:var(--s2); border:none; border-radius:var(--r-sm); background:var(--surface);
     box-shadow:0 0 0 1px var(--hair); font-size:var(--t-sm); line-height:1.55; resize:vertical; }
   .wrapnote { margin-top:var(--s2); font-size:var(--t-xs); color:var(--mod); }
+  /* stances: each member's own one-line position and confidence */
+  .stances { margin-top:var(--s3); padding-top:var(--s3); border-top:1px solid var(--hair); display:flex; flex-direction:column; gap:var(--s3); }
+  .stances .sl { font-size:var(--t-xs); color:var(--ink-3); margin-bottom:calc(-1 * var(--s1)); }
+  .stance .sh { display:flex; align-items:center; gap:var(--s2); font-size:var(--t-sm); }
+  .stance .sh a { flex:1; min-width:0; color:var(--ink); font-weight:500; }
+  .stance .sh .mv { width:34px; text-align:right; font-size:var(--t-xs); color:var(--ink-2); }
+  .stance .stx { margin:2px 0 0 15px; font-size:var(--t-xs); line-height:1.5; color:var(--ink-2); }
+  .stance .tag { margin:4px 0 0 15px; }
   /* members */
   .mem { border-radius:var(--r-sm); }
   .mem.open { background:var(--surface); box-shadow:0 1px 2px rgba(15,17,20,.04); }
@@ -412,6 +420,7 @@
       <label class="switch" id="execrow" title="成员可以在各自的工作目录里写文件、运行代码来验证观点；只在服务器以独立的普通用户运行成员时可用">允许执行代码 <input id="s-exec" type="checkbox"></label>
       <label class="switch" title="每轮结束后，把你说过的长期有用的信息整理进“关于你”，新讨论里的成员都会先读到">跨讨论记住我 <input id="s-memory" type="checkbox"></label>
       <label class="switch" title="同样的论点来回重复、没有进展时暂停，等你定方向（每轮一次）">原地打转时暂停 <input id="s-circlePause" type="checkbox"></label>
+      <label class="switch" title="研究模式下，你的问题先由所有成员同时、各自独立回答（互相看不到），再进入讨论，避免被第一个回答带偏">研究模式先独立作答 <input id="s-blind" type="checkbox"></label>
     </div>
   </details>
 </aside>
@@ -504,6 +513,8 @@ function renderMsg(m) {
   const hd = [];
   if (m.model) hd.push(`<span class="model" title="${esc(m.model)}">${esc(m.model)}</span>`);
   if (m.latency_ms) hd.push(`<span title="思考用时">想了 ${Math.round(m.latency_ms / 1000)}s</span>`);
+  const st = m.stance && JSON.parse(m.stance);
+  if (st) hd.push(`<span title="立场：${esc(st.t)}">信心 ${st.c}%</span>`);
   if (m.reply_to) hd.push(`<span class="tag">回复 ${ref(m.reply_to)}</span>`);
   if (m.based_on != null && between.length) hd.push(`<span class="tag" title="开始思考时看到的最后一条是 #${m.based_on}，之后又有 ${between.length} 条">基于 ${ref(m.based_on)} +${between.length}</span>`);
   if (m.stale) hd.push(`<span class="tag warn" title="这条回复写于你的新消息之前">写于你的新消息之前</span>`);
@@ -599,7 +610,7 @@ function renderModerator() {
     ${S.settings.circlePause ? row('原地打转', m?.circling, 70, '同样的论点来回重复；超过刻度会暂停') : ''}
     ${m?.debatable != null ? `<div class="flags"><span title="问题是否见仁见智（不是有标准答案的事实题）">见仁见智 <b>${pct(m.debatable)}</b></span>`
       + `<span title="本轮有没有人认真反对过多数意见">有人反对 <b>${pct(m.challenged)}</b></span></div>` : ''}
-    ${S.wrapped ? '<div class="wrapnote">本轮已收尾，发新消息可继续讨论。</div>' : ''}</div>`;
+    ${S.wrapped ? '<div class="wrapnote">本轮已收尾，发新消息可继续讨论。</div>' : ''}${renderStances()}</div>`;
   setHTML('#moderator', html);
   const line = $('#convline');
   line.classList.toggle('off', m?.convergence == null);
@@ -608,6 +619,20 @@ function renderModerator() {
     line.querySelector('b').style.left = S.settings.autoStop ? `${S.settings.convergeAt}%` : '-10px';
     line.title = `观点收敛度 ${pct(m.convergence)}${S.settings.autoStop ? `，到 ${S.settings.convergeAt}% 收尾` : ''}`;
   }
+}
+
+// Each member ends a message with its position and confidence; Jev judges whether a change was moved by a new argument.
+function renderStances() {
+  if (!S.stances?.length) return '';
+  return `<div class="stances"><div class="sl" title="成员每条发言末尾给出当前立场和信心；立场变化时由 Jev 判断有没有新论据">立场</div>${S.stances.map(x => {
+    const was = x.prev ? `之前：${x.prev.t}（${x.prev.c}%）` : '';
+    const tag = x.role === 'devil' ? '<span class="tag devil">唱反调</span>'
+      : x.changed >= 0.5 ? (x.evidence < 0.5 ? `<span class="tag warn" title="${esc(was)}">改了立场，但没有新论据</span>`
+        : `<span class="tag" title="${esc(was)}">改了立场</span>`) : '';
+    return `<div class="stance"><div class="sh"><span class="dot" style="--c:${color(x.name)}"></span>
+      <a class="ref" data-id="${x.id}" title="跳到 #${x.id}">${esc(label(x.name))}</a>${mini(x.c / 100, null, color(x.name))}<span class="mv">${x.c}%</span></div>
+      <div class="stx">${esc(x.t)}</div>${tag}</div>`;
+  }).join('')}</div>`;
 }
 
 // ---------- memory about the user ----------
@@ -711,7 +736,7 @@ function renderState() {
   if (S.holding) info.push('你在输入，暂缓发布');
   else if (S.readLeft > 0 && S.queue.length) info.push(`阅读中，还剩 ${fmtSecs(S.readLeft)}`);
   $('#info').textContent = info.join('，');
-  for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec']) $('#s-' + k).checked = S.settings[k];
+  for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind']) $('#s-' + k).checked = S.settings[k];
   for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin']) {
     const el = $('#s-' + k);
     if (document.activeElement !== el) el.value = S.settings[k];
@@ -872,7 +897,7 @@ document.addEventListener('change', e => {
     post('/api/settings', { models: { [d.model]: value } });
   }
 });
-for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec']) $('#s-' + k).onchange = e => post('/api/settings', { [k]: e.target.checked });
+for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind']) $('#s-' + k).onchange = e => post('/api/settings', { [k]: e.target.checked });
 for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin'])
   $('#s-' + k).addEventListener('change', e => post('/api/settings', { [k]: e.target.value }));
 
