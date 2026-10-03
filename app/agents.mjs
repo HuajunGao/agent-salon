@@ -1,8 +1,8 @@
 // CLI adapters: one headless process per turn, resuming the agent's own CLI session.
 // Flags and pitfalls: see PLAN.md and ~/.claude/skills/delegate-agents/run-agent.sh.
 import { spawn, execFileSync } from 'node:child_process';
-import { readdirSync, statSync, existsSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 
 const H = homedir();
@@ -34,18 +34,33 @@ const cleanEnv = () => {
   return env;
 };
 
+// Claude Code on GLM: endpoint, token and model mapping live in ~/.claude/settings-glm.json (the user's claude-glm
+// setup). --settings takes one file, so merge in disableAllHooks (Ponytail's hook injects a persona) into a temp copy.
+let glmSettings;
+function glmSettingsFile() {
+  if (glmSettings) return glmSettings;
+  const g = JSON.parse(readFileSync(join(H, '.claude/settings-glm.json'), 'utf8'));
+  glmSettings = join(tmpdir(), `agent-chat-glm-${process.pid}.json`);
+  writeFileSync(glmSettings, JSON.stringify({ ...g, disableAllHooks: true }));
+  process.on('exit', () => rmSync(glmSettings, { force: true })); // the copy holds the GLM token
+  return glmSettings;
+}
+
 const short = (s, n = 200) => (s.length > n ? s.slice(0, n) + '…' : s);
 
 export const AGENTS = {
   claude: {
-    label: 'Claude', color: '#d97757',
-    cmd: (prompt, sid, o) => ({
-      bin: exe('claude'), env: cleanEnv(),
+    label: 'Claude Code', color: '#d97757', defaultModel: '',
+    // "glm:<alias>" runs Claude Code against GLM through settings-glm.json; anything else is an Anthropic model.
+    cmd: (prompt, sid, o) => {
+      const glm = o.model?.startsWith('glm:'), model = glm ? o.model.slice(4) : o.model;
+      return { bin: exe('claude'), env: cleanEnv(),
       args: ['-p', prompt, '--output-format', 'stream-json', '--verbose',
-        '--settings', '{"disableAllHooks":true}', '--add-dir', o.dataDir,
+        '--settings', glm ? glmSettingsFile() : '{"disableAllHooks":true}', '--add-dir', o.dataDir,
+        ...(model ? ['--model', model] : []),
         '--disallowedTools', 'Edit', 'Write', 'NotebookEdit', 'Bash', 'PowerShell',
-        ...(sid ? ['--resume', sid] : [])],
-    }),
+        ...(sid ? ['--resume', sid] : [])] };
+    },
     parse(ev, st) {
       if (ev.session_id) st.sid = ev.session_id;
       if (ev.type === 'assistant') for (const c of ev.message?.content || []) {
@@ -56,11 +71,11 @@ export const AGENTS = {
     },
   },
   codex: {
-    label: 'Codex', color: '#10a37f',
-    cmd: (prompt, sid) => ({
+    label: 'Codex', color: '#10a37f', defaultModel: 'gpt-6.1-sol',
+    cmd: (prompt, sid, o) => ({
       bin: codexBin(), env: process.env,
       // resume ignores the original model/sandbox and reads ~/.codex/config.toml: pass them every time.
-      args: ['exec', '--json', '--skip-git-repo-check', '-m', 'gpt-6.1-sol', '-c', 'sandbox_mode=read-only',
+      args: ['exec', '--json', '--skip-git-repo-check', '-m', o.model || 'gpt-6.1-sol', '-c', 'sandbox_mode=read-only',
         ...(sid ? ['resume', sid] : []), prompt],
     }),
     parse(ev, st) {
@@ -76,10 +91,10 @@ export const AGENTS = {
     },
   },
   agy: {
-    label: 'Gemini', color: '#4285f4',
-    cmd: (prompt, sid) => ({
+    label: 'Antigravity', color: '#4285f4', defaultModel: 'gemini-3.8-flash-medium',
+    cmd: (prompt, sid, o) => ({
       bin: exe('agy'), env: process.env,
-      args: ['-p', prompt, '--model', 'gemini-3.8-flash-medium', '--output-format', 'stream-json', '--mode', 'plan',
+      args: ['-p', prompt, '--model', o.model || 'gemini-3.8-flash-medium', '--output-format', 'stream-json', '--mode', 'plan',
         ...(sid ? ['--conversation', sid] : [])],
     }),
     parse(ev, st) {
@@ -94,12 +109,12 @@ export const AGENTS = {
     },
   },
   opencode: {
-    label: 'GLM', color: '#7c5cff',
-    cmd: (prompt, sid) => ({
+    label: 'OpenCode', color: '#7c5cff', defaultModel: 'zai-coding-plan/glm-5.3',
+    cmd: (prompt, sid, o) => ({
       bin: opencodeBin(),
       // --pure: oh-my-openagent hands work to background tasks that die with `run`. 32k default output cap truncates GLM.
       env: { ...process.env, OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: '131072' },
-      args: ['run', '--pure', '--agent', 'plan', '-m', 'zai-coding-plan/glm-5.3', '--format', 'json',
+      args: ['run', '--pure', '--agent', 'plan', '-m', o.model || 'zai-coding-plan/glm-5.3', '--format', 'json',
         ...(sid ? ['-s', sid] : []), prompt],
     }),
     parse(ev, st) {
@@ -126,9 +141,9 @@ const FAIL = [
 const IDLE_MS = 5 * 60e3, TOTAL_MS = 15 * 60e3;
 
 // Run one turn. onLive(text) receives a readable live log. Resolves {text, sid, error, ms}.
-export function runTurn(agent, prompt, sid, { cwd, dataDir, onLive }) {
+export function runTurn(agent, prompt, sid, { cwd, dataDir, model, onLive }) {
   const a = AGENTS[agent];
-  const { bin, args, env } = a.cmd(prompt, sid, { dataDir });
+  const { bin, args, env } = a.cmd(prompt, sid, { dataDir, model });
   const t0 = Date.now();
   let log = '';
   const st = {
@@ -165,4 +180,30 @@ export function runTurn(agent, prompt, sid, { cwd, dataDir, onLive }) {
     p.on('error', e => { st.error = `spawn failed: ${e.message}`; done(-1); });
     p.on('close', done);
   });
+}
+
+// ---------- model lists, read once from each CLI ----------
+const out = (bin, args) => new Promise(res => {
+  let s = '';
+  const p = spawn(bin, args, { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+  p.stdout.on('data', d => (s += d));
+  p.on('close', () => res(s)); p.on('error', () => res(''));
+  setTimeout(() => p.kill(), 90e3);
+});
+const lines = s => s.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+// Returns {agent: [{id, name}]}; id '' = the CLI's own default.
+export async function listModels() {
+  const [codex, agy, oc] = await Promise.all([
+    out(codexBin(), ['debug', 'models']), out(exe('agy'), ['models']), out(opencodeBin(), ['models'])]);
+  let codexList = [];
+  try { codexList = JSON.parse(codex).models.filter(m => m.visibility === 'list').map(m => ({ id: m.slug, name: m.display_name })); } catch {}
+  return {
+    // Claude Code has no list command: aliases resolve to the latest model of each family.
+    claude: [{ id: '', name: 'default（你的 Claude Code 默认）' }, ...['fable', 'opus', 'sonnet', 'haiku'].map(id => ({ id, name: id })),
+      { id: 'glm:opus', name: 'GLM 5.3（settings-glm.json）' }, { id: 'glm:haiku', name: 'GLM 5.3 FlashX（settings-glm.json）' }],
+    codex: codexList,
+    agy: lines(agy).filter(l => l.includes('\t')).map(l => { const [id, name] = l.split('\t'); return { id, name }; }),
+    opencode: lines(oc).filter(l => /^[\w.-]+\/\S+$/.test(l)).map(id => ({ id, name: id })),
+  };
 }

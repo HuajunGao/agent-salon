@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { AGENTS, runTurn } from './agents.mjs';
+import { AGENTS, runTurn, listModels } from './agents.mjs';
 import { judge } from './moderator.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -26,13 +26,18 @@ CREATE TABLE IF NOT EXISTS agent_sessions(chat_id INTEGER, agent TEXT, cli_sessi
 CREATE TABLE IF NOT EXISTS decisions(id INTEGER PRIMARY KEY, chat_id INTEGER, at TEXT DEFAULT CURRENT_TIMESTAMP, mode TEXT,
   event TEXT, agent TEXT, score REAL, detail TEXT, based_on INTEGER, message_id INTEGER, latency_ms INTEGER);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);`);
+if (!db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === 'model')) db.exec('ALTER TABLE messages ADD COLUMN model TEXT');
 const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
 const run = (sql, ...a) => db.prepare(sql).run(...a);
 
 const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80,
-  enabled: Object.fromEntries(NAMES.map(n => [n, true])) };
+  enabled: Object.fromEntries(NAMES.map(n => [n, true])), models: Object.fromEntries(NAMES.map(n => [n, AGENTS[n].defaultModel])) };
 let S = { ...DEFAULTS, ...JSON.parse(q1(`SELECT value FROM settings WHERE key='s'`)?.value || '{}') };
+S.models = { ...DEFAULTS.models, ...S.models };
+const modelOf = a => S.models[a] || 'default';
+let modelLists = {};  // read once from each CLI at startup
+listModels().then(l => { modelLists = l; send(init()); });
 const saveSettings = () => run(`INSERT OR REPLACE INTO settings VALUES('s', ?)`, JSON.stringify(S));
 
 let chatId = q1('SELECT max(id) id FROM chats')?.id || Number(run(`INSERT INTO chats(title) VALUES('讨论 1')`).lastInsertRowid);
@@ -50,16 +55,17 @@ function logDecision(event, agent, extra = {}) {
 }
 
 function insertMsg(m) {
-  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale)
-    VALUES(?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
-    m.latency_ms ?? null, m.turn_no ?? null, m.stale ? 1 : 0).lastInsertRowid);
+  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model)
+    VALUES(?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
+    m.latency_ms ?? null, m.turn_no ?? null, m.stale ? 1 : 0, m.model ?? null).lastInsertRowid);
   const msg = q1('SELECT * FROM messages WHERE id=?', id);
   writeTranscript(m.chat_id);
   if (m.chat_id === chatId) send({ type: 'msg', msg });
   return msg;
 }
 
-const who = s => (s === 'user' ? '用户 (user)' : AGENTS[s] ? `${AGENTS[s].label} (${s})` : s);
+const who = s => (s === 'user' ? '用户 (user)' : AGENTS[s] ? `@${s}` : s);
+const describe = a => `@${a} (${AGENTS[a].label} running ${modelOf(a)})`;
 const fmt = m => `#${m.id} ${who(m.sender)}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${m.text}`;
 function writeTranscript(c) {
   const t = q1('SELECT title FROM chats WHERE id=?', c).title;
@@ -129,8 +135,8 @@ function pump() {
 }
 
 function intro(a) {
-  return `You are "${AGENTS[a].label}" (@${a}), one member of a live group chat running on the user's machine.
-Members: the user (a human, full participant) and the agents @claude (Claude), @codex (Codex), @agy (Gemini), @opencode (GLM).
+  return `You are ${describe(a)}, one member of a live group chat running on the user's machine.
+Members: the user (a human, full participant) and the agents ${NAMES.map(describe).join(', ')}.
 Each turn you receive the messages you haven't seen yet, numbered #N. Your reply is posted to the chat as one message.
 Rules:
 - This is a chat, not a report: keep each message short (usually under 150 words / 300 Chinese characters), one or two points, no headings.
@@ -166,8 +172,9 @@ async function startTurn(a, retried = false) {
   prompt += `\n\n(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later.)`;
   sendState();
 
+  const model = S.models[a];
   const res = await runTurn(a, prompt, s.cli_session_id, {
-    cwd: WORK, dataDir: DATA,
+    cwd: WORK, dataDir: DATA, model,
     onLive: log => { rt[a].live = log; sendStateSoon(); },
   });
   // A resume that fails for a non-quota/auth reason: start a fresh session seeded from our own history.
@@ -191,7 +198,7 @@ async function startTurn(a, retried = false) {
       rt[a].note = 'PASS';
       logDecision('pass', a, { based_on: basedOn, latency_ms: res.ms });
     } else {
-      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, done: Date.now() });
+      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, model: model || 'default', done: Date.now() });
       logDecision('ready', a, { based_on: basedOn, latency_ms: res.ms, detail: { hand, chars: text.length } });
     }
   }
@@ -220,7 +227,7 @@ function publishOne(r) {
   const turnNo = q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=?', r.chat, r.agent).n + 1;
   const stale = !!q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user' AND id>? LIMIT 1`, r.chat, r.basedOn);
   const m = insertMsg({ chat_id: r.chat, sender: r.agent, kind: 'agent', text: r.text, based_on: r.basedOn,
-    latency_ms: r.ms, turn_no: turnNo, stale });
+    latency_ms: r.ms, turn_no: turnNo, stale, model: r.model });
   run('UPDATE agent_sessions SET turns=turns+1 WHERE chat_id=? AND agent=?', r.chat, r.agent);
   logDecision('publish', r.agent, { based_on: r.basedOn, message_id: m.id, latency_ms: r.ms,
     detail: { stale, turn_no: turnNo, waited_ms: Date.now() - r.done } });
@@ -255,8 +262,10 @@ async function checkConvergence() {
   if (!stop) return sendState();
   wrapRound = round;
   for (const n of NAMES) rt[n].hand = null;
-  // The member most engaged in this round writes the summary.
-  const writer = NAMES.filter(n => S.enabled[n]).sort((x, y) => turnsSinceUser(y) - turnsSinceUser(x))[0];
+  // The member most engaged in this round writes the summary; ties go to whoever has summarized least, then random.
+  const summaries = a => q1(`SELECT count(*) n FROM decisions WHERE chat_id=? AND event='converged' AND agent=?`, chatId, a).n;
+  const writer = NAMES.filter(n => S.enabled[n]).map(n => [n, turnsSinceUser(n), summaries(n), Math.random()])
+    .sort((x, y) => y[1] - x[1] || x[2] - y[2] || x[3] - y[3])[0][0];
   rt[writer].hand = { r: 100, since: Date.now(), why: 'summary' };
   logDecision('converged', writer, { score: j.convergence, message_id: mod.msgId, detail: j });
   insertMsg({ chat_id: chatId, sender: 'system', kind: 'system', text: `🧭 主持人：观点已收敛（收敛度 ${Math.round(j.convergence * 100)}%，`
@@ -275,7 +284,7 @@ function state() {
     chats: q('SELECT id, title FROM chats ORDER BY id DESC'),
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
     members: NAMES.map(n => ({
-      name: n, label: AGENTS[n].label, color: AGENTS[n].color, ...rt[n], enabled: S.enabled[n],
+      name: n, label: AGENTS[n].label, color: AGENTS[n].color, ...rt[n], enabled: S.enabled[n], model: S.models[n],
       sid: sess(chatId, n).cli_session_id, turns: q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=?', chatId, n).n,
       sinceUser: turnsSinceUser(n), score: rt[n].hand && rt[n].status === 'idle' ? +score(n).s.toFixed(2) : null,
     })),
@@ -313,6 +322,11 @@ const routes = {
     if (typeof body.autoStop === 'boolean') S.autoStop = body.autoStop;
     for (const k of ['turnCap', 'readSpeed', 'maxThinkers', 'convergeAt']) if (+body[k] > 0) S[k] = +body[k];
     if (body.enabled) S.enabled = { ...S.enabled, ...body.enabled };
+    // Only models a CLI listed (or its default) are accepted; the next turn uses it and resumes the same session.
+    for (const [a, m] of Object.entries(body.models || {}))
+      if (AGENTS[a] && (m === AGENTS[a].defaultModel || modelLists[a]?.some(x => x.id === m))) {
+        S.models[a] = m; logDecision('model', a, { detail: { model: m } });
+      }
     saveSettings();
   },
   'POST /api/chat/new'({ title }) {
@@ -327,7 +341,7 @@ function switchChat(id) {
   readUntil = 0; mod = null; writeTranscript(id);
   send(init());
 }
-const init = () => ({ type: 'init', messages: q('SELECT * FROM messages WHERE chat_id=? ORDER BY id', chatId), state: state() });
+const init = () => ({ type: 'init', messages: q('SELECT * FROM messages WHERE chat_id=? ORDER BY id', chatId), state: state(), modelLists });
 
 http.createServer((req, res) => {
   const key = `${req.method} ${req.url.split('?')[0]}`;

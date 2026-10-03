@@ -107,7 +107,7 @@ function renderMsg(m) {
   if (m.kind === 'system') { el.innerHTML = `#${m.id} ${linkRefs(m.text)}`; return el; }
   const idx = messages.findIndex(x => x.id === m.id);
   const between = m.based_on != null ? messages.slice(0, idx).filter(x => x.id > m.based_on) : [];
-  const hd = [`<b>${esc(label(m.sender))}</b>`, `<span>#${m.id}</span>`,
+  const hd = [`<b>${esc(label(m.sender))}${m.model ? ` · ${esc(m.model)}` : ''}</b>`, `<span>#${m.id}</span>`,
     `<span>${new Date(m.created_at.replace(' ', 'T') + 'Z').toTimeString().slice(0, 5)}</span>`];
   if (m.reply_to) hd.push(`<span>回复 <a class="ref" data-id="${m.reply_to}">#${m.reply_to}</a></span>`);
   if (m.latency_ms) hd.push(`<span>⏱ ${Math.round(m.latency_ms / 1000)}s</span>`);
@@ -130,6 +130,12 @@ function fmtSecs(ms) { return Math.max(0, Math.round(ms / 1000)) + 's'; }
 // Re-render only on change, so clicks and open dropdowns aren't swallowed by the 1s state tick.
 const lastHTML = {};
 const setHTML = (sel, html) => lastHTML[sel] !== html && ($(sel).innerHTML = lastHTML[sel] = html, true);
+let modelLists = {};
+function modelOptions(m) {
+  const list = modelLists[m.name] || [];
+  const opts = list.some(x => x.id === m.model) ? list : [{ id: m.model, name: m.model || 'default' }, ...list];
+  return opts.map(x => `<option value="${esc(x.id)}" ${x.id === m.model ? 'selected' : ''}>${esc(x.name === x.id ? x.id : `${x.name} · ${x.id || 'default'}`)}</option>`).join('');
+}
 const openLive = new Set();
 function renderState() {
   const now = Date.now() - clockSkew;
@@ -144,6 +150,7 @@ function renderState() {
     return `<div class="member ${m.enabled ? '' : 'off'}">
       <div class="top"><span class="dot" style="background:${m.color}"></span><span class="name">${esc(m.label)}</span>
         <span style="font-size:12px;color:var(--mute)">@${m.name}</span><span class="st">${st}</span></div>
+      <div class="meta"><select data-model="${m.name}" title="模型（下一轮生效，会话保留）" style="max-width:100%">${modelOptions(m)}</select></div>
       <div class="meta">
         <span title="本轮（自你上条消息起）/ 上限">本轮 ${m.sinceUser}/${S.settings.turnCap}</span>
         <span>共 ${m.turns} 次</span>
@@ -179,7 +186,7 @@ function renderState() {
 const es = new EventSource('/events');
 es.onmessage = e => {
   const ev = JSON.parse(e.data);
-  if (ev.type === 'init') { S = ev.state; clockSkew = Date.now() - S.now; messages = ev.messages; renderState(); renderAll(); }
+  if (ev.type === 'init') { modelLists = ev.modelLists || {}; delete lastHTML['#members']; S = ev.state; clockSkew = Date.now() - S.now; messages = ev.messages; renderState(); renderAll(); }
   if (ev.type === 'state') { S = ev; clockSkew = Date.now() - S.now; renderState(); }
   if (ev.type === 'msg') {
     messages.push(ev.msg);
@@ -200,6 +207,7 @@ document.addEventListener('click', e => {
 document.addEventListener('change', e => {
   const d = e.target.dataset;
   if (d.enable) post('/api/settings', { enabled: { [d.enable]: e.target.checked } });
+  if (d.model) post('/api/settings', { models: { [d.model]: e.target.value } });
 });
 $('#s-autoStop').onchange = e => post('/api/settings', { autoStop: e.target.checked });
 for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt'])
