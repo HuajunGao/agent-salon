@@ -266,7 +266,8 @@ async function startTurn(a, retried = false) {
     insertMsg({ chat_id: chat, sender: 'system', kind: 'system', text: `⚠ ${AGENTS[a].label} 出错: ${res.error}`, based_on: basedOn, latency_ms: res.ms });
   } else {
     const hand = /\[HAND\]\s*$/.test(res.text);
-    const text = res.text.replace(/\s*\[HAND\]\s*$/, '').trim();
+    // Agents sometimes write a reply and then a stray "PASS" on its own last line: drop it (a bare PASS stays a pass).
+    const text = res.text.replace(/\s*\[HAND\]\s*$/, '').trim().replace(/\n\s*PASS[.。!！]?$/i, '').trim();
     if (/^PASS[.。!！]?$/i.test(text) && !summary) {
       rt[a].note = 'PASS';
       logDecision('pass', a, { based_on: basedOn, latency_ms: res.ms });
