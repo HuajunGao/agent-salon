@@ -125,6 +125,9 @@ export const AGENTS = {
       if (ev.result) {
         st.sid = ev.result.conversation_id || st.sid;
         ev.result.status === 'SUCCESS' ? (st.text = ev.result.response) : (st.error = `agy ${ev.result.status}`);
+        // Headless agy can't prompt: a denied permission ends the turn with an empty response.
+        const denied = (ev.result.denied_actions || []).map(d => d.action);
+        if (!st.text && denied.length) st.error = `agy 权限被拒（${denied.join(', ')}），本轮无输出`;
       }
     },
   },

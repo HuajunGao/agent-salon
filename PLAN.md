@@ -164,8 +164,12 @@ persona made replies terse — no skills, no MCP; OAuth login still works, unlik
 `--tools`/`--allowedTools Read Glob Grep WebSearch WebFetch` (in `-p` unapproved web tools are refused). Codex:
 `--ignore-user-config` (no plugins/MCP; also drops the user's reasoning-effort setting) and `-c web_search="live"`.
 OpenCode: `--pure` plus `OPENCODE_CONFIG_CONTENT` disabling every MCP server from the global config (Playwright via
-npx cost ~5 s per turn); webfetch and the firecrawl skills stay. Antigravity: no supported override, unchanged (its 4
-MCP servers start each turn). All four verified: answering a web question and resuming the session.
+npx cost ~5 s per turn); webfetch and the firecrawl skills stay. Antigravity: no per-run override; at the user's
+request its global config was changed instead: comfyui and the 3 Google Cloud datacloud MCP servers disabled
+(`agy mcp disable`), the datacloud telemetry PreToolUse hook disabled (hooks.json `enabled: false`, backup .bak),
+and `read_url(*)` added to permissions.allow (backup settings.json.bak-agent-chat). Headless agy ends a turn with
+an EMPTY response when any action is denied (read_url, run_command): the adapter reports `denied_actions`, and the
+prompt tells agents not to run shell commands. All four verified: answering a web question and resuming the session.
 
 General: never trust exit codes (check `"reason":"length"`, quota/auth errors); add a no-output timeout (a hung
 request once sat for an hour); keep logs outside anything an agent might clean up.

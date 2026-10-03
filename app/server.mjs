@@ -210,7 +210,7 @@ Rules:
 - The user is a participant: when the user has spoken, engage with their points first.
 - If you have nothing worth adding right now, answer exactly PASS. If a message @mentions someone else and not you, usually PASS.
 - To speak again after others respond, end your message with [HAND]. To ask a member something, @mention them.
-- The discussion is read-only: you may read files to inform it, but don't create, edit or delete files or run commands that change anything.
+- The discussion is read-only: you may search the web, read web pages and read files to inform it, but don't create, edit or delete files and don't run shell commands (they are denied, and a denied action ends your turn without a reply).
 - The full transcript is kept at ${TRANSCRIPT}.\n\n`;
 }
 
@@ -240,7 +240,8 @@ async function startTurn(a, retried = false) {
     + `what does it cost, what is the best alternative? Say briefly that you are taking the opposing side on request.`;
   else if (floor && !summary) prompt += `\n\nThe user has given you the floor: please speak now.`;
   if (invited) prompt += `\n\nThe moderator invited you to speak: you seem to have something new to add here.`;
-  prompt += `\n\n(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later.)`;
+  prompt += `\n\n(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later. `
+    + `No shell commands: use web search, web pages and file reading only.)`;
   sendState();
 
   const model = S.models[a];
