@@ -282,7 +282,12 @@ async function startTurn(a, retried = false) {
 }
 
 // ---------- publishing at reading pace ----------
-const readMs = text => Math.max(3000, (text.length / S.readSpeed) * 60e3);
+// Reading speed is in Chinese characters per minute, so count what a reader actually reads: each CJK character
+// is 1 unit, each English word / number / identifier ~1.5 (400 字/min ≈ 250 words/min); spaces, punctuation and
+// markdown don't count. (text.length counted every Latin letter and symbol: ~50% too long on technical replies.)
+const readUnits = text => (text.match(/[぀-ヿ㐀-鿿가-힯豈-﫿]/g) || []).length
+  + 1.5 * (text.match(/[A-Za-z0-9][A-Za-z0-9_.\-\/]*/g) || []).length;
+const readMs = text => Math.max(3000, (readUnits(text) / S.readSpeed) * 60e3);
 let publishTimer;
 function publish(force = false) {
   // Replies finished for a chat the user isn't looking at go straight in.
