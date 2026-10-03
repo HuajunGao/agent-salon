@@ -18,6 +18,31 @@ A cheap judgment model (TypeSafe Jev) acts as moderator. Slow models must still 
 
 ## Design
 
+### Configurable members
+
+Members are stored in SQLite `members(name, config)`, independently of the CLI adapters in `app/agents.mjs`.
+The initial four members are seeded once; the old `opencode` identity migrates to `glm` along with history and
+session records. After initialization, adding/removing members changes the database rather than source code.
+`@` mentions match configured handles exactly (case-insensitive); there are no automatic harness/model aliases.
+
+Use **成员 → ＋ 新成员** to add an OpenCode member. Set a unique handle such as `gpt` or `reviewer`, display name,
+`provider/model`, optional endpoint, API protocol (Responses or Chat Completions), key, color and role prompt.
+Leave endpoint/key blank to use OpenCode's existing provider configuration and credentials. Custom endpoints
+should include the API base path, e.g. `/v1`. Each member has independent CLI sessions and `workspace/<handle>`.
+OpenCode v1/v2 provider schemas are generated separately; credentials are passed through a per-process environment
+variable and never returned through SSE. Saved keys live in the server's SQLite database, not browser state.
+
+Member cards prioritize the display alias, with the harness/model in a muted second line. Click any member's
+alias to edit it or leave it empty to restore the default. Alias changes preserve handles and CLI sessions.
+
+Configuration changes reset that member's CLI sessions, keeping message history. Removal keeps historical
+messages and archived files; it removes membership and session records. Configuration/removal waits until the
+member's active/queued reply and moderator assessments have finished. Each turn includes the current roster so
+resumed sessions learn about membership changes. No service restart is needed to add a member.
+
+Validation: `node --test app/members.test.mjs` covers dynamic mentions, credential handling, v1/v2 provider
+configuration and the HTTP lifecycle with temporary SQLite and a simulated harness (no paid model calls).
+
 ### Storage: SQLite (`data/chat.db`)
 Use Node's built-in `node:sqlite` (`DatabaseSync`, works on this machine's Node v25.9; no npm dependency).
 The server is the only writer. Tables (sketch):

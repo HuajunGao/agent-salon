@@ -202,11 +202,15 @@
   /* members */
   .mem { border-radius:var(--r-sm); }
   .mem.open { background:var(--surface); box-shadow:0 1px 2px rgba(15,17,20,.04); }
-  .mrow { position:relative; display:flex; align-items:center; gap:var(--s2); height:34px; padding:0 var(--s1) 0 6px; border-radius:var(--r-sm); cursor:pointer; }
+  .mrow { position:relative; display:flex; align-items:center; gap:var(--s2); min-height:58px; padding:8px var(--s1) 8px 6px; border-radius:var(--r-sm); cursor:pointer; }
   .mem:not(.open) .mrow:hover { background:var(--hover); }
   .mem.off .mrow > :not(.macts) { opacity:.45; }
-  .mname { font-weight:500; white-space:nowrap; }
-  .mst { flex:1; min-width:0; font-size:var(--t-xs); color:var(--ink-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .midentity { flex:1; min-width:0; }
+  .mheadline { display:flex; align-items:center; gap:8px; }
+  .mname { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:left; }
+  .mname:hover { color:var(--link); }
+  .mmeta { display:block; color:var(--ink-3); font-size:10.5px; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .mst { min-width:0; font-size:var(--t-xs); color:var(--ink-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .mst.busy { color:var(--ink-2); }
   .mst.err { color:var(--danger); }
   .mright { display:flex; align-items:center; gap:6px; font-size:var(--t-xs); color:var(--ink-3); }
@@ -227,6 +231,39 @@
   .mdetail summary { cursor:pointer; color:var(--ink-2); }
   .mdetail pre { max-height:180px; overflow:auto; white-space:pre-wrap; font:11px/1.45 Consolas, "Cascadia Mono", monospace; color:var(--ink-2);
     background:var(--canvas); padding:var(--s2); margin:var(--s1) 0 0; border-radius:var(--r-sm); }
+  #add-member { float:right; color:var(--ink-2); font-size:var(--t-xs); padding:2px 7px; border-radius:6px; }
+  #add-member:hover { background:var(--hover); }
+  .mdetail > button { padding:5px 8px; margin:0 6px 6px 0; border:1px solid var(--hair); border-radius:6px; color:var(--ink-2); }
+  #member-dialog { width:min(560px,calc(100vw - 32px)); max-height:calc(100dvh - 40px); padding:0; border:1px solid var(--hair); border-radius:20px; color:var(--ink); background:var(--surface); box-shadow:0 24px 80px rgba(15,17,20,.2); }
+  #member-dialog::backdrop { background:rgba(24,28,35,.32); backdrop-filter:blur(4px); }
+  #member-form { display:flex; flex-direction:column; max-height:calc(100dvh - 42px); }
+  .dialog-head { padding:24px 28px 20px; display:flex; align-items:flex-start; justify-content:space-between; border-bottom:1px solid var(--hair); }
+  .dialog-head h2 { margin:0; font:600 20px/1.4 var(--font-display); letter-spacing:-.02em; }
+  .dialog-head p { margin:6px 0 0; font-size:var(--t-sm); color:var(--ink-3); }
+  .dialog-head,.dialog-foot { flex:none; }
+  .dialog-body { padding:22px 28px; display:grid; gap:18px; overflow:auto; min-height:0; }
+  .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .field { display:grid; gap:7px; font-size:var(--t-sm); font-weight:500; color:var(--ink-2); }
+  .field input,.field select,.field textarea { width:100%; min-width:0; border:1px solid var(--hair); background:var(--canvas); border-radius:9px; padding:10px 12px; font-weight:400; color:var(--ink); outline:none; }
+  .field input:focus,.field select:focus,.field textarea:focus { border-color:var(--mod); box-shadow:0 0 0 3px var(--mod-soft); }
+  .field input::placeholder,.field textarea::placeholder { color:var(--ink-3); }
+  .field small,.form-help { font-weight:400; font-size:var(--t-xs); color:var(--ink-3); line-height:1.6; }
+  .field input[readonly] { color:var(--ink-3); background:var(--sunk); }
+  .form-section { display:grid; gap:16px; border-top:1px solid var(--hair); padding-top:18px; }
+  .form-section h3 { font-size:var(--t-xs); color:var(--ink-3); font-weight:500; margin:0; }
+  .form-advanced summary { cursor:pointer; color:var(--ink-2); font-size:var(--t-sm); }
+  .form-advanced[open] summary { margin-bottom:16px; }
+  .form-advanced .field { margin-top:12px; }
+  .key-clear { display:flex; align-items:center; gap:6px; color:var(--ink-3); font-size:var(--t-xs); }
+  .dialog-foot { padding:16px 28px; background:var(--canvas); border-top:1px solid var(--hair); display:flex; justify-content:flex-end; gap:10px; }
+  .dialog-foot button { padding:9px 18px; border-radius:8px; font-weight:500; }
+  .dialog-foot button[type=submit] { background:var(--ink); color:#fff; }
+  .dialog-foot button[type=submit]:disabled { opacity:.5; cursor:wait; }
+  .dialog-foot button[type=button]:hover { background:var(--hover); }
+  #member-error:empty { display:none; }
+  #member-error { color:var(--danger); background:var(--danger-soft); padding:10px 12px; border-radius:8px; font-size:var(--t-sm); }
+  #member-form [hidden] { display:none; }
+  @media(max-width:480px) { .form-grid { grid-template-columns:1fr; } .dialog-body,.dialog-head { padding:20px; } }
   /* switches */
   .switch { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
   .switch input { appearance:none; width:26px; height:15px; border-radius:999px; background:var(--selected); position:relative; margin:0; cursor:pointer; transition:background .15s; flex:none; }
@@ -291,7 +328,7 @@
 <aside id="right">
   <section id="moderator"></section>
   <section id="memory"></section>
-  <section><div class="sect">成员</div><div id="members"></div></section>
+  <section><div class="sect">成员 <button id="add-member">＋ 新成员</button></div><div id="members"></div></section>
   <details class="settings">
     <summary><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m9 5 7 7-7 7"/></svg>讨论设置</summary>
     <div class="grp">
@@ -318,6 +355,35 @@
     </div>
   </details>
 </aside>
+<dialog id="member-dialog" aria-labelledby="member-title" aria-describedby="member-subtitle">
+  <form id="member-form">
+    <div class="dialog-head"><div><h2 id="member-title">邀请新成员</h2><p id="member-subtitle">给它一个名字，让新的视角加入讨论。</p></div><button type="button" class="icon" id="member-close" aria-label="关闭">✕</button></div>
+    <div class="dialog-body">
+      <div class="form-grid">
+        <label class="field">别名<input name="label" maxlength="60" placeholder="使用默认别名"><small id="alias-help">聊天中显示的名字，留空使用默认。</small></label>
+        <label class="field" data-connection>@ 标识<input name="name" required pattern="[a-z][a-z0-9_]{0,31}" placeholder="例如 gpt"><small>用 @ 标识点名，创建后保持不变。</small></label>
+      </div>
+      <div class="form-section" data-connection>
+        <h3>模型连接 · OpenCode</h3>
+        <label class="field">模型<select id="member-model-select" required><option value="">选择模型</option></select><small>选择 OpenCode 可用模型，或填写自定义模型。</small></label>
+        <label class="field" id="custom-model-field" hidden>自定义模型<input name="model" placeholder="provider/model"><small>填写 API 提供方及真实模型 ID。</small></label>
+        <label class="field">API 地址<input name="baseURL" type="url" placeholder="https://api.openai.com/v1"><small>留空沿用提供方默认地址。</small></label>
+        <div class="form-grid">
+          <label class="field">接口协议<select name="protocol"><option value="responses">Responses</option><option value="chat">Chat Completions</option></select></label>
+          <label class="field">API Key<input name="apiKey" type="password" autocomplete="new-password" placeholder="使用已有凭据"></label>
+        </div>
+        <label class="key-clear"><input name="clearKey" type="checkbox">清除已保存的 Key</label>
+      </div>
+      <details class="form-advanced" data-connection><summary>角色与外观</summary>
+        <label class="field">角色提示词<textarea name="persona" rows="3" placeholder="例如：擅长检查方案中的漏洞，提出具体反例。"></textarea></label>
+        <label class="field">成员颜色<input name="color" type="color" value="#7c5cff" style="width:64px;height:38px;padding:4px"></label>
+      </details>
+      <div class="form-help" id="member-help">每位成员拥有独立会话。连接配置变更后，会开启新会话，历史消息保留。</div>
+      <div id="member-error" role="alert"></div>
+    </div>
+    <div class="dialog-foot"><button type="button" id="member-cancel">取消</button><button type="submit">添加成员</button></div>
+  </form>
+</dialog>
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -326,8 +392,8 @@ let messages = [], S = null, replyTo = null, clockSkew = 0, jumpTo = null;
 const member = n => S?.members.find(m => m.name === n);
 const label = n => n === 'user' ? '我' : n === 'system' ? '系统' : n === 'moderator' ? '主持人' : (member(n)?.label || n);
 // Agent accents: used only for avatars, the message rail and mini-bars.
-const ACCENT = { claude: '#C2703D', codex: '#14906C', agy: '#3A72E0', opencode: '#7A5FD6' };
-const MONO = { claude: 'Cl', codex: 'Cx', agy: 'Ag', opencode: 'Oc' };
+const ACCENT = { claude: '#C2703D', codex: '#14906C', agy: '#3A72E0' };
+const MONO = { claude: 'Cl', codex: 'Cx', agy: 'Ag' };
 const color = n => ACCENT[n] || member(n)?.color || '';
 const av = n => `<span class="av" style="--c:${color(n)}">${MONO[n] || esc(label(n).slice(0, 2))}</span>`;
 const utc = s => new Date(s.replace(' ', 'T') + 'Z');
@@ -402,7 +468,7 @@ const lastHTML = {};
 const setHTML = (sel, html) => lastHTML[sel] !== html && ($(sel).innerHTML = lastHTML[sel] = html, true);
 let modelLists = {};
 function modelOptions(m) {
-  const list = modelLists[m.name] || [];
+  const list = modelLists[m.name] || modelLists[m.harness] || [];
   const opts = list.some(x => x.id === m.model) ? list : [{ id: m.model, name: m.model || 'default' }, ...list];
   return opts.map(x => `<option value="${esc(x.id)}" ${x.id === m.model ? 'selected' : ''}>${esc(x.name === x.id ? x.id : `${x.name} (${x.id || 'default'})`)}</option>`).join('');
 }
@@ -514,11 +580,13 @@ function renderMembers() {
     const open = openMem.has(m.name);
     return `<div class="mem ${m.enabled ? '' : 'off'} ${open ? 'open' : ''}">
       <div class="mrow" data-expand="${m.name}" title="${esc(m.hand ? `举手原因：${m.hand.why}${m.score != null ? `，得分 ${m.score}` : ''}` : '点击查看模型、会话和实时输出')}">
-        ${av(m.name)}<span class="mname">${esc(m.label)}</span><span class="mst ${cls}">${st}</span>
+        ${av(m.name)}<div class="midentity"><div class="mheadline"><button class="mname" data-member-alias="${m.name}" title="编辑别名 · @${esc(m.name)}">${esc(m.label)}</button><span class="mst ${cls}">${st}</span></div><span class="mmeta" title="${esc(m.harnessLabel || m.harness)} · ${esc(m.model || 'CLI 默认模型')}">${esc(m.harnessLabel || m.harness)} · ${esc(m.model || 'CLI 默认模型')}</span></div>
         <span class="mright">${right}</span>
         <span class="macts"><button data-floor="${m.name}" title="让它马上发言">请发言</button>${m.hand && m.status !== 'thinking' ? `<button data-lower="${m.name}">放下手</button>` : ''}</span>
       </div>
       <div class="mdetail">
+        ${m.configurable ? `<button data-member-edit="${m.name}">配置成员</button><small>通过 OpenCode</small>` : ''}
+        <button data-member-delete="${m.name}">移除成员</button>
         <select data-model="${m.name}" title="模型（下一轮生效，会话保留）">${modelOptions(m)}</select>
         <div class="kv">
           <label class="switch"><input type="checkbox" data-enable="${m.name}" ${m.enabled ? 'checked' : ''}>参与</label>
@@ -585,6 +653,7 @@ function rename(id) {
   if (t && t.trim()) post('/api/chat/rename', { id, title: t.trim() });
 }
 document.addEventListener('click', e => {
+  if (e.target.closest('[data-member-alias]')) return;
   const t = e.target.closest('[data-id],[data-reply],[data-floor],[data-lower],[data-at],[data-chat],[data-hit],[data-rename],[data-export],[data-del],[data-idea],[data-expand]');
   if (!t) return;
   const d = t.dataset;
@@ -609,6 +678,68 @@ document.addEventListener('click', e => {
   if (d.lower) post('/api/lower', { agent: d.lower });
   if (d.at) { const i = $('#input'); i.value = (i.value + ` @${d.at} `).replace(/^ /, ''); i.focus(); grow(); typing(); }
 });
+const memberForm = $('#member-form');
+let aliasOnly = false;
+const modelSelect = $('#member-model-select');
+function syncMemberModel() {
+  const custom = modelSelect.value === '__custom__';
+  $('#custom-model-field').hidden = aliasOnly || !custom;
+  modelSelect.required = !aliasOnly;
+  memberForm.elements.model.required = !aliasOnly && custom;
+  if (!custom) memberForm.elements.model.value = modelSelect.value;
+}
+modelSelect.onchange = syncMemberModel;
+function editMember(name, onlyAlias = false) {
+  aliasOnly = onlyAlias;
+  const m = name ? member(name) : null;
+  memberForm.reset();
+  for (const key of ['name', 'label', 'model', 'color']) memberForm.elements[key].value = m?.[key] || (key === 'color' ? '#7c5cff' : '');
+  memberForm.elements.label.value = m?.alias || '';
+  memberForm.elements.label.placeholder = m?.defaultAlias || '默认使用 @ 标识';
+  $('#alias-help').textContent = m ? `默认：${m.defaultAlias}，留空恢复默认。` : '聊天中显示的名字，留空使用 @ 标识。';
+  memberForm.querySelectorAll('[data-connection]').forEach(el => { el.hidden = onlyAlias; });
+  const models = [...(modelLists.opencode || [])];
+  if (m?.model && !models.some(x => x.id === m.model)) models.unshift({ id: m.model, name: m.model });
+  modelSelect.innerHTML = '<option value="">选择模型</option>' + models.map(x => `<option value="${esc(x.id)}">${esc(x.id)}</option>`).join('') + '<option value="__custom__">自定义模型…</option>';
+  modelSelect.value = m?.model || '';
+  syncMemberModel();
+  memberForm.elements.name.required = !onlyAlias;
+  memberForm.querySelector('details').open = false;
+  for (const key of ['baseURL', 'protocol', 'persona']) memberForm.elements[key].value = m?.config?.[key] || (key === 'protocol' ? 'responses' : '');
+  memberForm.elements.name.readOnly = !!m;
+  memberForm.elements.apiKey.placeholder = m?.config?.hasKey ? '已配置；留空保留，输入新 Key 替换' : '留空使用 OpenCode 已有凭据';
+  $('#member-title').textContent = onlyAlias ? '编辑别名' : m ? '配置成员' : '邀请新成员';
+  $('#member-subtitle').textContent = onlyAlias ? `给 @${m.name} 起个熟悉的名字。` : m ? `@${m.name} · OpenCode` : '给它一个名字，让新的视角加入讨论。';
+  $('#member-help').textContent = onlyAlias ? '别名可以随时修改，不影响 @ 标识和现有会话。' : '每位成员拥有独立会话。连接配置变更后，会开启新会话，历史消息保留。';
+  memberForm.querySelector('[type="submit"]').textContent = m ? '保存修改' : '添加成员';
+  $('#member-error').textContent = '';
+  $('#member-dialog').showModal();
+}
+$('#add-member').onclick = () => editMember();
+$('#member-cancel').onclick = () => $('#member-dialog').close();
+$('#member-close').onclick = () => $('#member-dialog').close();
+$('#member-dialog').addEventListener('click', e => { if (e.target === e.currentTarget) { const r = e.currentTarget.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) e.currentTarget.close(); } });
+document.addEventListener('click', async e => {
+  const alias = e.target.closest('[data-member-alias]'); if (alias) editMember(alias.dataset.memberAlias, true);
+  const b = e.target.closest('[data-member-edit]'); if (b) editMember(b.dataset.memberEdit);
+  const d = e.target.closest('[data-member-delete]');
+  if (d && confirm(`移除 @${d.dataset.memberDelete}？历史消息保留。`)) {
+    try { const res = await post('/api/member/delete', { name: d.dataset.memberDelete });
+      const data = await res.json(); if (!res.ok) throw new Error(data.error || '移除失败');
+    } catch (err) { alert(err.message); }
+  }
+});
+memberForm.onsubmit = async e => {
+  e.preventDefault();
+  const button = memberForm.querySelector('[type="submit"]'); button.disabled = true;
+  try {
+    const body = Object.fromEntries(new FormData(memberForm)); body.clearKey = memberForm.elements.clearKey.checked;
+    const res = await post(aliasOnly ? '/api/member/alias' : '/api/member/save', body);
+    const data = await res.json(); if (!res.ok) throw new Error(data.error || '保存失败');
+    $('#member-dialog').close();
+  } catch (err) { $('#member-error').textContent = err.message; }
+  finally { button.disabled = false; }
+};
 document.addEventListener('change', e => {
   const d = e.target.dataset;
   if (d.enable) post('/api/settings', { enabled: { [d.enable]: e.target.checked } });

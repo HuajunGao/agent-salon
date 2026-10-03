@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { AGENTS, runTurn, listModels, runAs } from './agents.mjs';
 import { judge, novelty } from './moderator.mjs';
 import { curate } from './memory.mjs';
+import { validateMember, memberMentions } from './members.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DATA = join(ROOT, 'data'), WORK = join(ROOT, 'workspace');
@@ -16,10 +17,9 @@ mkdirSync(ARCHIVE, { recursive: true }); mkdirSync(WORK, { recursive: true });
 // AGENT_USER (Linux, server as root): the CLIs run as that user, each in its own workspace it may write and execute in;
 // the database stays root-only, the archive and memory are readable. Without it (e.g. Windows) all share workspace/.
 const RUNAS = process.env.AGENT_USER ? runAs(process.env.AGENT_USER) : null;
-const wsOf = a => (RUNAS ? join(WORK, a) : WORK);
-if (RUNAS) for (const a of Object.keys(AGENTS)) { mkdirSync(wsOf(a), { recursive: true }); chownSync(wsOf(a), RUNAS.uid, RUNAS.gid); }
+const wsOf = a => join(WORK, a);
 const PORT = +process.env.PORT || 3517, HOST = process.env.HOST || '127.0.0.1'; // HOST=0.0.0.0 to serve the LAN
-const NAMES = Object.keys(AGENTS);
+const NAMES = [];
 
 // ---------- storage ----------
 const db = new DatabaseSync(join(DATA, 'chat.db'));
@@ -35,16 +35,56 @@ CREATE TABLE IF NOT EXISTS agent_sessions(chat_id INTEGER, agent TEXT, cli_sessi
 CREATE TABLE IF NOT EXISTS decisions(id INTEGER PRIMARY KEY, chat_id INTEGER, at TEXT DEFAULT CURRENT_TIMESTAMP, mode TEXT,
   event TEXT, agent TEXT, score REAL, detail TEXT, based_on INTEGER, message_id INTEGER, latency_ms INTEGER);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);`);
+db.exec(`CREATE TABLE IF NOT EXISTS members(name TEXT PRIMARY KEY, config TEXT NOT NULL);`);
 for (const col of ['model', 'role']) // role: 'devil' | 'summary' for moderator-requested turns
   if (!db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === col)) db.exec(`ALTER TABLE messages ADD COLUMN ${col} TEXT`);
 const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
 const run = (sql, ...a) => db.prepare(sql).run(...a);
+const memberConfigs = Object.create(null);
+// Seed once; from then on the database, rather than adapter names, defines membership.
+if (!q1("SELECT 1 FROM settings WHERE key='members-seeded'")) {
+  for (const [harness, adapter] of Object.entries(AGENTS)) {
+    const name = harness === 'opencode' ? 'glm' : harness;
+    const m = { name, harness, label: '',
+      color: adapter.color, model: adapter.defaultModel, baseURL: '', protocol: 'responses', apiKey: '', persona: '' };
+    run('INSERT OR IGNORE INTO members VALUES(?,?)', name, JSON.stringify(m));
+  }
+  run("INSERT INTO settings VALUES('members-seeded','true')");
+}
+for (const row of q('SELECT * FROM members')) {
+  const m = JSON.parse(row.config);
+  memberConfigs[row.name] = m;
+  if (!NAMES.includes(row.name)) NAMES.push(row.name);
+}
+if (!q1("SELECT 1 FROM settings WHERE key='handle-default-alias-v1'")) {
+  for (const [name, m] of Object.entries(memberConfigs)) {
+    if (m.label === AGENTS[m.harness]?.label || (name === 'glm' && m.label === 'GLM')) {
+      m.label = '';
+      run('UPDATE members SET config=? WHERE name=?', JSON.stringify(m), name);
+    }
+  }
+  run("INSERT INTO settings VALUES('handle-default-alias-v1','true')");
+}
+// One-time identity migration; existing history and CLI sessions belong to @glm.
+if (!q1("SELECT 1 FROM settings WHERE key='member-identity-v1'")) {
+  db.exec(`UPDATE messages SET sender='glm' WHERE sender='opencode';
+    UPDATE decisions SET agent='glm' WHERE agent='opencode';
+    UPDATE agent_sessions SET agent='glm' WHERE agent='opencode';
+    INSERT INTO settings VALUES('member-identity-v1','true');`);
+}
+for (const a of NAMES) {
+  mkdirSync(wsOf(a), { recursive: true });
+  if (RUNAS) chownSync(wsOf(a), RUNAS.uid, RUNAS.gid);
+}
 
 const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true, memory: true, exec: true,
-  enabled: Object.fromEntries(NAMES.map(n => [n, true])), models: Object.fromEntries(NAMES.map(n => [n, AGENTS[n].defaultModel])) };
+  enabled: Object.fromEntries(NAMES.map(n => [n, true])), models: Object.fromEntries(NAMES.map(n => [n, memberConfigs[n].model])) };
 let S = { ...DEFAULTS, ...JSON.parse(q1(`SELECT value FROM settings WHERE key='s'`)?.value || '{}') };
 S.models = { ...DEFAULTS.models, ...S.models };
+S.enabled = { ...DEFAULTS.enabled, ...S.enabled };
+if (S.models.opencode) { S.models.glm = S.models.opencode; delete S.models.opencode; }
+if (typeof S.enabled.opencode === 'boolean') { S.enabled.glm = S.enabled.opencode; delete S.enabled.opencode; }
 const modelOf = a => S.models[a] || 'default';
 let modelLists = {};  // read once from each CLI at startup
 listModels().then(l => { modelLists = l; send(init()); });
@@ -74,8 +114,10 @@ function insertMsg(m) {
   return msg;
 }
 
-const who = s => (s === 'user' ? '用户 (user)' : AGENTS[s] ? `@${s}` : s);
-const describe = a => `@${a} (${AGENTS[a].label} running ${modelOf(a)})`;
+const who = s => (s === 'user' ? '用户 (user)' : `@${s}`);
+const defaultAlias = a => a;
+const aliasOf = a => memberConfigs[a].label || defaultAlias(a);
+const describe = a => `@${a} (${aliasOf(a)}, ${memberConfigs[a].harness} running ${modelOf(a)})`;
 const fmt = m => `#${m.id} ${who(m.sender)}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${m.text}`;
 const archiveFile = c => join(ARCHIVE, `${c}.md`);
 function writeTranscript(c) {
@@ -113,8 +155,7 @@ const TALK = `kind IN ('user','agent')`;
 const lastTalkId = () => q1(`SELECT coalesce(max(id),0) m FROM messages WHERE chat_id=? AND ${TALK}`, chatId).m;
 const note = text => insertMsg({ chat_id: chatId, sender: 'moderator', kind: 'moderator', text });
 
-const MENTION = { claude: 'claude', codex: 'codex', agy: 'agy', gemini: 'agy', opencode: 'opencode', glm: 'opencode' };
-const mentions = text => [...new Set([...text.matchAll(/@(\w+)/g)].map(m => MENTION[m[1].toLowerCase()]).filter(Boolean))];
+const mentions = text => memberMentions(text, NAMES);
 
 function raise(a, r, why) {
   if (!S.enabled[a]) return;
@@ -194,7 +235,7 @@ async function assess() {
   if (!cands.length) return;
   jev.assessing = true; sendState();
   const msgs = q(`SELECT id, sender, text FROM messages WHERE chat_id=? AND id>=? AND ${TALK} ORDER BY id`, chatId, round);
-  const r = await novelty(msgs, cands.map(a => ({ name: a, harness: AGENTS[a].label, model: modelOf(a) })));
+  const r = await novelty(msgs, cands.map(a => ({ name: a, harness: memberConfigs[a].harness, model: modelOf(a) })));
   jev.assessing = false;
   if (r.error) {
     jev.downAt = Date.now();
@@ -255,7 +296,7 @@ const toolRule = a => (execOn()
   ? `You have your own workspace, ${wsOf(a)} (your current directory): you may create files and run code there to check a
   claim, e.g. a small script, a quick benchmark, or installing a package locally. Keep it quick: a turn should finish within
   a couple of minutes. Stay inside your workspace; the discussion files are read-only for you.`
-  : `The discussion is read-only: don't create, edit or delete files. ${SHELL_RULE[a] || SHELL_RULE.default}`);
+  : `The discussion is read-only: don't create, edit or delete files. ${SHELL_RULE[memberConfigs[a].harness] || SHELL_RULE.default}`);
 const SHELL_RULE = {
   codex: 'Your sandbox is read-only: read-only shell commands (cat, rg, ls) are fine for reading files.',
   default: "Don't run shell commands (they are denied, and a denied action ends your turn without a reply).",
@@ -264,6 +305,7 @@ function intro(a, chat) {
   const memory = S.memory ? readMemory().trim() : '';
   return `You are ${describe(a)}, one member of a live group chat running on the user's machine.
 Members: the user (a human, full participant) and the agents ${NAMES.map(describe).join(', ')}.
+${memberConfigs[a]?.persona ? `Your role: ${memberConfigs[a].persona}` : ''}
 Each turn you receive the messages you haven't seen yet, numbered #N. Your reply is posted to the chat as one message.
 Rules:
 - This is a chat, not a report: keep each message short (usually under 150 words / 300 Chinese characters), one or two points, no headings.
@@ -307,12 +349,13 @@ async function startTurn(a, retried = false) {
   if (invited) prompt += `\n\nThe moderator invited you to speak: you seem to have something new to add here.`;
   prompt += `\n\n(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later. `
     + (execOn() ? `You may run code in your workspace ${wsOf(a)} to check claims; keep it quick.)`
-      : `${a === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.'})`);
+      : `${memberConfigs[a].harness === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.'})`);
+  prompt += `\nCurrent members: ${NAMES.filter(n => S.enabled[n]).map(describe).join(', ')}. Use these exact @handles when addressing them.`;
   sendState();
 
   const model = S.models[a];
-  const res = await runTurn(a, prompt, s.cli_session_id, {
-    cwd: wsOf(a), dataDir: DATA, model, exec: execOn(),
+  const res = await runTurn(memberConfigs[a].harness, prompt, s.cli_session_id, {
+    cwd: wsOf(a), dataDir: DATA, model, exec: execOn(), member: memberConfigs[a] && { ...memberConfigs[a], model },
     onLive: log => { rt[a].live = log; sendStateSoon(); },
   });
   if (!q1('SELECT 1 FROM chats WHERE id=?', chat)) { rt[a].status = 'idle'; return pump(); } // discussion deleted meanwhile
@@ -329,7 +372,7 @@ async function startTurn(a, retried = false) {
   if (res.error) {
     rt[a].error = res.error;
     logDecision('error', a, { based_on: basedOn, latency_ms: res.ms, detail: { error: res.error } });
-    insertMsg({ chat_id: chat, sender: 'system', kind: 'system', text: `⚠ ${AGENTS[a].label} 出错: ${res.error}`, based_on: basedOn, latency_ms: res.ms });
+    insertMsg({ chat_id: chat, sender: 'system', kind: 'system', text: `⚠ ${memberConfigs[a].label} 出错: ${res.error}`, based_on: basedOn, latency_ms: res.ms });
   } else {
     const hand = /\[HAND\]\s*$/.test(res.text);
     // Agents sometimes write a reply and then a stray "PASS" on its own last line: drop it (a bare PASS stays a pass).
@@ -468,7 +511,11 @@ function state() {
     jev: { on: jevOn(), assessing: jev.assessing, judging: jev.judging, ms: jev.ms, down: S.scheduler === 'jev' && !jevOn() },
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
     members: NAMES.map(n => ({
-      name: n, label: AGENTS[n].label, color: AGENTS[n].color, ...rt[n], enabled: S.enabled[n], model: S.models[n],
+      name: n, label: aliasOf(n), alias: memberConfigs[n].label || '', defaultAlias: defaultAlias(n), color: memberConfigs[n].color, ...rt[n], enabled: S.enabled[n], model: S.models[n],
+      configurable: memberConfigs[n].harness === 'opencode', harness: memberConfigs[n].harness,
+      harnessLabel: AGENTS[memberConfigs[n].harness].label,
+      config: { baseURL: memberConfigs[n].baseURL || '',
+        protocol: memberConfigs[n].protocol || 'responses', persona: memberConfigs[n].persona || '', hasKey: !!memberConfigs[n].apiKey },
       sid: sess(chatId, n).cli_session_id, turns: q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=?', chatId, n).n,
       sinceUser: turnsSinceUser(n), score: rt[n].hand && rt[n].status === 'idle' ? +score(n).s.toFixed(2) : null,
       nov: novFresh(n) ? rt[n].nov.p : null,
@@ -488,6 +535,43 @@ const sendStateSoon = () => { stateTimer ??= setTimeout(() => { stateTimer = nul
 
 // ---------- HTTP ----------
 const routes = {
+  'POST /api/member/alias'({ name, label }) {
+    if (!NAMES.includes(name)) throw new Error('成员不存在');
+    memberConfigs[name].label = String(label || '').trim().slice(0, 60);
+    run('UPDATE members SET config=? WHERE name=?', JSON.stringify(memberConfigs[name]), name);
+    logDecision('member-alias', name); send(init());
+  },
+  'POST /api/member/save'(body) {
+    if (jev.assessing || jev.judging) throw new Error('主持人正在评估，请稍后再保存成员');
+    const name = String(body.name || '').toLowerCase();
+    if (memberConfigs[name] && memberConfigs[name].harness !== 'opencode') throw new Error('该标识已由其他运行工具的成员使用');
+    if (rt[name]?.status === 'thinking' || ready.some(r => r.agent === name)) throw new Error('请等该成员完成本轮并发布后再修改配置');
+    const m = validateMember(body, memberConfigs[name]);
+    run('INSERT OR REPLACE INTO members VALUES(?,?)', name, JSON.stringify(m));
+    memberConfigs[name] = m;
+    if (!NAMES.includes(name)) {
+      NAMES.push(name);
+      rt[name] = { status: 'idle', started: 0, live: '', hand: null, note: '', error: '' };
+      S.enabled[name] = true;
+    }
+    mkdirSync(wsOf(name), { recursive: true });
+    if (RUNAS) chownSync(wsOf(name), RUNAS.uid, RUNAS.gid);
+    S.models[name] = m.model;
+    rt[name].hand = null; rt[name].error = ''; rt[name].live = '';
+    run('UPDATE agent_sessions SET cli_session_id=NULL WHERE agent=?', name);
+    saveSettings(); logDecision('member-config', name, { detail: { model: m.model } });
+    send(init());
+  },
+  'POST /api/member/delete'({ name }) {
+    if (jev.assessing || jev.judging) throw new Error('主持人正在评估，请稍后再移除成员');
+    if (!NAMES.includes(name)) throw new Error('成员不存在');
+    if (rt[name].status === 'thinking' || ready.some(r => r.agent === name)) throw new Error('请等该成员完成本轮并发布后再移除');
+    run('DELETE FROM members WHERE name=?', name);
+    run('DELETE FROM agent_sessions WHERE agent=?', name);
+    NAMES.splice(NAMES.indexOf(name), 1);
+    delete memberConfigs[name]; delete rt[name]; delete S.models[name]; delete S.enabled[name];
+    saveSettings(); logDecision('member-delete', name); send(init());
+  },
   'POST /api/send'({ text, reply_to, chat_id }) {
     text = String(text || '').trim();
     if (!text) return;
@@ -514,8 +598,8 @@ const routes = {
     for (const n of NAMES) rt[n].hand = null;
     logDecision('stop', null);
   },
-  'POST /api/floor'({ agent }) { if (AGENTS[agent]) { raise(agent, 100, 'floor from user'); logDecision('floor', agent); } },
-  'POST /api/lower'({ agent }) { if (AGENTS[agent]) rt[agent].hand = null; },
+  'POST /api/floor'({ agent }) { if (NAMES.includes(agent)) { raise(agent, 100, 'floor from user'); logDecision('floor', agent); } },
+  'POST /api/lower'({ agent }) { if (NAMES.includes(agent)) rt[agent].hand = null; },
   'POST /api/settings'(body) {
     for (const k of ['language', 'scheduler']) if (typeof body[k] === 'string' && body[k]) S[k] = body[k];
     for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec']) if (typeof body[k] === 'boolean') S[k] = body[k];
@@ -523,7 +607,7 @@ const routes = {
     if (body.enabled) S.enabled = { ...S.enabled, ...body.enabled };
     // Only models a CLI listed (or its default) are accepted; the next turn uses it and resumes the same session.
     for (const [a, m] of Object.entries(body.models || {}))
-      if (AGENTS[a] && (m === AGENTS[a].defaultModel || modelLists[a]?.some(x => x.id === m))) {
+      if (NAMES.includes(a) && (m === memberConfigs[a].model || modelLists[memberConfigs[a].harness]?.some(x => x.id === m))) {
         S.models[a] = m; logDecision('model', a, { detail: { model: m } });
       }
     saveSettings();

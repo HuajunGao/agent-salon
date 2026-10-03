@@ -4,6 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, rmSync, openSync, closeSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, dirname, delimiter } from 'node:path';
+import { providerConfig } from './members.mjs';
 
 let H = homedir();
 const WIN = process.platform === 'win32';
@@ -171,7 +172,8 @@ export const AGENTS = {
       // 32k default output cap truncates GLM. v1: --pure (oh-my-openagent hands work to background tasks that die with
       // `run`). v2 dropped --pure and runs through a shared background service by default; --standalone gives each
       // run a private server, so this run's environment (output cap, MCP off) applies.
-      env: { ...process.env, OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: '131072', OPENCODE_CONFIG_CONTENT: opencodeNoMcp() },
+      env: { ...process.env, AGENT_CHAT_MEMBER_API_KEY: o.member?.apiKey || '', OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: '131072',
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...JSON.parse(opencodeNoMcp()), ...providerConfig(o.member, opencodeV2()) }) },
       // Read-only: the plan agent. exec mode: the build agent, auto-approving (v2 --auto) inside the OS-confined user.
       args: ['run', opencodeV2() ? '--standalone' : '--pure', '--agent', o.exec ? 'build' : 'plan',
         ...(o.exec && opencodeV2() ? ['--auto'] : []), '-m', o.model || 'zai-coding-plan/glm-5.3',
@@ -202,9 +204,9 @@ const FAIL = [
 const IDLE_MS = 5 * 60e3, TOTAL_MS = 15 * 60e3;
 
 // Run one turn. onLive(text) receives a readable live log. Resolves {text, sid, error, ms}.
-export function runTurn(agent, prompt, sid, { cwd, dataDir, model, exec, onLive }) {
+export function runTurn(agent, prompt, sid, { cwd, dataDir, model, exec, member, onLive }) {
   const a = AGENTS[agent];
-  const { bin, args, env } = a.cmd(prompt, sid, { dataDir, model, exec });
+  const { bin, args, env } = a.cmd(prompt, sid, { dataDir, model, exec, member });
   const t0 = Date.now();
   let log = '';
   const st = {
