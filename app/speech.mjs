@@ -19,15 +19,19 @@ export async function loadCatalog() {
 }
 export const ttsModels = () => catalog;
 
-// What a listener should hear: no markdown, code or URLs; message refs and handles read naturally.
-export function speakable(text) {
+// What a listener should hear: no markdown, code or URLs. Message numbers mean nothing by ear: a parenthesis of only
+// references is dropped, and any other #N becomes its author's name (nameOf(id) → name, or null to drop it).
+const REF_LIST = /\s*[(（]\s*#\d+(?:\s*(?:[,，、和与]|and)\s*#\d+)*\s*[)）]/g;
+export function speakable(text, nameOf = () => null) {
   return text
+    .replace(REF_LIST, '')
+    .replace(/#(\d+)/g, (_, id) => nameOf(+id) || '')
     .replace(/```[\s\S]*?```/g, '（代码略）')
     .replace(/`([^`\n]+)`/g, '$1')
     .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '$1')
     .replace(/https?:\/\/\S+/g, '（链接）')
     .replace(/(\*\*|__|~~)/g, '').replace(/^\s{0,3}(#{1,6}|[-*+]|\d+\.)\s+/gm, '')
-    .replace(/#(\d+)/g, '$1号').replace(/@(\w+)/g, '$1')
+    .replace(/@(\w+)/g, '$1')
     .replace(/\s+/g, ' ').trim().slice(0, 1500);
 }
 

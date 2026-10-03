@@ -157,7 +157,10 @@ let readUntil = 0, typingAt = 0;
 // Read-aloud: a browser that is playing a reply holds the publish queue (like typing) so the next one waits for it.
 let speakingAt = 0, ttsActiveAt = 0;
 const voiceOf = a => S.ttsVoices?.[a] || DEFAULT_TTS;
-const spoken = (a, text) => speakable(`${aliasOf(a)}：${text}`);
+// "#58" is read as the name of whoever wrote #58 ("你" for the user); unknown numbers are dropped.
+const refName = id => { const s = q1('SELECT sender FROM messages WHERE id=?', id)?.sender;
+  return s === 'user' ? '你' : s && memberConfigs[s] ? aliasOf(s) : null; };
+const spoken = (a, text) => speakable(`${aliasOf(a)}：${text}`, refName);
 let mod = null;                         // latest Jev judgment this round: {convergence, stalling, msgId}
 let wrapRound = 0;                      // round (= last user message id) already wrapped up
 // Moderator activity. devilAt / circledAt: the round in which devil's advocate / the circling pause already happened.
