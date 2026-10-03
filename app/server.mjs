@@ -1,15 +1,18 @@
 // agent-chat server: SQLite + SSE + scheduler + reading-pace publish queue. No npm dependencies.
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { AGENTS, runTurn, listModels } from './agents.mjs';
 import { judge, novelty } from './moderator.mjs';
+import { curate } from './memory.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const DATA = join(ROOT, 'data'), WORK = join(ROOT, 'workspace'), TRANSCRIPT = join(DATA, 'transcript.md');
-mkdirSync(DATA, { recursive: true }); mkdirSync(WORK, { recursive: true });
+const DATA = join(ROOT, 'data'), WORK = join(ROOT, 'workspace');
+// Every discussion is archived as data/discussions/<id>.md plus an index, so agents can look up earlier ones.
+const ARCHIVE = join(DATA, 'discussions'), MEMORY = join(DATA, 'memory.md');
+mkdirSync(ARCHIVE, { recursive: true }); mkdirSync(WORK, { recursive: true });
 const PORT = +process.env.PORT || 3517, HOST = process.env.HOST || '127.0.0.1'; // HOST=0.0.0.0 to serve the LAN
 const NAMES = Object.keys(AGENTS);
 
@@ -32,7 +35,7 @@ const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
 const run = (sql, ...a) => db.prepare(sql).run(...a);
 
-const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true,
+const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true, memory: true,
   enabled: Object.fromEntries(NAMES.map(n => [n, true])), models: Object.fromEntries(NAMES.map(n => [n, AGENTS[n].defaultModel])) };
 let S = { ...DEFAULTS, ...JSON.parse(q1(`SELECT value FROM settings WHERE key='s'`)?.value || '{}') };
 S.models = { ...DEFAULTS.models, ...S.models };
@@ -68,10 +71,26 @@ function insertMsg(m) {
 const who = s => (s === 'user' ? '用户 (user)' : AGENTS[s] ? `@${s}` : s);
 const describe = a => `@${a} (${AGENTS[a].label} running ${modelOf(a)})`;
 const fmt = m => `#${m.id} ${who(m.sender)}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${m.text}`;
+const archiveFile = c => join(ARCHIVE, `${c}.md`);
 function writeTranscript(c) {
-  const t = q1('SELECT title FROM chats WHERE id=?', c).title;
-  writeFileSync(TRANSCRIPT, `# ${t}\n\n` + q('SELECT * FROM messages WHERE chat_id=? ORDER BY id', c).map(fmt).join('\n\n') + '\n');
+  const chat = q1('SELECT title, created_at FROM chats WHERE id=?', c);
+  if (!chat) return;
+  writeFileSync(archiveFile(c), `# ${chat.title}\n\n讨论 ${c}，开始于 ${chat.created_at} UTC\n\n`
+    + q(`SELECT * FROM messages WHERE chat_id=? AND ${TALK} ORDER BY id`, c).map(fmt).join('\n\n') + '\n');
+  writeIndex();
 }
+// One line per discussion: when, size, the question and (if the moderator wrapped it up) the latest summary.
+function writeIndex() {
+  const rows = q(`SELECT c.id, c.title, c.created_at,
+      (SELECT count(*) FROM messages WHERE chat_id=c.id AND ${TALK}) n,
+      (SELECT text FROM messages WHERE chat_id=c.id AND kind='user' ORDER BY id LIMIT 1) q,
+      (SELECT text FROM messages WHERE chat_id=c.id AND role='summary' ORDER BY id DESC LIMIT 1) s
+    FROM chats c ORDER BY c.id DESC`);
+  const one = t => (t || '').replace(/\s+/g, ' ').slice(0, 300);
+  writeFileSync(join(ARCHIVE, 'index.md'), '# 往期讨论\n\n每场讨论的全文在同目录的 <编号>.md。\n\n' + rows.map(r =>
+    `- 讨论 ${r.id}「${r.title}」${r.created_at.slice(0, 10)}，${r.n} 条消息。问题：${one(r.q)}${r.s ? `\n  结论：${one(r.s)}` : ''}`).join('\n') + '\n');
+}
+const readMemory = () => (existsSync(MEMORY) ? readFileSync(MEMORY, 'utf8') : '');
 
 // ---------- runtime state ----------
 // hand: {r: relevance, since, why}; r >= 100 means the user gave the floor (bypasses cap and "nothing new").
@@ -153,6 +172,7 @@ function pump() {
     }
   }
   floorBack();
+  maybeCurate();
   sendState();
 }
 
@@ -200,7 +220,29 @@ function floorBack() {
   }, 1500);
 }
 
-function intro(a) {
+// ---------- memory about the user ----------
+// Once the whole room is quiet and the user's last message is 20s old, fold what the user newly wrote (in any
+// discussion) into data/memory.md. memoryAt = last user message already considered.
+const memo = { curating: false, at: null, error: '', retryAt: 0 };
+const memoryAt = () => +(q1(`SELECT value FROM settings WHERE key='memoryAt'`)?.value || 0);
+async function maybeCurate(force = false) {
+  if (memo.curating || (!S.memory && !force) || (!force && Date.now() < memo.retryAt)) return;
+  const pending = q(`SELECT m.id, m.text, m.created_at, c.title chat FROM messages m JOIN chats c ON c.id=m.chat_id
+    WHERE m.kind='user' AND m.id>? ORDER BY m.id DESC LIMIT 40`, memoryAt()).reverse();
+  if (!pending.length) return;
+  const quiet = NAMES.every(n => rt[n].status !== 'thinking') && !ready.length;
+  if (!force && (!quiet || Date.now() - new Date(pending.at(-1).created_at.replace(' ', 'T') + 'Z') < 20e3)) return;
+  memo.curating = true; sendState();
+  const r = await curate(readMemory(), pending, { language: S.language, cwd: WORK, dataDir: DATA });
+  memo.curating = false; memo.error = r.error || ''; memo.retryAt = r.error ? Date.now() + 10 * 60e3 : 0; // back off after a failure
+  if (r.text) { writeFileSync(MEMORY, r.text); memo.at = Date.now(); }
+  if (!r.error) run(`INSERT OR REPLACE INTO settings VALUES('memoryAt', ?)`, String(pending.at(-1).id));
+  logDecision('memory', null, { message_id: pending.at(-1).id, detail: r.error ? { error: r.error } : { changed: !!r.text } });
+  sendState();
+}
+
+function intro(a, chat) {
+  const memory = S.memory ? readMemory().trim() : '';
   return `You are ${describe(a)}, one member of a live group chat running on the user's machine.
 Members: the user (a human, full participant) and the agents ${NAMES.map(describe).join(', ')}.
 Each turn you receive the messages you haven't seen yet, numbered #N. Your reply is posted to the chat as one message.
@@ -211,7 +253,11 @@ Rules:
 - If you have nothing worth adding right now, answer exactly PASS. If a message @mentions someone else and not you, usually PASS.
 - To speak again after others respond, end your message with [HAND]. To ask a member something, @mention them.
 - The discussion is read-only: you may search the web, read web pages and read files to inform it, but don't create, edit or delete files and don't run shell commands (they are denied, and a denied action ends your turn without a reply).
-- The full transcript is kept at ${TRANSCRIPT}.\n\n`;
+- This discussion's full transcript is ${archiveFile(chat)}. Earlier discussions are archived in ${ARCHIVE}: index.md lists
+  them with their conclusions, <id>.md is one discussion. When the user refers to something discussed before, look it up
+  there (read / search the files) instead of guessing.
+${memory ? `\nWhat you know about the user from earlier discussions (a curated memory; it may be outdated, and what the user
+says now wins):\n${memory}\n` : ''}\n`;
 }
 
 async function startTurn(a, retried = false) {
@@ -227,7 +273,7 @@ async function startTurn(a, retried = false) {
     // New (or lost) session: seed with the recent history, trimmed to stay under the Windows command-line limit.
     msgs = q(`SELECT * FROM messages WHERE chat_id=? AND ${TALK} ORDER BY id DESC LIMIT 40`, chat).reverse();
     while (msgs.map(fmt).join('').length > 16000) msgs.shift();
-    prompt = intro(a) + `Conversation so far:\n\n`;
+    prompt = intro(a, chat) + `Conversation so far:\n\n`;
   }
   prompt += msgs.map(m => (m.sender === a ? `#${m.id} (you): ${m.text}` : fmt(m))).join('\n\n') || '(no new messages)';
   const k = turnsSinceUser(a) + 1, n = msgs.filter(m => m.sender !== a).length;
@@ -395,6 +441,7 @@ function state() {
     type: 'state', now, chatId, paused, mod, wrapped: !!wrapRound && wrapRound === lastUserId(chatId), settings: S, readLeft: Math.max(0, readUntil - now),
     holding: now - typingAt < 15e3,
     chats: listChats(),
+    memory: { text: readMemory(), curating: memo.curating, at: memo.at, error: memo.error },
     jev: { on: jevOn(), assessing: jev.assessing, judging: jev.judging, ms: jev.ms, down: S.scheduler === 'jev' && !jevOn() },
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
     members: NAMES.map(n => ({
@@ -448,7 +495,7 @@ const routes = {
   'POST /api/lower'({ agent }) { if (AGENTS[agent]) rt[agent].hand = null; },
   'POST /api/settings'(body) {
     for (const k of ['language', 'scheduler']) if (typeof body[k] === 'string' && body[k]) S[k] = body[k];
-    for (const k of ['autoStop', 'devil', 'circlePause']) if (typeof body[k] === 'boolean') S[k] = body[k];
+    for (const k of ['autoStop', 'devil', 'circlePause', 'memory']) if (typeof body[k] === 'boolean') S[k] = body[k];
     for (const k of ['turnCap', 'readSpeed', 'maxThinkers', 'convergeAt', 'noveltyMin']) if (+body[k] > 0) S[k] = +body[k];
     if (body.enabled) S.enabled = { ...S.enabled, ...body.enabled };
     // Only models a CLI listed (or its default) are accepted; the next turn uses it and resumes the same session.
@@ -467,11 +514,18 @@ const routes = {
     if (title) run('UPDATE chats SET title=? WHERE id=?', title, +id);
   },
   // Deletes the discussion with its messages, agent session records and decision log (CLI sessions stay in each CLI).
+  // The user can correct the memory directly; "curate" folds in new messages now.
+  'POST /api/memory'({ text }) {
+    const t = String(text ?? '').trim();
+    writeFileSync(MEMORY, t ? `${t}\n` : ''); memo.at = Date.now(); logDecision('memory-edit', null);
+  },
+  'POST /api/memory/curate'() { maybeCurate(true); },
   'POST /api/chat/delete'({ id }) {
     id = +id;
     if (!q1('SELECT 1 FROM chats WHERE id=?', id)) return;
     for (const t of ['messages', 'agent_sessions', 'decisions']) run(`DELETE FROM ${t} WHERE chat_id=?`, id);
     run('DELETE FROM chats WHERE id=?', id);
+    rmSync(archiveFile(id), { force: true }); writeIndex();
     ready = ready.filter(r => r.chat !== id);
     if (id === chatId) switchChat(q1('SELECT max(id) m FROM chats').m || Number(run(`INSERT INTO chats(title) VALUES('讨论 1')`).lastInsertRowid));
   },
@@ -533,4 +587,5 @@ http.createServer((req, res) => {
   });
 }).listen(PORT, HOST, () => console.log(`agent-chat on http://${HOST}:${PORT}`));
 
+for (const c of q('SELECT id FROM chats')) writeTranscript(c.id); // archive discussions from before the archive existed
 setInterval(pump, 1000); // thinking timers, reading countdown, typing hold expiry

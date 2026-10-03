@@ -186,6 +186,18 @@
   .metric .mv { width:34px; text-align:right; color:var(--ink); }
   .flags { display:flex; gap:var(--s4); margin-top:var(--s1); font-size:var(--t-xs); color:var(--ink-3); }
   .flags b { font-weight:500; color:var(--ink-2); }
+  /* memory about the user */
+  .memhead { display:flex; align-items:center; gap:var(--s2); }
+  .memhead .acts { margin-left:auto; display:flex; gap:2px; }
+  .memhead .acts button { height:22px; padding:0 7px; border-radius:var(--r-sm); font-size:var(--t-xs); color:var(--ink-3); }
+  .memhead .acts button:hover { background:var(--hover); color:var(--ink); }
+  .memlist { margin:0; padding:0 var(--s1); list-style:none; font-size:var(--t-sm); color:var(--ink-2); line-height:1.5; }
+  .memlist li { position:relative; padding:3px 0 3px 12px; }
+  .memlist li::before { content:""; position:absolute; left:2px; top:11px; width:4px; height:4px; border-radius:50%; background:var(--ink-3); }
+  .memlist li .src { color:var(--ink-3); font-size:var(--t-xs); }
+  .memempty { font-size:var(--t-xs); color:var(--ink-3); padding:0 var(--s1); line-height:1.5; }
+  #memedit { width:100%; min-height:160px; padding:var(--s2); border:none; border-radius:var(--r-sm); background:var(--surface);
+    box-shadow:0 0 0 1px var(--hair); font-size:var(--t-sm); line-height:1.55; resize:vertical; }
   .wrapnote { margin-top:var(--s2); font-size:var(--t-xs); color:var(--mod); }
   /* members */
   .mem { border-radius:var(--r-sm); }
@@ -278,6 +290,7 @@
 </main>
 <aside id="right">
   <section id="moderator"></section>
+  <section id="memory"></section>
   <section><div class="sect">成员</div><div id="members"></div></section>
   <details class="settings">
     <summary><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m9 5 7 7-7 7"/></svg>讨论设置</summary>
@@ -299,6 +312,7 @@
       <label class="switch" title="Jev 判断观点已收敛时，请一位成员总结后结束本轮">收敛后自动收尾 <input id="s-autoStop" type="checkbox"></label>
       <label title="收敛度达到这个值就收尾；“大体一致且只在附和/重复”也会收尾">收敛阈值（%） <input id="s-convergeAt" type="number" min="50" max="100" step="5"></label>
       <label class="switch" title="见仁见智的问题如果没人认真反对就达成一致，收尾前请一位成员唱反调（每轮一次）">太快一致时唱反调 <input id="s-devil" type="checkbox"></label>
+      <label class="switch" title="每轮结束后，把你说过的长期有用的信息整理进“关于你”，新讨论里的成员都会先读到">跨讨论记住我 <input id="s-memory" type="checkbox"></label>
       <label class="switch" title="同样的论点来回重复、没有进展时暂停，等你定方向（每轮一次）">原地打转时暂停 <input id="s-circlePause" type="checkbox"></label>
     </div>
   </details>
@@ -452,6 +466,35 @@ function renderModerator() {
   }
 }
 
+// ---------- memory about the user ----------
+// Facts the agents read at the start of each new discussion; the user can edit or refresh them.
+let memEditing = false;
+function renderMemory() {
+  if (memEditing) return; // don't overwrite the textarea while the user edits
+  const m = S.memory, items = (m.text || '').split('\n').map(l => l.replace(/^-\s*/, '').trim()).filter(Boolean);
+  const status = m.curating ? '<span class="pulse">整理中</span>'
+    : m.error ? `<span style="color:var(--danger)" title="${esc(m.error)}">整理失败，10 分钟后重试</span>`
+    : !S.settings.memory ? '已关闭' : '';
+  const SRC = /\s*[(（]\s*(#\d+(?:\s*[,，、]\s*#\d+)*)\s*[)）]\s*$/; // trailing "(#74, #80)" = where the fact came from
+  const item = t => { const src = t.match(SRC);
+    return `<li>${linkRefs(t.replace(SRC, ''))}${src ? ` <span class="src">${linkRefs(src[1])}</span>` : ''}</li>`; };
+  setHTML('#memory', `<div class="sect memhead">关于你 <span>${status}</span><span class="acts">
+      <button data-mem-curate title="把你最近说的话整理进来">整理</button><button data-mem-edit title="修改或删除记忆">编辑</button></span></div>
+    ${items.length ? `<ul class="memlist">${items.map(item).join('')}</ul>`
+      : '<div class="memempty">还没有关于你的记忆。每轮讨论安静下来后，会从你说过的话里整理出长期有用的信息，新讨论里的成员都会先读到。</div>'}`);
+}
+document.addEventListener('click', e => {
+  if (e.target.closest('[data-mem-curate]')) post('/api/memory/curate');
+  if (e.target.closest('[data-mem-edit]')) {
+    memEditing = true;
+    $('#memory').innerHTML = `<div class="sect memhead">关于你<span class="acts"><button data-mem-save>保存</button><button data-mem-cancel>取消</button></span></div>
+      <textarea id="memedit" placeholder="每行一条，比如：- 在家用 Proxmox 自托管服务"></textarea>`;
+    $('#memedit').value = S.memory.text || ''; $('#memedit').focus();
+  }
+  if (e.target.closest('[data-mem-save]')) { post('/api/memory', { text: $('#memedit').value }); memEditing = false; delete lastHTML['#memory']; }
+  if (e.target.closest('[data-mem-cancel]')) { memEditing = false; delete lastHTML['#memory']; renderMemory(); }
+});
+
 // ---------- members ----------
 const openLive = new Set(), openMem = new Set();
 function renderMembers() {
@@ -490,7 +533,7 @@ function renderMembers() {
 
 function renderState() {
   const now = Date.now() - clockSkew;
-  renderHistory(); renderModerator();
+  renderHistory(); renderModerator(); renderMemory();
   const cur = S.chats.find(c => c.id === S.chatId);
   $('#title').textContent = cur?.title || '';
   setHTML('#members', renderMembers()) && document.querySelectorAll('[data-live]').forEach(d => {
@@ -511,7 +554,7 @@ function renderState() {
   if (S.holding) info.push('你在输入，暂缓发布');
   else if (S.readLeft > 0 && S.queue.length) info.push(`阅读中，还剩 ${fmtSecs(S.readLeft)}`);
   $('#info').textContent = info.join('，');
-  for (const k of ['autoStop', 'devil', 'circlePause']) $('#s-' + k).checked = S.settings[k];
+  for (const k of ['autoStop', 'devil', 'circlePause', 'memory']) $('#s-' + k).checked = S.settings[k];
   for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin']) {
     const el = $('#s-' + k);
     if (document.activeElement !== el) el.value = S.settings[k];
@@ -569,7 +612,7 @@ document.addEventListener('change', e => {
   if (d.enable) post('/api/settings', { enabled: { [d.enable]: e.target.checked } });
   if (d.model) post('/api/settings', { models: { [d.model]: e.target.value } });
 });
-for (const k of ['autoStop', 'devil', 'circlePause']) $('#s-' + k).onchange = e => post('/api/settings', { [k]: e.target.checked });
+for (const k of ['autoStop', 'devil', 'circlePause', 'memory']) $('#s-' + k).onchange = e => post('/api/settings', { [k]: e.target.checked });
 for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin'])
   $('#s-' + k).addEventListener('change', e => post('/api/settings', { [k]: e.target.value }));
 
