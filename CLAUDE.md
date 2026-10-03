@@ -10,7 +10,8 @@ language follow the `language` setting (default 中文).
 
 ## Commands
 
-No npm dependencies, no build step. Node ≥ 22.5 (uses built-in `node:sqlite`).
+No npm dependencies, no build step (the UI's Markdown renderer, marked, is vendored as `app/vendor/marked.umd.js`;
+raw HTML in messages is escaped and only http(s)/mailto links are kept). Node ≥ 22.5 (uses built-in `node:sqlite`).
 
 - Run locally: `node app/server.mjs` → http://localhost:3517 (`PORT`, `HOST` env; `.claude/launch.json` has a preview config)
 - Syntax check: `node --check app/server.mjs` (and the other `.mjs` files)

@@ -126,9 +126,23 @@
     font-size:var(--t-xs); color:var(--ink-3); }
   .msg .meta:empty { display:none; }
   .msg .model { max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .msg .tx { font-size:var(--t-body); line-height:1.72; white-space:pre-wrap; overflow-wrap:break-word; color:var(--ink); max-width:44em; }
+  .msg .tx { font-size:var(--t-body); line-height:1.72; overflow-wrap:break-word; color:var(--ink); max-width:44em; }
   .msg .tx code { font:0.92em Consolas, "Cascadia Mono", monospace; background:var(--sunk); padding:1px 5px; border-radius:4px; }
-  .msg .tx b { font-weight:600; }
+  .msg .tx b, .msg .tx strong { font-weight:600; }
+  /* Markdown inside a message */
+  .msg .tx > :first-child { margin-top:0; }
+  .msg .tx > :last-child { margin-bottom:0; }
+  .msg .tx :is(p, ul, ol, pre, blockquote, table) { margin:0 0 .75em; }
+  .msg .tx :is(ul, ol) { padding-left:1.4em; }
+  .msg .tx li + li { margin-top:.2em; }
+  .msg .tx :is(h1, h2, h3, h4, h5, h6) { font-size:1.05em; font-weight:600; margin:1em 0 .4em; }
+  .msg .tx pre { padding:10px 12px; border-radius:var(--r-sm); background:var(--sunk); overflow:auto; line-height:1.5; }
+  .msg .tx pre code { padding:0; background:none; }
+  .msg .tx blockquote { padding-left:.8em; border-left:2px solid var(--hair); color:var(--ink-2); }
+  .msg .tx table { display:block; overflow:auto; border-collapse:collapse; font-size:var(--t-md); }
+  .msg .tx :is(th, td) { padding:4px 10px; border:1px solid var(--hair); text-align:left; }
+  .msg .tx hr { margin:1em 0; border:none; border-top:1px solid var(--hair); }
+  .msg .tx a:not(.ref) { color:var(--link); text-underline-offset:2px; }
   .msg.agent .tx { padding-left:var(--s3); border-left:2px solid color-mix(in srgb, var(--c) 35%, transparent); }
   /* hover-only reply action: positioned so it never takes layout space */
   .msg .rp { position:absolute; right:0; top:0; opacity:0; color:var(--ink-3); cursor:pointer; padding:1px 8px; border-radius:var(--r-sm);
@@ -431,6 +445,7 @@
     <div class="dialog-foot"><button type="button" id="member-cancel">取消</button><button type="submit">添加成员</button></div>
   </form>
 </dialog>
+<script src="/vendor/marked.umd.js"></script>
 <script>
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -457,6 +472,24 @@ function linkRefs(t) {
     .replace(/#(\d+)/g, (_, id) => ref(id));
 }
 
+// Messages are Markdown. Replies can quote web pages, so raw HTML is shown as text and only http(s)/mailto links survive.
+const safeHref = h => /^(https?:|mailto:)/i.test(h || '');
+window.marked?.use({ gfm: true, breaks: true, renderer: {
+  html: ({ text }) => esc(text),
+  link({ href, title, tokens }) { const t = this.parser.parseInline(tokens);
+    return safeHref(href) ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer"${title ? ` title="${esc(title)}"` : ''}>${t}</a>` : t; },
+  image: ({ href, text }) => safeHref(href) ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(text || href)}</a>` : esc(text),
+} });
+function md(t) {
+  if (!window.marked) return linkRefs(t);
+  const box = document.createElement('div'); box.innerHTML = marked.parse(t);
+  // #N outside code and links becomes a reference
+  const walk = document.createTreeWalker(box, NodeFilter.SHOW_TEXT), hits = [];
+  for (let n; (n = walk.nextNode());) if (/#\d+/.test(n.data) && !n.parentElement.closest('code,pre,a')) hits.push(n);
+  for (const n of hits) { const s = document.createElement('span'); s.innerHTML = esc(n.data).replace(/#(\d+)/g, (_, id) => ref(id)); n.replaceWith(...s.childNodes); }
+  return box.innerHTML;
+}
+
 function renderMsg(m) {
   const el = document.createElement('div');
   el.className = `msg ${m.kind}`; el.id = 'm' + m.id;
@@ -477,7 +510,7 @@ function renderMsg(m) {
   if (m.role === 'devil') hd.push(`<span class="tag devil" title="主持人请它站到对立面">唱反调</span>`);
   if (m.role === 'summary') hd.push(`<span class="tag summary">总结</span>`);
   if (m.turn_no) hd.push(`<span title="本讨论中的第 ${m.turn_no} 次发言">第 ${m.turn_no} 次</span>`);
-  el.innerHTML = `${gut}<div><div class="meta">${hd.join('')}</div><div class="tx">${linkRefs(m.text)}</div></div>`
+  el.innerHTML = `${gut}<div><div class="meta">${hd.join('')}</div><div class="tx">${md(m.text)}</div></div>`
     + `<span class="rp" data-reply="${m.id}" title="引用回复 #${m.id}">回复</span>`;
   return el;
 }

@@ -764,6 +764,10 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(readFileSync(join(ROOT, 'app/index.html')));
   }
+  if (key === 'GET /vendor/marked.umd.js') {
+    res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'max-age=86400' });
+    return res.end(readFileSync(join(ROOT, 'app/vendor/marked.umd.js')));
+  }
   if (key === 'GET /events') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
     clients.add(res); req.on('close', () => clients.delete(res));
