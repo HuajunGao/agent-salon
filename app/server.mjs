@@ -8,6 +8,7 @@ import { AGENTS, runTurn, listModels, runAs } from './agents.mjs';
 import { judge, novelty, classifyMode } from './moderator.mjs';
 import { curate } from './memory.mjs';
 import { validateMember, memberMentions } from './members.mjs';
+import { speechOn, loadCatalog, ttsModels, speakable, synth, transcribe, DEFAULT_TTS } from './speech.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DATA = join(ROOT, 'data'), WORK = join(ROOT, 'workspace');
@@ -153,6 +154,10 @@ const readMemory = () => (existsSync(MEMORY) ? readFileSync(MEMORY, 'utf8') : ''
 const rt = Object.fromEntries(NAMES.map(n => [n, { status: 'idle', started: 0, live: '', hand: null, note: '', error: '' }]));
 let ready = [];          // finished replies waiting to be published: {chat, agent, text, basedOn, ms, hand, turnNo}
 let readUntil = 0, typingAt = 0;
+// Read-aloud: a browser that is playing a reply holds the publish queue (like typing) so the next one waits for it.
+let speakingAt = 0, ttsActiveAt = 0;
+const voiceOf = a => S.ttsVoices?.[a] || DEFAULT_TTS;
+const spoken = (a, text) => speakable(`${aliasOf(a)}：${text}`);
 let mod = null;                         // latest Jev judgment this round: {convergence, stalling, msgId}
 let wrapRound = 0;                      // round (= last user message id) already wrapped up
 // Moderator activity. devilAt / circledAt: the round in which devil's advocate / the circling pause already happened.
@@ -435,6 +440,8 @@ async function startTurn(a, retried = false) {
       logDecision('pass', a, { based_on: basedOn, latency_ms: res.ms });
     } else {
       ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, model: model || 'default', role, done: Date.now() });
+      // A browser is reading aloud: synthesize while the reply waits in the queue, so it plays without delay.
+      if (speechOn() && Date.now() - ttsActiveAt < 120e3) synth(spoken(a, text), voiceOf(a)).catch(() => {});
       logDecision('ready', a, { based_on: basedOn, latency_ms: res.ms, detail: { hand, chars: text.length } });
     }
   }
@@ -455,7 +462,7 @@ function publish(force = false) {
   // Replies finished for a chat the user isn't looking at go straight in.
   for (const r of ready.filter(r => r.chat !== chatId)) if (q1('SELECT 1 FROM chats WHERE id=?', r.chat)) publishOne(r);
   ready = ready.filter(r => r.chat === chatId);
-  if (!force && (Date.now() < readUntil || Date.now() - typingAt < 15e3 || paused)) return;
+  if (!force && (Date.now() < readUntil || Date.now() - typingAt < 15e3 || Date.now() - speakingAt < 20e3 || paused)) return;
   const r = ready.shift();
   if (!r) return;
   const m = publishOne(r);
@@ -557,7 +564,8 @@ function state() {
   const now = Date.now();
   return {
     type: 'state', now, chatId, paused, mod, wrapped: !!wrapRound && wrapRound === lastUserId(chatId), settings: S, readLeft: Math.max(0, readUntil - now),
-    holding: now - typingAt < 15e3,
+    holding: now - typingAt < 15e3, speaking: now - speakingAt < 20e3,
+    speech: { on: speechOn(), models: ttsModels(), defaultVoice: DEFAULT_TTS },
     chats: listChats(),
     sandboxed: !!RUNAS,
     discussionMode: { ...chatMode(chatId), pending: modePending === chatId },
@@ -659,6 +667,7 @@ const routes = {
     if (cm.mode === 'auto' && !cm.auto) classifyChat(chatId); // first question of an Auto discussion
   },
   'POST /api/typing'({ typing }) { typingAt = typing ? Date.now() : 0; },
+  'POST /api/speaking'({ speaking }) { speakingAt = speaking ? Date.now() : 0; ttsActiveAt = Date.now(); },
   'POST /api/next'() { readUntil = 0; publish(true); },
   'POST /api/pause'({ paused: p }) { paused = !!p; jev.circlePaused = false; run('UPDATE chats SET paused=? WHERE id=?', +paused, chatId); },
   'POST /api/stop'() {
@@ -673,6 +682,11 @@ const routes = {
     for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec']) if (typeof body[k] === 'boolean') S[k] = body[k];
     for (const k of ['turnCap', 'readSpeed', 'maxThinkers', 'convergeAt', 'noveltyMin']) if (+body[k] > 0) S[k] = +body[k];
     if (body.enabled) S.enabled = { ...S.enabled, ...body.enabled };
+    // Read-aloud voice per member: a TTS model id from the gateway catalog, '' = default.
+    for (const [a, v] of Object.entries(body.ttsVoices || {}))
+      if (NAMES.includes(a) && (v === '' || ttsModels().some(t => t.id === v))) {
+        S.ttsVoices = { ...S.ttsVoices }; if (v) S.ttsVoices[a] = v; else delete S.ttsVoices[a];
+      }
     // Only models a CLI listed (or its default) are accepted; the next turn uses it and resumes the same session.
     for (const [a, m] of Object.entries(body.models || {}))
       if (NAMES.includes(a) && typeof m === 'string' && (m === '' || (m.length <= 200 && /^\S+$/.test(m)))) {
@@ -755,6 +769,28 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify(getRoutes[url.pathname](url.searchParams)));
   }
+  // Read-aloud audio for one agent message (proxied from the LAN speech gateway). Falls back to Azure if the
+  // chosen voice fails (OmniVoice needs the GPU and may be unloaded).
+  if (key === 'GET /api/tts') {
+    const m = q1(`SELECT sender, text FROM messages WHERE id=? AND kind='agent'`, +url.searchParams.get('id'));
+    if (!speechOn() || !m || !memberConfigs[m.sender]) { res.writeHead(404); return res.end(); }
+    ttsActiveAt = Date.now();
+    const text = spoken(m.sender, m.text);
+    synth(text, voiceOf(m.sender)).catch(() => synth(text, 'azure:zh-CN-XiaoxiaoMultilingualNeural'))
+      .then(a => { res.writeHead(200, { 'content-type': a.type, 'cache-control': 'no-store' }); res.end(a.buf); })
+      .catch(e => { res.writeHead(502, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: e.message })); });
+    return;
+  }
+  // Voice input: the browser posts 16 kHz mono WAV; the gateway's Azure STT returns the text.
+  if (key === 'POST /api/stt') {
+    if (!speechOn()) { res.writeHead(404); return res.end(); }
+    const chunks = []; let size = 0;
+    req.on('data', d => { size += d.length; if (size > 10e6) req.destroy(); else chunks.push(d); });
+    req.on('end', () => transcribe(Buffer.concat(chunks))
+      .then(text => { res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ text })); })
+      .catch(e => { res.writeHead(502, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: e.message })); }));
+    return;
+  }
   if (key === 'GET /api/export') { // markdown download of one discussion
     const c = q1('SELECT * FROM chats WHERE id=?', +url.searchParams.get('id'));
     if (!c) { res.writeHead(404); return res.end(); }
@@ -774,5 +810,6 @@ http.createServer((req, res) => {
   });
 }).listen(PORT, HOST, () => console.log(`agent-chat on http://${HOST}:${PORT}`));
 
+loadCatalog().then(() => send(init())); // the gateway's voices, for the per-member voice picker
 for (const c of q('SELECT id FROM chats')) writeTranscript(c.id); // archive discussions from before the archive existed
 setInterval(pump, 1000); // thinking timers, reading countdown, typing hold expiry

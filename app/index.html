@@ -173,6 +173,13 @@
   #ats .chip { height:24px; padding:0 8px; font-size:var(--t-xs); background:transparent; }
   #ats .chip:hover { background:var(--hover); }
   .hint { margin-left:auto; margin-right:var(--s2); font-size:var(--t-xs); color:var(--ink-3); white-space:nowrap; }
+  /* read-aloud and voice input */
+  #tts.on { color:var(--mod); background:var(--mod-soft); }
+  #tts:not(.on) .wave { opacity:.35; }
+  .msg.speaking .tx { border-left-color:var(--mod) !important; }
+  .msg.speaking .who::after { content:"  朗读中"; font-weight:400; font-size:var(--t-xs); color:var(--mod); }
+  #mic.rec { color:var(--danger); background:var(--danger-soft); animation:pulse 1.2s ease-in-out infinite; }
+  #mic:disabled { opacity:.4; cursor:not-allowed; }
   #send { width:30px; height:30px; border-radius:9px; display:grid; place-items:center; background:var(--ink); color:#fff; flex:none; }
   #send:hover { background:#000; }
 
@@ -328,6 +335,7 @@
     <button class="icon showhist" data-new-chat title="新讨论" aria-label="新讨论"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>
     <span class="title" id="title" title="点击重命名"></span>
     <select id="mode" class="modesel" title="讨论模式：自动由 Jev 按问题判断，也可以随时指定" aria-label="讨论模式"></select>
+    <button class="icon" id="tts" hidden title="朗读新发言（局域网语音服务）；朗读时暂缓发布下一条" aria-label="朗读" aria-pressed="false"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path class="wave" d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg></button>
     <div class="controls">
       <button id="pause"></button>
       <button id="stop" title="停止：暂停并取消所有举手" aria-label="停止"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg></button>
@@ -345,6 +353,7 @@
       <div class="crow">
         <span id="ats"></span>
         <span class="hint">Enter 发送，Shift+Enter 换行，输入时暂缓发布</span>
+        <button class="icon" id="mic" hidden title="语音输入：点一下开始说话，再点一下结束" aria-label="语音输入"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
         <button id="send" title="发送" aria-label="发送"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
       </div>
     </div>
@@ -618,6 +627,7 @@ function renderMembers() {
       <div class="mdetail">
         <div class="member-actions"><button class="floor-button" data-floor="${m.name}" title="让它马上发言">请发言</button>${m.hand && m.status !== 'thinking' ? `<button data-lower="${m.name}">放下手</button>` : ''}${m.configurable ? `<button data-member-edit="${m.name}">配置成员</button>` : ''}</div>
         <select data-model="${m.name}" title="模型（下一轮生效，会话保留）">${modelOptions(m)}<option value="__custom__">自定义模型…</option></select>
+        ${S.speech?.on ? `<select data-voice="${m.name}" title="朗读声音（OmniVoice 只有一个声音；想区分成员可选 Azure 的声音）">${voiceOptions(m.name)}</select>` : ''}
         <div class="kv">
           <label class="switch"><input type="checkbox" data-enable="${m.name}" ${m.enabled ? 'checked' : ''}>参与</label>
           <span>本轮 ${m.sinceUser}/${S.settings.turnCap}</span><span>共 ${m.turns} 次</span>
@@ -634,7 +644,7 @@ function renderMembers() {
 function renderState() {
   const now = Date.now() - clockSkew;
   if (!messages.length) setHTML('#msgs', emptyState());
-  renderHistory(); renderModerator(); renderMemory(); renderMode();
+  renderHistory(); renderModerator(); renderMemory(); renderMode(); renderTts();
   $('#s-exec').disabled = !S.sandboxed; $('#execrow').style.opacity = S.sandboxed ? '' : '.45';
   const cur = S.chats.find(c => c.id === S.chatId);
   $('#title').textContent = cur?.title || '';
@@ -677,6 +687,7 @@ es.onmessage = e => {
     const box = $('#msgs'), atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
     box.appendChild(renderMsg(ev.msg));
     if (atEnd || ev.msg.kind === 'user') box.scrollTop = box.scrollHeight;
+    if (ev.msg.kind === 'agent' && tts.on) { tts.queue.push(ev.msg.id); playNext(); } // read new replies aloud
   }
 };
 
@@ -808,6 +819,7 @@ memberForm.onsubmit = async e => {
 document.addEventListener('change', e => {
   const d = e.target.dataset;
   if (d.enable) post('/api/settings', { enabled: { [d.enable]: e.target.checked } });
+  if (d.voice) post('/api/settings', { ttsVoices: { [d.voice]: e.target.value } });
   if (d.model) {
     let value = e.target.value;
     if (value === '__custom__') { value = prompt('填写真实模型 ID（OpenCode 使用 provider/model）', member(d.model)?.model || '');
@@ -879,6 +891,103 @@ document.addEventListener('click', e => {
 document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); toggleHist(); }
 });
+
+// ---------- read-aloud (TTS) and voice input (STT) via the server's LAN speech gateway ----------
+function voiceOptions(name) {
+  const cur = S.settings.ttsVoices?.[name] || '';
+  return [{ id: '', label: `默认声音（${S.speech.defaultVoice}）` }, ...S.speech.models.filter(t => t.id !== S.speech.defaultVoice)]
+    .map(t => `<option value="${esc(t.id)}" ${t.id === cur ? 'selected' : ''}>${esc(t.label)}</option>`).join('');
+}
+
+// Each browser decides for itself whether to read aloud. While it plays (or still has replies to play) it holds the
+// server's publish queue, so the next reply appears when the current one has been heard.
+const tts = { on: localStorage.tts === '1', queue: [], audio: null, current: null, ping: null };
+function setSpeaking(active) {
+  clearInterval(tts.ping); tts.ping = null;
+  post('/api/speaking', { speaking: active });
+  if (active) tts.ping = setInterval(() => post('/api/speaking', { speaking: true }), 5000);
+}
+function markSpeaking(id) {
+  document.querySelectorAll('.msg.speaking').forEach(el => el.classList.remove('speaking'));
+  if (id) $('#m' + id)?.classList.add('speaking');
+}
+async function playNext() {
+  if (tts.current || !tts.on) return;
+  const id = tts.queue.shift();
+  if (!id) { markSpeaking(null); return setSpeaking(false); }
+  tts.current = id; markSpeaking(id);
+  if (!tts.ping) setSpeaking(true);
+  try {
+    const r = await fetch('/api/tts?id=' + id);
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
+    const url = URL.createObjectURL(await r.blob());
+    tts.audio = new Audio(url);
+    await new Promise(res => { tts.audio.onended = tts.audio.onerror = tts.audio.onpause = res; tts.audio.play().catch(res); });
+    URL.revokeObjectURL(url);
+  } catch (err) { console.warn('朗读失败', id, err); }
+  tts.audio = null; tts.current = null;
+  playNext();
+}
+function stopSpeaking() {
+  tts.queue = [];
+  if (tts.audio) tts.audio.pause();
+  markSpeaking(null); setSpeaking(false);
+}
+function renderTts() {
+  const b = $('#tts');
+  b.hidden = !S.speech?.on;
+  b.classList.toggle('on', tts.on); b.setAttribute('aria-pressed', tts.on);
+  b.title = tts.on ? '正在朗读新发言（点击关闭）' : '朗读新发言（局域网语音服务）；朗读时暂缓发布下一条';
+  const mic = $('#mic');
+  mic.hidden = !S.speech?.on;
+  // Browsers only allow the microphone on HTTPS or localhost.
+  mic.disabled = !window.isSecureContext || !navigator.mediaDevices;
+  if (mic.disabled) mic.title = '语音输入需要 HTTPS 或 localhost 访问：浏览器不允许在普通 http 局域网地址上使用麦克风';
+}
+$('#tts').onclick = () => {
+  tts.on = !tts.on; localStorage.tts = tts.on ? '1' : '0';
+  if (!tts.on) stopSpeaking();
+  renderTts();
+};
+// "Next" also skips the reply being read.
+$('#next').addEventListener('click', () => { if (tts.audio) tts.audio.pause(); });
+
+// Voice input: record, convert to 16 kHz mono WAV in the browser (Azure STT rejects webm/ogg), transcribe on the server.
+const rec = { media: null, chunks: [] };
+async function toWav16k(blob) {
+  const decoded = await new AudioContext().decodeAudioData(await blob.arrayBuffer());
+  const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+  const src = off.createBufferSource(); src.buffer = decoded; src.connect(off.destination); src.start();
+  const pcm = (await off.startRendering()).getChannelData(0);
+  const buf = new DataView(new ArrayBuffer(44 + pcm.length * 2));
+  const str = (o, s) => [...s].forEach((c, i) => buf.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); buf.setUint32(4, 36 + pcm.length * 2, true); str(8, 'WAVEfmt ');
+  buf.setUint32(16, 16, true); buf.setUint16(20, 1, true); buf.setUint16(22, 1, true);
+  buf.setUint32(24, 16000, true); buf.setUint32(28, 32000, true); buf.setUint16(32, 2, true); buf.setUint16(34, 16, true);
+  str(36, 'data'); buf.setUint32(40, pcm.length * 2, true);
+  pcm.forEach((v, i) => buf.setInt16(44 + i * 2, Math.max(-1, Math.min(1, v)) * 0x7fff, true));
+  return new Blob([buf], { type: 'audio/wav' });
+}
+$('#mic').onclick = async () => {
+  const mic = $('#mic');
+  if (rec.media) { rec.media.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    rec.chunks = []; rec.media = new MediaRecorder(stream);
+    rec.media.ondataavailable = e => rec.chunks.push(e.data);
+    rec.media.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      mic.classList.remove('rec'); mic.disabled = true; rec.media = null;
+      try {
+        const r = await fetch('/api/stt', { method: 'POST', body: await toWav16k(new Blob(rec.chunks)) });
+        const data = await r.json(); if (!r.ok) throw new Error(data.error || r.status);
+        const i = $('#input'); i.value = (i.value ? i.value + ' ' : '') + data.text; i.focus(); grow(); typing();
+      } catch (err) { alert('语音识别失败：' + err.message); }
+      mic.disabled = false;
+    };
+    rec.media.start(); mic.classList.add('rec'); typing();
+  } catch (err) { alert('无法使用麦克风：' + err.message); }
+};
 </script>
 </body>
 </html>
