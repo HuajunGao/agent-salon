@@ -77,15 +77,19 @@ function glmSettingsFile() {
 
 // Plain OpenCode: --pure drops plugins; this switches off every MCP server from the user's global config for
 // agent-chat's runs only (Playwright via npx alone added ~5 s per turn). Built-in webfetch and skills stay.
+// OpenCode 2's websearch asks which search provider to use on first use; a headless run can't answer, so every
+// search failed with "Web search cancelled". Unless the user's config picks one, use its keyless rotation.
 let ocNoMcp;
 function opencodeNoMcp() {
   if (ocNoMcp != null) return ocNoMcp;
-  let names = [];
+  let names = [], websearch = false;
   for (const f of ['opencode.jsonc', 'opencode.json']) try {
-    const text = readFileSync(join(H, '.config/opencode', f), 'utf8').replace(/^\s*\/\/.*$/gm, '');
-    names.push(...Object.keys(JSON.parse(text).mcp || {}));
+    const cfg = JSON.parse(readFileSync(join(H, '.config/opencode', f), 'utf8').replace(/^\s*\/\/.*$/gm, ''));
+    names.push(...Object.keys(cfg.mcp || {}));
+    websearch ||= !!cfg.websearch;
   } catch {}
-  return (ocNoMcp = JSON.stringify({ mcp: Object.fromEntries(names.map(n => [n, { type: 'local', command: ['none'], enabled: false }])) }));
+  return (ocNoMcp = JSON.stringify({ mcp: Object.fromEntries(names.map(n => [n, { type: 'local', command: ['none'], enabled: false }])),
+    ...(!websearch && opencodeV2() && { websearch: { provider: 'random' } }) }));
 }
 
 const CLAUDE_TOOLS = exec => ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', ...(exec ? ['Bash', 'Edit', 'Write'] : [])];
