@@ -8,12 +8,13 @@
   /* ---------- design tokens ---------- */
   :root {
     /* surfaces */
-    --canvas:#FBFBFA; --side:#F4F4F2; --surface:#FFFFFF; --sunk:#EFEFEC;
-    --hover:rgba(15,17,20,.045); --selected:rgba(15,17,20,.07); --hair:rgba(15,17,20,.075);
+    /* a transcript on paper, side panels are the wings of the stage */
+    --canvas:#F6F6F2; --side:#ECECE5; --surface:#FFFFFF; --sunk:#E9E9E2;
+    --hover:rgba(34,37,42,.05); --selected:rgba(34,37,42,.085); --hair:rgba(34,37,42,.1);
     /* ink */
-    --ink:#1C1D1F; --ink-2:#5E6167; --ink-3:#9A9DA3;
+    --ink:#22252A; --ink-2:#5C6068; --ink-3:#8F949C;
     /* roles */
-    --link:#3E5FC4; --mod:#2F7D6D; --mod-soft:rgba(47,125,109,.09); --warn:#9A5B00; --warn-soft:#FBF1DF;
+    --link:#3E5FC4; --mod:#2F7D6D; --mod-soft:rgba(47,125,109,.09); --warn:#9A5B00; --warn-soft:#F6EDDA;
     --danger:#B4372F; --danger-soft:#FBEAE8;
     /* type scale */
     --t-xs:11.5px; --t-sm:12.5px; --t-md:13.5px; --t-body:14.5px; --t-lg:16px; --t-xl:22px;
@@ -24,6 +25,7 @@
     --shadow:0 1px 2px rgba(15,17,20,.05), 0 6px 24px -8px rgba(15,17,20,.10);
     --font:"Segoe UI Variable Text","Segoe UI","PingFang SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;
     --font-display:"Segoe UI Variable Display","Segoe UI","PingFang SC","Microsoft YaHei UI",system-ui,sans-serif;
+    --gut:92px; /* the speaker column */
   }
   * { box-sizing:border-box; }
   html, body { height:100%; }
@@ -111,31 +113,41 @@
   .convline b { position:absolute; top:-3px; width:2px; height:8px; border-radius:1px; background:var(--mod); opacity:.5; }
   .convline.off i, .convline.off b { display:none; }
 
-  #msgs { flex:1; overflow:auto; padding:var(--s6) max(var(--s5), calc((100% - 760px) / 2)) 180px; scroll-behavior:smooth; }
-  .msg { position:relative; margin:0 0 var(--s5); }
-  .msg .hd { display:flex; align-items:center; gap:var(--s2); min-height:22px; font-size:var(--t-sm); color:var(--ink-3); flex-wrap:wrap; }
-  .msg .who { color:var(--ink); font-weight:600; font-size:var(--t-md); }
-  .msg .num { color:var(--ink-2); font-weight:500; font-size:var(--t-sm); }
+  #msgs { flex:1; overflow:auto; padding:var(--s6) max(var(--s5), calc((100% - 840px) / 2)) 180px; scroll-behavior:smooth; }
+  /* a script: the speaker hangs in the left column, what they say runs in the right one */
+  .msg { position:relative; margin:0 0 26px; }
+  .msg.agent, .msg.user { display:grid; grid-template-columns:var(--gut) minmax(0, 1fr); column-gap:22px; }
+  .msg .gut { display:flex; flex-direction:column; align-items:flex-end; text-align:right; padding-top:3px; min-width:0; }
+  .msg .who { font-weight:600; font-size:var(--t-md); line-height:1.35; color:var(--c, var(--ink)); max-width:100%; overflow-wrap:anywhere; }
+  .msg .gut small { font-size:var(--t-xs); line-height:1.5; color:var(--ink-3); }
+  .msg .num { color:var(--ink-2); }
   .msg.flash .num { color:var(--link); }
-  .msg .model { color:var(--ink-3); max-width:150px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .msg .tx { font-size:var(--t-body); line-height:1.72; white-space:pre-wrap; word-wrap:break-word; color:var(--ink); }
-  .msg.agent .tx { margin:6px 0 0 30px; padding-left:var(--s3); border-left:2px solid color-mix(in srgb, var(--c) 35%, transparent); }
+  .msg .meta { display:flex; align-items:center; gap:4px 10px; flex-wrap:wrap; min-height:20px; margin-bottom:2px; padding-right:48px;
+    font-size:var(--t-xs); color:var(--ink-3); }
+  .msg .meta:empty { display:none; }
+  .msg .model { max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .msg .tx { font-size:var(--t-body); line-height:1.72; white-space:pre-wrap; overflow-wrap:break-word; color:var(--ink); max-width:44em; }
   .msg .tx code { font:0.92em Consolas, "Cascadia Mono", monospace; background:var(--sunk); padding:1px 5px; border-radius:4px; }
   .msg .tx b { font-weight:600; }
+  .msg.agent .tx { padding-left:var(--s3); border-left:2px solid color-mix(in srgb, var(--c) 35%, transparent); }
   /* hover-only reply action: positioned so it never takes layout space */
   .msg .rp { position:absolute; right:0; top:0; opacity:0; color:var(--ink-3); cursor:pointer; padding:1px 8px; border-radius:var(--r-sm);
-    background:var(--canvas); transition:opacity .15s; }
+    font-size:var(--t-xs); background:var(--canvas); transition:opacity .15s; }
   .msg:hover .rp, .msg .rp:focus-visible { opacity:1; }
   .msg .rp:hover { background:var(--sunk); color:var(--ink); }
-  .msg.user { display:flex; flex-direction:column; align-items:flex-end; }
-  .msg.user .hd { justify-content:flex-end; }
-  .msg.user .rp { right:auto; left:0; }
-  .msg.user .tx { max-width:85%; margin-top:4px; padding:10px 14px; background:var(--sunk); border-radius:var(--r-lg) var(--r-lg) 4px var(--r-lg); }
+  /* your own lines sit on a band, so you can find them when scanning back */
+  .msg.user { padding:12px 0; background:linear-gradient(to right, transparent, var(--sunk) 6%, var(--sunk) 94%, transparent); }
+  .msg.user .rp { background:var(--sunk); }
   .msg.moderator, .msg.system { display:flex; align-items:center; gap:var(--s3); margin:var(--s1) 0 var(--s5); font-size:var(--t-sm); color:var(--mod); text-align:center; }
   .msg.moderator::before, .msg.moderator::after, .msg.system::before, .msg.system::after { content:""; flex:1; min-width:24px; height:1px; background:var(--hair); }
   .msg.moderator span, .msg.system span { max-width:80%; line-height:1.5; }
   .msg.system { color:var(--danger); }
   .msg.flash .tx, .msg.flash > span { animation:flash 1.6s ease; }
+  #msgs { container-type:inline-size; }
+  @container (max-width: 560px) {
+    .msg.agent, .msg.user { grid-template-columns:minmax(0, 1fr); }
+    .msg .gut { flex-direction:row; align-items:baseline; gap:8px; }
+  }
   @keyframes flash { 0%, 40% { background-color:color-mix(in srgb, var(--link) 12%, transparent); } }
   .tag { display:inline-flex; align-items:center; gap:3px; height:19px; padding:0 7px; border-radius:999px; font-size:var(--t-xs);
     color:var(--ink-2); background:var(--hover); white-space:nowrap; }
@@ -177,7 +189,7 @@
   #tts.on { color:var(--mod); background:var(--mod-soft); }
   #tts:not(.on) .wave { opacity:.35; }
   .msg.speaking .tx { border-left-color:var(--mod) !important; }
-  .msg.speaking .who::after { content:"  朗读中"; font-weight:400; font-size:var(--t-xs); color:var(--mod); }
+  .msg.speaking .gut::after { content:"朗读中"; font-size:var(--t-xs); color:var(--mod); }
   #mic.rec { color:var(--danger); background:var(--danger-soft); animation:pulse 1.2s ease-in-out infinite; }
   #mic:disabled { opacity:.4; cursor:not-allowed; }
   #send { width:30px; height:30px; border-radius:9px; display:grid; place-items:center; background:var(--ink); color:#fff; flex:none; }
@@ -454,20 +466,19 @@ function renderMsg(m) {
   const talk = messages.filter(x => x.kind === 'user' || x.kind === 'agent');
   const idx = talk.findIndex(x => x.id === m.id);
   const between = m.based_on != null ? talk.slice(0, idx).filter(x => x.id > m.based_on) : [];
+  const gut = `<div class="gut"><span class="who">${esc(label(m.sender))}</span>
+    <small><span class="num" title="消息编号，正文里的 #${m.id} 指的就是这条">#${m.id}</span> ${hm(m.created_at)}</small></div>`;
   const hd = [];
-  const num = `<span class="num" title="消息编号，正文里的 #${m.id} 指的就是这条">#${m.id}</span>`;
-  if (m.kind === 'agent') hd.push(av(m.sender), `<span class="who">${esc(label(m.sender))}</span>`, num, m.model ? `<span class="model" title="${esc(m.model)}">${esc(m.model)}</span>` : '');
-  else hd.push(num, `<span class="who" style="font-weight:500;color:var(--ink-2)">我</span>`);
-  hd.push(`<span>${hm(m.created_at)}</span>`);
-  if (m.latency_ms) hd.push(`<span title="思考用时">${Math.round(m.latency_ms / 1000)}s</span>`);
+  if (m.model) hd.push(`<span class="model" title="${esc(m.model)}">${esc(m.model)}</span>`);
+  if (m.latency_ms) hd.push(`<span title="思考用时">想了 ${Math.round(m.latency_ms / 1000)}s</span>`);
   if (m.reply_to) hd.push(`<span class="tag">回复 ${ref(m.reply_to)}</span>`);
   if (m.based_on != null && between.length) hd.push(`<span class="tag" title="开始思考时看到的最后一条是 #${m.based_on}，之后又有 ${between.length} 条">基于 ${ref(m.based_on)} +${between.length}</span>`);
   if (m.stale) hd.push(`<span class="tag warn" title="这条回复写于你的新消息之前">写于你的新消息之前</span>`);
   if (m.role === 'devil') hd.push(`<span class="tag devil" title="主持人请它站到对立面">唱反调</span>`);
   if (m.role === 'summary') hd.push(`<span class="tag summary">总结</span>`);
   if (m.turn_no) hd.push(`<span title="本讨论中的第 ${m.turn_no} 次发言">第 ${m.turn_no} 次</span>`);
-  hd.push(`<span class="rp" data-reply="${m.id}" title="引用回复 #${m.id}">回复</span>`);
-  el.innerHTML = `<div class="hd">${hd.join('')}</div><div class="tx">${linkRefs(m.text)}</div>`;
+  el.innerHTML = `${gut}<div><div class="meta">${hd.join('')}</div><div class="tx">${linkRefs(m.text)}</div></div>`
+    + `<span class="rp" data-reply="${m.id}" title="引用回复 #${m.id}">回复</span>`;
   return el;
 }
 
