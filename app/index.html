@@ -107,6 +107,8 @@
   .msg { position:relative; margin:0 0 var(--s5); }
   .msg .hd { display:flex; align-items:center; gap:var(--s2); min-height:22px; font-size:var(--t-sm); color:var(--ink-3); flex-wrap:wrap; }
   .msg .who { color:var(--ink); font-weight:600; font-size:var(--t-md); }
+  .msg .num { color:var(--ink-2); font-weight:500; font-size:var(--t-sm); }
+  .msg.flash .num { color:var(--link); }
   .msg .model { color:var(--ink-3); max-width:150px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .msg .tx { font-size:var(--t-body); line-height:1.72; white-space:pre-wrap; word-wrap:break-word; color:var(--ink); }
   .msg.agent .tx { margin:6px 0 0 30px; padding-left:var(--s3); border-left:2px solid color-mix(in srgb, var(--c) 35%, transparent); }
@@ -320,9 +322,13 @@ const when = s => { if (!s) return ''; const d = utc(s), now = new Date();
 const pct = x => `${Math.round(x * 100)}%`;
 const mini = (v, tick, c) => `<span class="mini" ${c ? `style="--c:${c}"` : ''}><i style="width:${v == null ? 0 : v * 100}%"></i>${tick != null ? `<b style="left:${tick}%"></b>` : ''}</span>`;
 
+// Hovering a #N reference previews that message, so numbers can be followed without clicking.
+const refTitle = id => { const m = messages.find(x => x.id === +id);
+  return m ? esc(`#${id} ${label(m.sender)}：${m.text.replace(/\s+/g, ' ').slice(0, 90)}${m.text.length > 90 ? '…' : ''}`) : `#${id}`; };
+const ref = id => `<a class="ref" data-id="${id}" title="${refTitle(id)}">#${id}</a>`;
 function linkRefs(t) {
   return esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`\n]+)`/g, '<code>$1</code>')
-    .replace(/#(\d+)/g, '<a class="ref" data-id="$1">#$1</a>');
+    .replace(/#(\d+)/g, (_, id) => ref(id));
 }
 
 function renderMsg(m) {
@@ -335,12 +341,13 @@ function renderMsg(m) {
   const idx = talk.findIndex(x => x.id === m.id);
   const between = m.based_on != null ? talk.slice(0, idx).filter(x => x.id > m.based_on) : [];
   const hd = [];
-  if (m.kind === 'agent') hd.push(av(m.sender), `<span class="who">${esc(label(m.sender))}</span>`, m.model ? `<span class="model" title="${esc(m.model)}">${esc(m.model)}</span>` : '');
-  else hd.push(`<span class="who" style="font-weight:500;color:var(--ink-2)">我</span>`);
-  hd.push(`<span title="#${m.id}">${hm(m.created_at)}</span>`);
+  const num = `<span class="num" title="消息编号，正文里的 #${m.id} 指的就是这条">#${m.id}</span>`;
+  if (m.kind === 'agent') hd.push(av(m.sender), `<span class="who">${esc(label(m.sender))}</span>`, num, m.model ? `<span class="model" title="${esc(m.model)}">${esc(m.model)}</span>` : '');
+  else hd.push(num, `<span class="who" style="font-weight:500;color:var(--ink-2)">我</span>`);
+  hd.push(`<span>${hm(m.created_at)}</span>`);
   if (m.latency_ms) hd.push(`<span title="思考用时">${Math.round(m.latency_ms / 1000)}s</span>`);
-  if (m.reply_to) hd.push(`<span class="tag">回复 <a class="ref" data-id="${m.reply_to}">#${m.reply_to}</a></span>`);
-  if (m.based_on != null && between.length) hd.push(`<span class="tag" title="开始思考时看到的最后一条是 #${m.based_on}，之后又有 ${between.length} 条">基于 <a class="ref" data-id="${m.based_on}">#${m.based_on}</a> +${between.length}</span>`);
+  if (m.reply_to) hd.push(`<span class="tag">回复 ${ref(m.reply_to)}</span>`);
+  if (m.based_on != null && between.length) hd.push(`<span class="tag" title="开始思考时看到的最后一条是 #${m.based_on}，之后又有 ${between.length} 条">基于 ${ref(m.based_on)} +${between.length}</span>`);
   if (m.stale) hd.push(`<span class="tag warn" title="这条回复写于你的新消息之前">写于你的新消息之前</span>`);
   if (m.role === 'devil') hd.push(`<span class="tag devil" title="主持人请它站到对立面">唱反调</span>`);
   if (m.role === 'summary') hd.push(`<span class="tag summary">总结</span>`);
