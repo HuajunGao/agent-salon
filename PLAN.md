@@ -179,6 +179,23 @@ request once sat for an hour); keep logs outside anything an agent might clean u
 `node app/server.mjs`, then open http://localhost:3517 (set PORT to change it). The standalone `claude` CLI must be
 logged in once (`claude auth login`); the desktop app's own login isn't usable by child processes.
 
+## Home server (Proxmox LXC, 2026-10-03)
+
+- Ubuntu 24.04 unprivileged LXC `agent-chat` at server.lan (8 cores, 8 GB, 10 GB disk; 2 GB was too small:
+  CLI self-updates download ~200 MB each). Runs as root (dedicated container; CLIs were installed under /root).
+- Node 24 from the official tarball in /opt/node (Ubuntu's node is too old for `node:sqlite`); app in /opt/agent-chat,
+  systemd unit `agent-chat` (deploy/agent-chat.service: HOST=0.0.0.0, PATH incl. ~/.local/bin and ~/.opencode/bin,
+  secrets in /etc/agent-chat.env, mode 600). Update with `deploy/push.sh` (git archive HEAD → restart).
+- Logins (done once by the user over SSH): `claude auth login` (not setup-token: the adapter strips CLAUDE_CODE_*
+  env vars), `codex login --device-auth`, `opencode auth login` (Z.AI Coding Plan key), `agy` (Google sign-in).
+- Linux differences handled in code: PATH lookup instead of where.exe, process-group kill instead of taskkill,
+  `.gitattributes` forces LF (CRLF broke the systemd unit). OpenCode on the server is 2.x: `--pure` is gone, `run`
+  uses a shared background service unless `--standalone` (used, so per-run env applies), no `step_finish` event, and
+  its stdout is lost through a Node pipe on exit (one-shot commands now write to a temp file).
+- agy on the server needed `read_url(*)` and `read_file(*)` allow rules plus the workspace in trustedWorkspaces
+  (headless denials end a turn with an empty reply). Codex's read-only sandbox works inside the LXC.
+- The app has no login: keep it on the LAN (or Tailscale / a reverse proxy with auth), never port-forward it.
+
 ## Phases
 
 1. **MVP**: server + SQLite + SSE + UI; four adapters with resume and delta push; a user message wakes all agents
