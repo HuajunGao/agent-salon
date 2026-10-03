@@ -1,7 +1,7 @@
 // CLI adapters: one headless process per turn, resuming the agent's own CLI session.
 // Flags and pitfalls: see PLAN.md and ~/.claude/skills/delegate-agents/run-agent.sh.
-import { spawn } from 'node:child_process';
-import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, rmSync, openSync, closeSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, dirname, delimiter } from 'node:path';
 
@@ -21,6 +21,16 @@ function codexBin() {
     if (bins.length) return bins.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
   } catch {}
   return exe('codex');
+}
+// opencode 2.x changed `run` flags (see the adapter); ask its version once (stdout to a file, see `out` below).
+let ocV2;
+function opencodeV2() {
+  if (ocV2 != null) return ocV2;
+  const f = join(tmpdir(), `agent-chat-ocv-${process.pid}`), fd = openSync(f, 'w');
+  try { spawnSync(opencodeBin(), ['--version'], { stdio: ['ignore', fd, 'ignore'], windowsHide: true, timeout: 30e3 }); } catch {}
+  closeSync(fd);
+  const v = readFileSync(f, 'utf8'); rmSync(f, { force: true });
+  return (ocV2 = +(v.match(/(\d+)\.\d+/)?.[1] || 1) >= 2);
 }
 // opencode on PATH is an npm .cmd shim; spawn the real exe so arguments aren't re-parsed by cmd.exe.
 function opencodeBin() {
@@ -138,15 +148,18 @@ export const AGENTS = {
     label: 'OpenCode', color: '#7c5cff', defaultModel: 'zai-coding-plan/glm-5.3',
     cmd: (prompt, sid, o) => ({
       bin: opencodeBin(),
-      // --pure: oh-my-openagent hands work to background tasks that die with `run`. 32k default output cap truncates GLM.
+      // 32k default output cap truncates GLM. v1: --pure (oh-my-openagent hands work to background tasks that die with
+      // `run`). v2 dropped --pure and runs through a shared background service by default; --standalone gives each
+      // run a private server, so this run's environment (output cap, MCP off) applies.
       env: { ...process.env, OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: '131072', OPENCODE_CONFIG_CONTENT: opencodeNoMcp() },
-      args: ['run', '--pure', '--agent', 'plan', '-m', o.model || 'zai-coding-plan/glm-5.3', '--format', 'json',
-        ...(sid ? ['-s', sid] : []), prompt],
+      args: ['run', opencodeV2() ? '--standalone' : '--pure', '--agent', 'plan', '-m', o.model || 'zai-coding-plan/glm-5.3',
+        '--format', 'json', ...(sid ? ['-s', sid] : []), prompt],
     }),
     parse(ev, st) {
       if (ev.sessionID) st.sid = ev.sessionID;
       const p = ev.part || {};
-      if (ev.type === 'text') { st.parts.push(p.text); st.live(p.text); }
+      // v2 emits no step_finish, so keep the text current as it arrives.
+      if (ev.type === 'text') { st.parts.push(p.text); st.live(p.text); st.text = st.parts.join(''); }
       if (ev.type === 'tool_use') { st.parts = []; st.live(`🔧 ${p.tool} ${short(JSON.stringify(p.state?.input || {}), 120)}`); }
       if (ev.type === 'step_finish') {
         if (p.reason === 'length') st.error = 'output cap hit (reason=length)';
@@ -214,12 +227,14 @@ export function runTurn(agent, prompt, sid, { cwd, dataDir, model, onLive }) {
 }
 
 // ---------- model lists, read once from each CLI ----------
+// stdout goes to a temp file, not a pipe: opencode v2 (a Bun binary) loses buffered output written to Node's pipe
+// when it exits, so `opencode models` came back empty on Linux.
 const out = (bin, args) => new Promise(res => {
-  let s = '';
-  const p = spawn(bin, args, { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
-  p.stdout.on('data', d => (s += d));
-  p.on('close', () => res(s)); p.on('error', () => res(''));
-  setTimeout(() => p.kill(), 90e3);
+  const f = join(tmpdir(), `agent-chat-out-${process.pid}-${Math.random().toString(36).slice(2)}`), fd = openSync(f, 'w');
+  const read = () => { closeSync(fd); let s = ''; try { s = readFileSync(f, 'utf8'); rmSync(f, { force: true }); } catch {} return s; };
+  const p = spawn(bin, args, { stdio: ['ignore', fd, 'ignore'], windowsHide: true });
+  const t = setTimeout(() => p.kill(), 90e3);
+  p.on('close', () => { clearTimeout(t); res(read()); }); p.on('error', () => { clearTimeout(t); res(read()); });
 });
 const lines = s => s.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
