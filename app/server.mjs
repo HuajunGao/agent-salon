@@ -431,8 +431,9 @@ async function startTurn(a, retried = false) {
     + (execOn() ? `You may run code in your workspace ${wsOf(a)} to check claims; keep it quick.)`
       : `${memberConfigs[a].harness === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.'})`);
   // Every turn (not only the session intro), because the user can switch modes mid-discussion.
-  if (!summary) prompt += `\nEnd your message with one line: [STANCE n%] your current position on the question in one short `
-    + `sentence, n = your confidence (0-100). Keep your position unless an argument or fact actually convinces you; when it `
+  if (!summary) prompt += `\nEnd your message with one line: [STANCE n%] verdict: your current position on the question in one `
+    + `short sentence. n = your confidence (0-100); verdict = 2-6 characters such as 支持 / 反对 / 条件支持 / 中立, or the `
+    + `option you pick (e.g. 选 Go). Keep your position unless an argument or fact actually convinces you; when it `
     + `changes, say what convinced you (#N).\n${MODES[chatMode(chat).effective].prompt}`;
   prompt += `\nCurrent participating members (${NAMES.filter(n => S.enabled[n]).length}): ${memberOrder().filter(n => S.enabled[n]).map(describe).join(', ')}. This roster overrides earlier rosters. Use these exact @handles when addressing them.`;
   sendState();

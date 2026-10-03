@@ -72,7 +72,7 @@
   .chat { position:relative; display:flex; align-items:center; gap:var(--s2); height:30px; padding:0 var(--s2); border-radius:var(--r-sm);
     cursor:pointer; color:var(--ink-2); }
   .chat:hover { background:var(--hover); color:var(--ink); }
-  .chat.on { background:var(--selected); color:var(--ink); font-weight:500; }
+  .chat.on { background:var(--selected); color:var(--ink); font-weight:600; box-shadow:inset 2px 0 0 var(--ink-2); }
   .chat .t { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .chat .m { font-size:var(--t-xs); color:var(--ink-3); flex:none; }
   .chat .acts { display:none; gap:0; flex:none; }
@@ -115,12 +115,22 @@
 
   #msgs { flex:1; overflow:auto; padding:var(--s6) max(var(--s5), calc((100% - 840px) / 2)) 180px; scroll-behavior:smooth; }
   /* a script: the speaker hangs in the left column, what they say runs in the right one */
-  .msg { position:relative; margin:0 0 26px; }
+  .msg { position:relative; margin:0 0 20px; }
   .msg.agent, .msg.user { display:grid; grid-template-columns:var(--gut) minmax(0, 1fr); column-gap:22px; }
   .msg .gut { display:flex; flex-direction:column; align-items:flex-end; text-align:right; padding-top:3px; min-width:0; }
   .msg .who { font-weight:600; font-size:var(--t-md); line-height:1.35; color:var(--c, var(--ink)); max-width:100%; overflow-wrap:anywhere; }
   .msg .gut small { font-size:var(--t-xs); line-height:1.5; color:var(--ink-3); }
-  .msg .num { color:var(--ink-2); }
+  .msg .num { color:inherit; }
+  /* secondary details (turn count, confidence, the snapshot a reply was based on, the id) show when the message is hovered */
+  .msg .dim, .msg .gut .num { opacity:0; transition:opacity .15s; }
+  .msg:hover .dim, .msg:hover .gut .num, .msg:focus-within .dim, .msg.flash .gut .num { opacity:1; }
+  /* hovering a #N reference marks the message it points to */
+  .msg.refhl .tx, .msg.refhl > span { background:color-mix(in srgb, var(--link) 8%, transparent); border-radius:var(--r-sm); }
+  /* who is thinking right now, at the end of the stream */
+  #thinking { display:flex; flex-wrap:wrap; gap:4px 18px; margin:-4px 0 20px calc(var(--gut) + 22px); font-size:var(--t-sm); color:var(--ink-3); }
+  #thinking:empty { display:none; }
+  #thinking span { display:inline-flex; align-items:center; gap:6px; }
+  #thinking b { font-weight:500; color:var(--c); }
   .msg.flash .num { color:var(--link); }
   .msg .meta { display:flex; align-items:center; gap:4px 10px; flex-wrap:wrap; min-height:20px; margin-bottom:2px; padding-right:48px;
     font-size:var(--t-xs); color:var(--ink-3); }
@@ -161,6 +171,7 @@
   @container (max-width: 560px) {
     .msg.agent, .msg.user { grid-template-columns:minmax(0, 1fr); }
     .msg .gut { flex-direction:row; align-items:baseline; gap:8px; }
+    #thinking { margin-left:0; }
   }
   @keyframes flash { 0%, 40% { background-color:color-mix(in srgb, var(--link) 12%, transparent); } }
   .tag { display:inline-flex; align-items:center; gap:3px; height:19px; padding:0 7px; border-radius:999px; font-size:var(--t-xs);
@@ -223,6 +234,8 @@
   .room .rh .rs { margin-left:auto; font-size:var(--t-xs); color:var(--ink-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:150px; }
   .room .mode { font-size:var(--t-xs); color:var(--ink-3); margin:-2px 0 var(--s2) 30px; }
   .metric { display:flex; align-items:center; gap:var(--s2); height:22px; font-size:var(--t-sm); color:var(--ink-2); }
+  .room .quiet { font-size:var(--t-xs); color:var(--ink-3); line-height:1.6; }
+  .room .quiet b { font-weight:500; color:var(--ink-2); }
   .metric .ml { flex:1; }
   .metric .mini { width:84px; }
   .metric .mv { width:34px; text-align:right; color:var(--ink); }
@@ -249,8 +262,9 @@
   .stances { margin-top:var(--s3); padding-top:var(--s3); border-top:1px solid var(--hair); display:flex; flex-direction:column; gap:var(--s3); }
   .stances .sl { font-size:var(--t-xs); color:var(--ink-3); margin-bottom:calc(-1 * var(--s1)); }
   .stance .sh { display:flex; align-items:center; gap:var(--s2); font-size:var(--t-sm); }
-  .stance .sh a { flex:1; min-width:0; color:var(--ink); font-weight:500; }
-  .stance .sh .mv { width:34px; text-align:right; font-size:var(--t-xs); color:var(--ink-2); }
+  .stance .sh a { flex:1; min-width:0; color:var(--ink-2); }
+  .stance .sh .verdict { font-weight:600; color:var(--ink); white-space:nowrap; }
+  .stance .sh .mv { min-width:30px; text-align:right; font-size:var(--t-xs); color:var(--ink-3); }
   .stance .stx { margin:2px 0 0 15px; font-size:var(--t-xs); line-height:1.5; color:var(--ink-2); }
   .stance .tag { margin:4px 0 0 15px; }
   /* members */
@@ -500,6 +514,10 @@ function md(t) {
   return box.innerHTML;
 }
 
+// Hovering a #N reference marks the referenced message (wherever the reference is: stream, panel, history).
+for (const [ev, on] of [['mouseover', true], ['mouseout', false]])
+  document.addEventListener(ev, e => { const r = e.target.closest?.('a.ref[data-id]'); if (r) $('#m' + r.dataset.id)?.classList.toggle('refhl', on); });
+
 function renderMsg(m) {
   const el = document.createElement('div');
   el.className = `msg ${m.kind}`; el.id = 'm' + m.id;
@@ -510,18 +528,18 @@ function renderMsg(m) {
   const idx = talk.findIndex(x => x.id === m.id);
   const between = m.based_on != null ? talk.slice(0, idx).filter(x => x.id > m.based_on) : [];
   const gut = `<div class="gut"><span class="who">${esc(label(m.sender))}</span>
-    <small><span class="num" title="消息编号，正文里的 #${m.id} 指的就是这条">#${m.id}</span> ${hm(m.created_at)}</small></div>`;
+    <small>${hm(m.created_at)} <span class="num" title="消息编号，正文里的 #${m.id} 指的就是这条">#${m.id}</span></small></div>`;
   const hd = [];
   if (m.model) hd.push(`<span class="model" title="${esc(m.model)}">${esc(m.model)}</span>`);
   if (m.latency_ms) hd.push(`<span title="思考用时">想了 ${Math.round(m.latency_ms / 1000)}s</span>`);
   const st = m.stance && JSON.parse(m.stance);
-  if (st) hd.push(`<span title="立场：${esc(st.t)}">信心 ${st.c}%</span>`);
+  if (st) hd.push(`<span class="dim" title="立场：${esc(st.l ? `${st.l}：${st.t}` : st.t)}">${st.l ? `${esc(st.l)} ` : ''}${st.c}%</span>`);
   if (m.reply_to) hd.push(`<span class="tag">回复 ${ref(m.reply_to)}</span>`);
-  if (m.based_on != null && between.length) hd.push(`<span class="tag" title="开始思考时看到的最后一条是 #${m.based_on}，之后又有 ${between.length} 条">基于 ${ref(m.based_on)} +${between.length}</span>`);
+  if (m.based_on != null && between.length) hd.push(`<span class="dim" title="开始思考时看到的最后一条是 #${m.based_on}，之后又有 ${between.length} 条">基于 ${ref(m.based_on)} +${between.length}</span>`);
   if (m.stale) hd.push(`<span class="tag warn" title="这条回复写于你的新消息之前">写于你的新消息之前</span>`);
   if (m.role === 'devil') hd.push(`<span class="tag devil" title="主持人请它站到对立面">唱反调</span>`);
   if (m.role === 'summary') hd.push(`<span class="tag summary">总结</span>`);
-  if (m.turn_no) hd.push(`<span title="本讨论中的第 ${m.turn_no} 次发言">第 ${m.turn_no} 次</span>`);
+  if (m.turn_no) hd.push(`<span class="dim" title="本讨论中的第 ${m.turn_no} 次发言">第 ${m.turn_no} 次</span>`);
   el.innerHTML = `${gut}<div><div class="meta">${hd.join('')}</div><div class="tx">${md(m.text)}</div></div>`
     + `<span class="rp" data-reply="${m.id}" title="引用回复 #${m.id}">回复</span>`;
   return el;
@@ -537,10 +555,19 @@ function emptyState() {
     <div class="ideas">${IDEAS.map(t => `<button class="idea" data-idea="${esc(t)}">${esc(t)}</button>`).join('')}</div>
   </div>`;
 }
+const thinkingEl = Object.assign(document.createElement('div'), { id: 'thinking' });
+thinkingEl.setAttribute('aria-live', 'polite');
+function renderThinking() {
+  const html = S.members.filter(m => m.status === 'thinking').map(m => `<span style="--c:${color(m.name)}">`
+    + `<span class="dot"></span><b>${esc(m.label)}</b><span class="pulse">正在思考</span><span data-since="${m.started}"></span></span>`).join('');
+  if (thinkingEl.dataset.html !== html) { thinkingEl.innerHTML = thinkingEl.dataset.html = html; }
+  if (messages.length && thinkingEl.parentNode !== $('#msgs')) $('#msgs').appendChild(thinkingEl);
+}
 function renderAll() {
   const box = $('#msgs'); box.innerHTML = '';
   if (!messages.length) box.innerHTML = emptyState();
   for (const m of messages) box.appendChild(renderMsg(m));
+  if (messages.length) box.appendChild(thinkingEl);
   box.style.scrollBehavior = 'auto'; box.scrollTop = box.scrollHeight; box.style.scrollBehavior = '';
   if (jumpTo) { flash(jumpTo); jumpTo = null; }
 }
@@ -606,11 +633,13 @@ function renderModerator() {
   let html = `<div class="room"><div class="rh"><span class="glyph"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5Z" fill="currentColor"/></svg></span>
     <span class="rt">主持人 Jev</span><span class="rs">${status}</span></div>
     <div class="mode">${modeText}${S.settings.autoStop ? '，收敛后自动收尾' : ''}</div>
-    ${row('观点收敛', m?.convergence, S.settings.autoStop ? S.settings.convergeAt : null, '刻度是收尾阈值')}
-    ${row('附和重复', m?.stalling, null, '最近几条是否只在附和或复述')}
-    ${S.settings.circlePause ? row('原地打转', m?.circling, 70, '同样的论点来回重复；超过刻度会暂停') : ''}
-    ${m?.debatable != null ? `<div class="flags"><span title="问题是否见仁见智（不是有标准答案的事实题）">见仁见智 <b>${pct(m.debatable)}</b></span>`
-      + `<span title="本轮有没有人认真反对过多数意见">有人反对 <b>${pct(m.challenged)}</b></span></div>` : ''}
+    ${m?.convergence != null ? row('观点收敛', m.convergence, S.settings.autoStop ? S.settings.convergeAt : null, '刻度是收尾阈值') : ''}
+    ${m?.convergence != null ? `<div class="quiet">${[
+      `<span title="最近几条是否只在附和或复述">附和重复 <b>${pct(m.stalling)}</b></span>`,
+      S.settings.circlePause ? `<span title="同样的论点来回重复；到 70% 会暂停">原地打转 <b>${pct(m.circling)}</b></span>` : '',
+      m.debatable != null ? `<span title="问题是否见仁见智（不是有标准答案的事实题）">见仁见智 <b>${pct(m.debatable)}</b></span>` : '',
+      m.challenged != null ? `<span title="本轮有没有人认真反对过多数意见">有人反对 <b>${pct(m.challenged)}</b></span>` : '',
+    ].filter(Boolean).join('，')}</div>` : ''}
     ${S.wrapped ? '<div class="wrapnote">本轮已收尾，发新消息可继续讨论。</div>' : ''}${renderStances()}</div>`;
   setHTML('#moderator', html);
   const line = $('#convline');
@@ -631,7 +660,7 @@ function renderStances() {
       : x.changed >= 0.5 ? (x.evidence < 0.5 ? `<span class="tag warn" title="${esc(was)}">改了立场，但没有新论据</span>`
         : `<span class="tag" title="${esc(was)}">改了立场</span>`) : '';
     return `<div class="stance"><div class="sh"><span class="dot" style="--c:${color(x.name)}"></span>
-      <a class="ref" data-id="${x.id}" title="跳到 #${x.id}">${esc(label(x.name))}</a>${mini(x.c / 100, null, color(x.name))}<span class="mv">${x.c}%</span></div>
+      <a class="ref" data-id="${x.id}" title="跳到 #${x.id}">${esc(label(x.name))}</a>${x.l ? `<span class="verdict">${esc(x.l)}</span>` : ''}<span class="mv" title="信心">${x.c}%</span></div>
       <div class="stx">${esc(x.t)}</div>${tag}</div>`;
   }).join('')}</div>`;
 }
@@ -714,7 +743,7 @@ function renderMembers() {
 function renderState() {
   const now = Date.now() - clockSkew;
   if (!messages.length) setHTML('#msgs', emptyState());
-  renderHistory(); renderModerator(); renderMemory(); renderMode(); renderTts();
+  renderHistory(); renderModerator(); renderMemory(); renderMode(); renderTts(); renderThinking();
   $('#s-exec').disabled = !S.sandboxed; $('#execrow').style.opacity = S.sandboxed ? '' : '.45';
   const cur = S.chats.find(c => c.id === S.chatId);
   $('#title').textContent = cur?.title || '';
@@ -757,7 +786,8 @@ es.onmessage = e => {
     if (!messages.length) $('#msgs').innerHTML = '';
     messages.push(ev.msg);
     const box = $('#msgs'), atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
-    box.appendChild(renderMsg(ev.msg));
+    box.insertBefore(renderMsg(ev.msg), thinkingEl.parentNode === box ? thinkingEl : null);
+    if (thinkingEl.parentNode !== box) box.appendChild(thinkingEl);
     if (atEnd || ev.msg.kind === 'user') box.scrollTop = box.scrollHeight;
     if (ev.msg.kind === 'agent' && tts.on) { tts.queue.push(ev.msg.id); playNext(); } // read new replies aloud
   }

@@ -105,7 +105,8 @@ export async function stanceShift(messages, member, before, after) {
 }
 
 // A reply ends with "[STANCE 70%] the member's position in one sentence" (confidence 0-100), then optionally [HAND].
-// Returns {text, hand, stance: {t, c} | null}; the stance line is removed from the text.
+// The position may start with a short verdict label ("条件支持：…"), kept as l.
+// Returns {text, hand, stance: {t, c, l?} | null}; the stance line is removed from the text.
 const STANCE = /^[ \t>*_]*\[(?:STANCE|立场)\s*[:：]?\s*(\d{1,3})\s*%?\][ \t*_:：]*(.*)$/im;
 export function parseReply(raw) {
   let text = raw, stance = null;
@@ -113,7 +114,8 @@ export function parseReply(raw) {
   if (m) {
     text = text.replace(m[0], m[2].includes('[HAND]') ? '[HAND]' : '');
     const t = m[2].replace(/\[HAND\]/g, '').replace(/^[\s*_]+|[\s*_]+$/g, '');
-    if (t) stance = { t: t.slice(0, 300), c: Math.min(100, +m[1]) };
+    const lt = t.match(/^([^：:，,。]{1,8})[：:]\s*(.+)$/);
+    if (t) stance = { t: (lt ? lt[2] : t).slice(0, 300), c: Math.min(100, +m[1]), ...(lt && { l: lt[1].trim() }) };
   }
   text = text.trim();
   const hand = /\[HAND\]\s*$/.test(text);

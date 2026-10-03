@@ -18,6 +18,8 @@ test('parseReply takes the stance line and [HAND] off the reply', () => {
   assert.deepEqual(parseReply('没有立场行 [HAND]'), { text: '没有立场行', hand: true, stance: null });
   assert.equal(parseReply('PASS').text, 'PASS');
   assert.equal(parseReply('[STANCE 250%] x').stance.c, 100);
+  assert.deepEqual(parseReply('好。\n[STANCE 75%] 条件支持：小额、核实过再捐').stance, { t: '小额、核实过再捐', c: 75, l: '条件支持' });
+  assert.deepEqual(parseReply('[STANCE 60%] 用真实库，原因：更可靠').stance, { t: '用真实库，原因：更可靠', c: 60 });
 });
 
 // Real server + SQLite with a fake harness that records when each turn starts; no Jev key.
