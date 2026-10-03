@@ -2,144 +2,304 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>agent-chat</title>
 <style>
-  :root { --bg:#f6f5f2; --panel:#fff; --line:#e3e0da; --ink:#22211f; --mute:#7a766f; --accent:#2f6fde;
-    --mod:#0f766e; --mod-bg:#ecf8f5; --mod-line:#bfe3da; }
-  * { box-sizing: border-box; }
-  body { margin:0; font:14px/1.55 system-ui, "Microsoft YaHei", sans-serif; color:var(--ink); background:var(--bg); height:100vh; display:flex; }
-  aside { background:var(--panel); overflow:auto; padding:12px; display:flex; flex-direction:column; gap:12px; }
-  #left { width:260px; flex:none; border-right:1px solid var(--line); padding:10px 8px; gap:8px; transition:width .2s, padding .2s; }
-  body.nohist #left { width:0; padding:10px 0; border-right:none; overflow:hidden; }
-  .iconbtn { border:none; background:transparent; padding:4px 6px; border-radius:6px; color:var(--mute); line-height:0; }
-  .iconbtn:hover { background:#efede8; color:var(--ink); }
-  .lefttop { display:flex; gap:4px; align-items:center; }
-  .lefttop .primary { flex:1; }
-  .showhist { display:none; }
-  body.nohist .showhist { display:inline-flex; }
-  .tag.devil { background:#fde8e8; color:#9b1c1c; }
-  .tag.summary { background:var(--mod-bg); color:var(--mod); }
-  .modflags { display:flex; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--mute); margin-top:6px; }
-  #right { width:330px; border-left:1px solid var(--line); }
-  main { flex:1; display:flex; flex-direction:column; min-width:0; }
-  h3 { margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); }
-  button { font:inherit; border:1px solid var(--line); background:#fff; border-radius:6px; padding:3px 9px; cursor:pointer; }
-  button:hover { border-color:var(--accent); }
-  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
-  input, select, textarea { font:inherit; border:1px solid var(--line); border-radius:6px; padding:3px 6px; background:#fff; }
-  /* history */
-  #search { width:100%; padding:5px 8px; }
-  .chat { padding:7px 8px; border-radius:8px; cursor:pointer; position:relative; }
-  .chat:hover { background:#f3f1ec; }
-  .chat.on { background:#e9effc; }
-  .chat .t { font-weight:600; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-right:4px; }
-  .chat .p { font-size:12px; color:var(--mute); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .chat .m { font-size:11px; color:var(--mute); }
-  .chat .acts { position:absolute; right:6px; top:6px; display:none; gap:2px; background:inherit; }
-  .chat:hover .acts { display:flex; }
-  .chat .acts span { cursor:pointer; padding:0 4px; border-radius:4px; font-size:12px; }
-  .chat .acts span:hover { background:#fff; }
-  .hit { padding:6px 8px; border-radius:8px; cursor:pointer; font-size:12px; }
-  .hit:hover { background:#f3f1ec; }
-  .hit b { font-size:12px; }
-  mark { background:#fff1a8; }
-  /* members */
-  .member { border:1px solid var(--line); border-radius:8px; padding:8px; margin-bottom:6px; }
-  .member.off { opacity:.5; }
-  .member .top { display:flex; align-items:center; gap:6px; }
-  .dot { width:10px; height:10px; border-radius:50%; flex:none; }
-  .member .name { font-weight:600; }
-  .member .st { margin-left:auto; font-size:12px; color:var(--mute); text-align:right; }
-  .member .meta { font-size:12px; color:var(--mute); margin-top:3px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .member pre { max-height:180px; overflow:auto; white-space:pre-wrap; font-size:11px; background:#faf9f7; padding:6px; margin:4px 0 0; border-radius:4px; }
-  .err { color:#b3261e; font-size:12px; }
-  /* moderator */
-  .modcard { border:1px solid var(--mod-line); background:var(--mod-bg); border-radius:10px; padding:10px; }
-  .modcard .hd { display:flex; align-items:center; gap:6px; color:var(--mod); font-weight:600; }
-  .modcard .hd .s { margin-left:auto; font-weight:400; font-size:12px; }
-  .meter { margin-top:6px; font-size:12px; color:var(--mute); }
-  .meter .lbl { display:flex; justify-content:space-between; }
-  .track { height:6px; background:#d9ece7; border-radius:3px; position:relative; overflow:visible; margin-top:2px; }
-  .fill { height:100%; border-radius:3px; background:var(--mod); transition:width .4s; }
-  .tick { position:absolute; top:-3px; width:2px; height:12px; background:#b3261e; opacity:.6; }
-  .pulse { animation:pulse 1s infinite; }
+  /* ---------- design tokens ---------- */
+  :root {
+    /* surfaces */
+    --canvas:#FBFBFA; --side:#F4F4F2; --surface:#FFFFFF; --sunk:#EFEFEC;
+    --hover:rgba(15,17,20,.045); --selected:rgba(15,17,20,.07); --hair:rgba(15,17,20,.075);
+    /* ink */
+    --ink:#1C1D1F; --ink-2:#5E6167; --ink-3:#9A9DA3;
+    /* roles */
+    --link:#3E5FC4; --mod:#2F7D6D; --mod-soft:rgba(47,125,109,.09); --warn:#9A5B00; --warn-soft:#FBF1DF;
+    --danger:#B4372F; --danger-soft:#FBEAE8;
+    /* type scale */
+    --t-xs:11.5px; --t-sm:12.5px; --t-md:13.5px; --t-body:14.5px; --t-lg:16px; --t-xl:22px;
+    /* spacing */
+    --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+    /* radius */
+    --r-sm:6px; --r-md:10px; --r-lg:16px;
+    --shadow:0 1px 2px rgba(15,17,20,.05), 0 6px 24px -8px rgba(15,17,20,.10);
+    --font:"Segoe UI Variable Text","Segoe UI","PingFang SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;
+    --font-display:"Segoe UI Variable Display","Segoe UI","PingFang SC","Microsoft YaHei UI",system-ui,sans-serif;
+  }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body { margin:0; display:flex; font:var(--t-md)/1.5 var(--font); color:var(--ink); background:var(--canvas);
+    -webkit-font-smoothing:antialiased; font-variant-numeric:tabular-nums; }
+  button, input, select, textarea { font:inherit; color:inherit; }
+  button { cursor:pointer; border:none; background:none; padding:0; }
+  :focus-visible { outline:2px solid color-mix(in srgb, var(--link) 55%, transparent); outline-offset:1px; border-radius:var(--r-sm); }
+  svg { display:block; }
+  @media (prefers-reduced-motion: reduce) { * { transition:none !important; animation:none !important; } }
+
+  /* ---------- shared controls ---------- */
+  .icon { width:28px; height:28px; display:inline-grid; place-items:center; border-radius:var(--r-sm); color:var(--ink-2); flex:none; }
+  .icon:hover { background:var(--hover); color:var(--ink); }
+  .chip { display:inline-flex; align-items:center; gap:5px; height:24px; padding:0 9px; border-radius:999px;
+    font-size:var(--t-sm); color:var(--ink-2); background:var(--hover); }
+  .chip:hover { background:var(--selected); color:var(--ink); }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--c, var(--ink-3)); flex:none; }
+  .av { width:22px; height:22px; border-radius:7px; display:inline-grid; place-items:center; flex:none;
+    font:600 10px/1 var(--font); letter-spacing:.02em; color:var(--c); background:color-mix(in srgb, var(--c) 13%, transparent); }
+  a.ref { color:var(--link); cursor:pointer; text-decoration:none; }
+  a.ref:hover { text-decoration:underline; text-underline-offset:2px; }
+  .muted { color:var(--ink-3); }
+  .pulse { animation:pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity:.35; } }
-  .settings label { display:flex; justify-content:space-between; align-items:center; margin:3px 0; gap:8px; }
-  .settings input[type=number] { width:70px; }
-  /* chat */
-  .bar { display:flex; gap:8px; align-items:center; padding:8px 14px; border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
-  .bar .title { font-weight:600; font-size:15px; cursor:pointer; max-width:40%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .bar .info { color:var(--mute); font-size:13px; }
-  #msgs { flex:1; overflow:auto; padding:14px 18px; }
-  .msg { max-width:820px; margin:0 0 12px; padding:9px 12px; background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--c, var(--line)); border-radius:8px; }
-  .msg.user { margin-left:auto; background:#eef3fd; border-left-color:var(--accent); }
-  .msg.system { background:transparent; border:none; color:var(--mute); font-size:13px; padding:2px 12px; }
-  .msg.moderator { max-width:640px; margin:4px auto 14px; padding:6px 14px; background:var(--mod-bg); border:1px solid var(--mod-line);
-    border-radius:16px; color:var(--mod); font-size:13px; text-align:center; }
-  .msg .hd { font-size:12px; color:var(--mute); display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-  .msg .hd b { color:var(--c, var(--ink)); }
-  .msg .tx { white-space:pre-wrap; word-wrap:break-word; margin-top:3px; }
-  .msg .rp { cursor:pointer; margin-left:auto; opacity:.6; }
-  .msg .rp:hover { opacity:1; }
-  .msg.flash { outline:2px solid var(--accent); }
-  .tag { font-size:11px; padding:0 5px; border-radius:4px; background:#f1efea; }
-  .tag.warn { background:#fff1d6; color:#8a5a00; }
-  a.ref { color:var(--accent); cursor:pointer; text-decoration:none; }
-  .empty { color:var(--mute); text-align:center; margin-top:20vh; }
-  footer { border-top:1px solid var(--line); background:var(--panel); padding:8px 14px; }
-  #quote { font-size:12px; color:var(--mute); margin-bottom:4px; display:none; }
-  #input { width:100%; resize:vertical; min-height:58px; }
-  .row { display:flex; gap:6px; align-items:center; margin-top:6px; flex-wrap:wrap; }
+  .mini { position:relative; width:44px; height:4px; border-radius:2px; background:var(--selected); flex:none; }
+  .mini > i { position:absolute; inset:0 auto 0 0; border-radius:2px; background:var(--c, var(--mod)); transition:width .4s; }
+  .mini > b { position:absolute; top:-2px; width:1.5px; height:8px; background:var(--ink-2); opacity:.45; }
+
+  /* ---------- left: history ---------- */
+  #left { width:232px; flex:none; display:flex; flex-direction:column; background:var(--side); border-right:1px solid var(--hair);
+    padding:var(--s2); gap:var(--s1); overflow:hidden; transition:width .2s ease, padding .2s ease; }
+  body.nohist #left { width:0; padding:var(--s2) 0; border-right:none; }
+  .lefttop { display:flex; align-items:center; gap:2px; height:36px; }
+  .newbtn { flex:1; display:flex; align-items:center; gap:var(--s2); height:30px; padding:0 var(--s2); border-radius:var(--r-sm);
+    color:var(--ink); font-weight:500; white-space:nowrap; }
+  .newbtn:hover { background:var(--hover); }
+  #search { width:100%; height:30px; padding:0 var(--s2) 0 28px; border:none; border-radius:var(--r-sm); background:var(--hover) no-repeat 9px 50%;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='%239A9DA3' stroke-width='2.5'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+    font-size:var(--t-sm); outline:none; margin-bottom:var(--s2); }
+  #search::placeholder { color:var(--ink-3); }
+  #history { overflow:auto; flex:1; margin:0 calc(-1 * var(--s1)); padding:0 var(--s1); }
+  .group { font-size:var(--t-xs); color:var(--ink-3); padding:var(--s3) var(--s2) var(--s1); }
+  .chat { position:relative; display:flex; align-items:center; gap:var(--s2); height:30px; padding:0 var(--s2); border-radius:var(--r-sm);
+    cursor:pointer; color:var(--ink-2); }
+  .chat:hover { background:var(--hover); color:var(--ink); }
+  .chat.on { background:var(--selected); color:var(--ink); font-weight:500; }
+  .chat .t { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .chat .m { font-size:var(--t-xs); color:var(--ink-3); flex:none; }
+  .chat .acts { display:none; gap:0; flex:none; }
+  .chat:hover .m { display:none; }
+  .chat:hover .acts { display:flex; }
+  .chat .acts span { width:22px; height:22px; display:grid; place-items:center; border-radius:5px; color:var(--ink-3); }
+  .chat .acts span:hover { background:var(--selected); color:var(--ink); }
+  .hit { padding:var(--s2); border-radius:var(--r-sm); cursor:pointer; font-size:var(--t-sm); color:var(--ink-2); }
+  .hit:hover { background:var(--hover); }
+  .hit .ht { color:var(--ink); font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  mark { background:#FFF0A8; color:inherit; border-radius:2px; }
+
+  /* ---------- center ---------- */
+  main { flex:1; min-width:0; display:flex; flex-direction:column; position:relative; }
+  .bar { position:relative; display:flex; align-items:center; gap:var(--s2); height:52px; padding:0 var(--s4); flex:none; }
+  .bar .title { font:600 var(--t-lg)/1.2 var(--font-display); letter-spacing:-.01em; cursor:pointer; min-width:0;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:4px 6px; margin-left:-6px; border-radius:var(--r-sm); }
+  .bar .title:hover { background:var(--hover); }
+  .bar .info { color:var(--ink-3); font-size:var(--t-sm); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
+  .showhist { display:none; }
+  body.nohist .showhist { display:inline-grid; }
+  .controls { display:flex; align-items:center; gap:2px; padding:2px; border-radius:var(--r-md); background:var(--hover); flex:none; }
+  .controls button { height:26px; min-width:28px; padding:0 8px; display:inline-flex; align-items:center; gap:5px; border-radius:7px;
+    color:var(--ink-2); font-size:var(--t-sm); }
+  .controls button:hover { background:var(--surface); color:var(--ink); box-shadow:0 1px 2px rgba(15,17,20,.08); }
+  .controls #pause.paused { color:var(--mod); }
+  /* the one bold element: how close the room is to agreeing */
+  .convline { position:absolute; left:0; right:0; bottom:0; height:2px; background:var(--hair); }
+  .convline i { position:absolute; inset:0 auto 0 0; background:var(--mod); transition:width .6s ease; }
+  .convline b { position:absolute; top:-3px; width:2px; height:8px; border-radius:1px; background:var(--mod); opacity:.5; }
+  .convline.off i, .convline.off b { display:none; }
+
+  #msgs { flex:1; overflow:auto; padding:var(--s6) max(var(--s5), calc((100% - 760px) / 2)) 180px; scroll-behavior:smooth; }
+  .msg { position:relative; margin:0 0 var(--s5); }
+  .msg .hd { display:flex; align-items:center; gap:var(--s2); min-height:22px; font-size:var(--t-sm); color:var(--ink-3); flex-wrap:wrap; }
+  .msg .who { color:var(--ink); font-weight:600; font-size:var(--t-md); }
+  .msg .model { color:var(--ink-3); max-width:150px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .msg .tx { font-size:var(--t-body); line-height:1.72; white-space:pre-wrap; word-wrap:break-word; color:var(--ink); }
+  .msg.agent .tx { margin:6px 0 0 30px; padding-left:var(--s3); border-left:2px solid color-mix(in srgb, var(--c) 35%, transparent); }
+  .msg .tx code { font:0.92em Consolas, "Cascadia Mono", monospace; background:var(--sunk); padding:1px 5px; border-radius:4px; }
+  .msg .tx b { font-weight:600; }
+  /* hover-only reply action: positioned so it never takes layout space */
+  .msg .rp { position:absolute; right:0; top:0; opacity:0; color:var(--ink-3); cursor:pointer; padding:1px 8px; border-radius:var(--r-sm);
+    background:var(--canvas); transition:opacity .15s; }
+  .msg:hover .rp, .msg .rp:focus-visible { opacity:1; }
+  .msg .rp:hover { background:var(--sunk); color:var(--ink); }
+  .msg.user { display:flex; flex-direction:column; align-items:flex-end; }
+  .msg.user .hd { justify-content:flex-end; }
+  .msg.user .rp { right:auto; left:0; }
+  .msg.user .tx { max-width:85%; margin-top:4px; padding:10px 14px; background:var(--sunk); border-radius:var(--r-lg) var(--r-lg) 4px var(--r-lg); }
+  .msg.moderator, .msg.system { display:flex; align-items:center; gap:var(--s3); margin:var(--s1) 0 var(--s5); font-size:var(--t-sm); color:var(--mod); text-align:center; }
+  .msg.moderator::before, .msg.moderator::after, .msg.system::before, .msg.system::after { content:""; flex:1; min-width:24px; height:1px; background:var(--hair); }
+  .msg.moderator span, .msg.system span { max-width:80%; line-height:1.5; }
+  .msg.system { color:var(--danger); }
+  .msg.flash .tx, .msg.flash > span { animation:flash 1.6s ease; }
+  @keyframes flash { 0%, 40% { background-color:color-mix(in srgb, var(--link) 12%, transparent); } }
+  .tag { display:inline-flex; align-items:center; gap:3px; height:19px; padding:0 7px; border-radius:999px; font-size:var(--t-xs);
+    color:var(--ink-2); background:var(--hover); white-space:nowrap; }
+  .tag.warn { color:var(--warn); background:var(--warn-soft); }
+  .tag.devil { color:var(--danger); background:var(--danger-soft); }
+  .tag.summary { color:var(--mod); background:var(--mod-soft); }
+
+  /* empty state */
+  .empty { max-width:560px; margin:12vh auto 0; }
+  .empty .members { display:flex; gap:6px; margin-bottom:var(--s5); }
+  .empty .members .av { width:28px; height:28px; border-radius:9px; font-size:11px; }
+  .empty h1 { margin:0 0 var(--s2); font:600 var(--t-xl)/1.25 var(--font-display); letter-spacing:-.015em; }
+  .empty p { margin:0 0 var(--s5); color:var(--ink-2); font-size:var(--t-body); line-height:1.65; }
+  .empty .ideas { display:flex; flex-direction:column; gap:6px; }
+  .empty .idea { text-align:left; padding:10px var(--s3); border-radius:var(--r-md); color:var(--ink-2); font-size:var(--t-md);
+    background:rgba(15,17,20,.028); }
+  .empty .idea:hover { background:var(--hover); color:var(--ink); }
+
+  /* composer */
+  footer { position:absolute; left:0; right:0; bottom:0; padding:var(--s5) max(var(--s5), calc((100% - 760px) / 2)) var(--s4);
+    background:linear-gradient(to bottom, transparent, var(--canvas) 28%); pointer-events:none; }
+  .composer { pointer-events:auto; background:var(--surface); border:1px solid var(--hair); border-radius:var(--r-lg); box-shadow:var(--shadow);
+    padding:var(--s2) var(--s2) var(--s2) var(--s3); }
+  .composer:focus-within { border-color:rgba(15,17,20,.14); }
+  #quote { display:none; margin:2px 0 4px; font-size:var(--t-sm); color:var(--ink-2); }
+  #quote .q { display:inline-flex; align-items:center; gap:6px; max-width:100%; padding:3px 4px 3px 9px; border-radius:var(--r-sm); background:var(--hover); }
+  #quote .q span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #input { display:block; width:100%; min-height:44px; max-height:220px; resize:none; border:none; outline:none; background:transparent;
+    padding:6px 2px; font-size:var(--t-body); line-height:1.6; }
+  #input::placeholder { color:var(--ink-3); }
+  .composer { container-type:inline-size; }
+  .crow { display:flex; align-items:center; gap:var(--s1); }
+  #ats { display:flex; gap:2px; flex-wrap:nowrap; min-width:0; overflow:hidden; }
+  @container (max-width: 600px) { .hint { display:none; } #send { margin-left:auto; } }
+  #ats .chip { height:24px; padding:0 8px; font-size:var(--t-xs); background:transparent; }
+  #ats .chip:hover { background:var(--hover); }
+  .hint { margin-left:auto; margin-right:var(--s2); font-size:var(--t-xs); color:var(--ink-3); white-space:nowrap; }
+  #send { width:30px; height:30px; border-radius:9px; display:grid; place-items:center; background:var(--ink); color:#fff; flex:none; }
+  #send:hover { background:#000; }
+
+  /* ---------- right: room state ---------- */
+  #right { width:296px; flex:none; overflow:auto; background:var(--side); border-left:1px solid var(--hair);
+    padding:var(--s2) var(--s3) var(--s4); display:flex; flex-direction:column; gap:var(--s4); transition:width .2s ease, padding .2s ease; }
+  body.noroom #right { width:0; padding:0; border-left:none; overflow:hidden; }
+  .sect { font-size:var(--t-xs); color:var(--ink-3); padding:0 var(--s1); margin-bottom:var(--s1); display:flex; align-items:center; gap:var(--s2); }
+  /* moderator module */
+  .room { padding:var(--s3); border-radius:var(--r-md); background:var(--surface); box-shadow:0 1px 2px rgba(15,17,20,.04); }
+  .room .rh { display:flex; align-items:center; gap:var(--s2); margin-bottom:var(--s2); }
+  .room .rh .glyph { width:22px; height:22px; border-radius:7px; display:grid; place-items:center; color:var(--mod); background:var(--mod-soft); }
+  .room .rh .rt { font-weight:600; }
+  .room .rh .rs { margin-left:auto; font-size:var(--t-xs); color:var(--ink-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:150px; }
+  .room .mode { font-size:var(--t-xs); color:var(--ink-3); margin:-2px 0 var(--s2) 30px; }
+  .metric { display:flex; align-items:center; gap:var(--s2); height:22px; font-size:var(--t-sm); color:var(--ink-2); }
+  .metric .ml { flex:1; }
+  .metric .mini { width:84px; }
+  .metric .mv { width:34px; text-align:right; color:var(--ink); }
+  .flags { display:flex; gap:var(--s4); margin-top:var(--s1); font-size:var(--t-xs); color:var(--ink-3); }
+  .flags b { font-weight:500; color:var(--ink-2); }
+  .wrapnote { margin-top:var(--s2); font-size:var(--t-xs); color:var(--mod); }
+  /* members */
+  .mem { border-radius:var(--r-sm); }
+  .mem.open { background:var(--surface); box-shadow:0 1px 2px rgba(15,17,20,.04); }
+  .mrow { position:relative; display:flex; align-items:center; gap:var(--s2); height:34px; padding:0 var(--s1) 0 6px; border-radius:var(--r-sm); cursor:pointer; }
+  .mem:not(.open) .mrow:hover { background:var(--hover); }
+  .mem.off .mrow > :not(.macts) { opacity:.45; }
+  .mname { font-weight:500; white-space:nowrap; }
+  .mst { flex:1; min-width:0; font-size:var(--t-xs); color:var(--ink-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .mst.busy { color:var(--ink-2); }
+  .mst.err { color:var(--danger); }
+  .mright { display:flex; align-items:center; gap:6px; font-size:var(--t-xs); color:var(--ink-3); }
+  .macts { position:absolute; right:2px; top:50%; transform:translateY(-50%); display:none; gap:2px; padding-left:var(--s3);
+    background:linear-gradient(to right, transparent, var(--side) 12px); }
+  .mem.open .macts { background:linear-gradient(to right, transparent, var(--surface) 12px); }
+  .mrow:hover .macts { display:flex; }
+  .mrow:hover .mright { visibility:hidden; }
+  .macts button { height:24px; padding:0 8px; border-radius:var(--r-sm); font-size:var(--t-xs); color:var(--ink-2); background:var(--surface); box-shadow:0 0 0 1px var(--hair); }
+  .macts button:hover { color:var(--ink); box-shadow:0 0 0 1px rgba(15,17,20,.16); }
+  .mdetail { display:none; padding:2px var(--s2) var(--s3) 36px; font-size:var(--t-xs); color:var(--ink-3); }
+  .mem.open .mdetail { display:block; }
+  .mdetail select { width:100%; height:28px; margin:2px 0 var(--s2); padding:0 6px; border:1px solid var(--hair); border-radius:var(--r-sm);
+    background:var(--canvas); font-size:var(--t-sm); color:var(--ink); }
+  .kv { display:flex; flex-wrap:wrap; gap:var(--s1) var(--s3); align-items:center; }
+  .mdetail .err { color:var(--danger); margin-top:var(--s2); line-height:1.45; }
+  .mdetail details { margin-top:var(--s2); }
+  .mdetail summary { cursor:pointer; color:var(--ink-2); }
+  .mdetail pre { max-height:180px; overflow:auto; white-space:pre-wrap; font:11px/1.45 Consolas, "Cascadia Mono", monospace; color:var(--ink-2);
+    background:var(--canvas); padding:var(--s2); margin:var(--s1) 0 0; border-radius:var(--r-sm); }
+  /* switches */
+  .switch { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
+  .switch input { appearance:none; width:26px; height:15px; border-radius:999px; background:var(--selected); position:relative; margin:0; cursor:pointer; transition:background .15s; flex:none; }
+  .switch input::after { content:""; position:absolute; top:2px; left:2px; width:11px; height:11px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.2); transition:left .15s; }
+  .switch input:checked { background:var(--mod); }
+  .switch input:checked::after { left:13px; }
+  /* settings */
+  .settings > summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:6px; font-size:var(--t-xs); color:var(--ink-3); padding:0 var(--s1); }
+  .settings > summary::-webkit-details-marker { display:none; }
+  .settings > summary svg { transition:transform .15s; }
+  .settings[open] > summary svg { transform:rotate(90deg); }
+  .settings .grp { margin-top:var(--s3); padding:var(--s1) 0; }
+  .settings .gl { font-size:var(--t-xs); color:var(--ink-3); padding:0 var(--s1) var(--s1); }
+  .settings label { display:flex; align-items:center; justify-content:space-between; gap:var(--s3); height:30px; padding:0 var(--s1);
+    font-size:var(--t-sm); color:var(--ink-2); border-radius:var(--r-sm); }
+  .settings label:hover { background:var(--hover); }
+  .settings input:not([type=checkbox]), .settings select { height:24px; border:1px solid transparent; border-radius:var(--r-sm); background:var(--surface);
+    padding:0 6px; font-size:var(--t-sm); color:var(--ink); box-shadow:0 0 0 1px var(--hair); }
+  .settings input[type=number] { width:64px; text-align:right; }
+  .settings #s-language { width:80px; }
+  .settings select { max-width:150px; }
+
+  @media (max-width: 720px) { #left { position:absolute; z-index:5; height:100%; box-shadow:var(--shadow); } .hint { display:none; } }
 </style>
 </head>
 <body>
 <aside id="left">
-  <div class="lefttop"><button class="iconbtn" data-toggle-hist title="收起讨论列表（Ctrl+Shift+S）"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
-    <button class="primary" id="newChat">＋ 新讨论</button></div>
-  <input id="search" placeholder="搜索标题和消息…" type="search">
+  <div class="lefttop">
+    <button class="icon" data-toggle-hist title="收起讨论列表（Ctrl+Shift+S）" aria-label="收起讨论列表"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+    <button class="newbtn" id="newChat"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>新讨论</button>
+  </div>
+  <input id="search" placeholder="搜索讨论" type="search" aria-label="搜索标题和消息">
   <div id="history"></div>
 </aside>
 <main>
   <div class="bar">
-    <button class="iconbtn showhist" data-toggle-hist title="展开讨论列表（Ctrl+Shift+S）"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
-    <button class="iconbtn showhist" data-new-chat title="新讨论"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>
+    <button class="icon showhist" data-toggle-hist title="展开讨论列表（Ctrl+Shift+S）" aria-label="展开讨论列表"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+    <button class="icon showhist" data-new-chat title="新讨论" aria-label="新讨论"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>
     <span class="title" id="title" title="点击重命名"></span>
-    <button id="pause"></button>
-    <button id="stop" title="暂停并取消所有举手">停止</button>
-    <button id="next" title="读完了，放下一条">下一条 ▶</button>
     <span class="info" id="info"></span>
+    <div class="controls">
+      <button id="pause"></button>
+      <button id="stop" title="停止：暂停并取消所有举手" aria-label="停止"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg></button>
+      <button id="next" title="读完了，放下一条" aria-label="下一条"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 5 9 7-9 7Z" fill="currentColor"/><path d="M18 5v14"/></svg></button>
+    </div>
+    <button class="icon" data-toggle-room title="房间状态面板" aria-label="房间状态面板"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></svg></button>
+    <div class="convline off" id="convline" title="观点收敛度（刻度是收尾阈值）"><i></i><b></b></div>
   </div>
   <div id="msgs"></div>
   <footer>
-    <div id="quote"></div>
-    <textarea id="input" placeholder="说点什么… Enter 发送，Shift+Enter 换行。@claude @codex @agy @opencode 点名；输入时暂停发布新消息。"></textarea>
-    <div class="row">
-      <span class="info" style="color:var(--mute);font-size:12px">点名：</span>
-      <span id="ats"></span>
-      <button class="primary" id="send" style="margin-left:auto">发送</button>
+    <div class="composer">
+      <div id="quote"></div>
+      <textarea id="input" rows="1" placeholder="说点什么，或 @ 某位成员…"></textarea>
+      <div class="crow">
+        <span id="ats"></span>
+        <span class="hint">Enter 发送，Shift+Enter 换行，输入时暂缓发布</span>
+        <button id="send" title="发送" aria-label="发送"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+      </div>
     </div>
   </footer>
 </main>
 <aside id="right">
   <section id="moderator"></section>
-  <section><h3>成员</h3><div id="members"></div></section>
-  <section class="settings">
-    <h3>设置（立即生效）</h3>
-    <label>讨论语言 <input id="s-language" size="8"></label>
-    <label>每人每轮发言上限 <input id="s-turnCap" type="number" min="1"></label>
-    <label>阅读速度（字/分钟） <input id="s-readSpeed" type="number" min="50" step="50"></label>
-    <label>同时思考人数 <input id="s-maxThinkers" type="number" min="1" max="4"></label>
-    <label>调度方式 <select id="s-scheduler">
-      <option value="jev">jev（Jev 判断谁有新东西可说）</option>
-      <option value="algorithm">algorithm（信号×公平×新鲜−冷却）</option>
-      <option value="broadcast">broadcast（每条都唤醒所有人）</option>
-    </select></label>
-    <label title="jev 模式：新意低于这个值的成员不会被请来接着说（你的消息和 @ 不受影响）">新意阈值（%） <input id="s-noveltyMin" type="number" min="0" max="100" step="5"></label>
-    <label title="Jev 判断观点已收敛时，请一位成员总结后结束本轮">收敛后自动收尾 <input id="s-autoStop" type="checkbox"></label>
-    <label title="见仁见智的问题如果没人认真反对就达成一致，收尾前请一位成员唱反调（每轮一次）">太快一致时唱反调 <input id="s-devil" type="checkbox"></label>
-    <label title="同样的论点来回重复、没有进展时暂停，等你定方向（每轮一次）">原地打转时暂停 <input id="s-circlePause" type="checkbox"></label>
-    <label title="收敛度达到这个值就收尾；“大体一致且只在附和/重复”也会收尾">收敛阈值（%） <input id="s-convergeAt" type="number" min="50" max="100" step="5"></label>
-  </section>
+  <section><div class="sect">成员</div><div id="members"></div></section>
+  <details class="settings">
+    <summary><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m9 5 7 7-7 7"/></svg>讨论设置</summary>
+    <div class="grp">
+      <div class="gl">节奏</div>
+      <label>讨论语言 <input id="s-language"></label>
+      <label title="自你上一条消息起，每人最多发言几次">每人每轮发言上限 <input id="s-turnCap" type="number" min="1"></label>
+      <label>阅读速度（字/分钟） <input id="s-readSpeed" type="number" min="50" step="50"></label>
+      <label>同时思考人数 <input id="s-maxThinkers" type="number" min="1" max="4"></label>
+    </div>
+    <div class="grp">
+      <div class="gl">主持</div>
+      <label>调度方式 <select id="s-scheduler">
+        <option value="jev">Jev：按新意请人发言</option>
+        <option value="algorithm">算法：信号、公平、新鲜、冷却</option>
+        <option value="broadcast">广播：每条都唤醒所有人</option>
+      </select></label>
+      <label title="jev 模式：新意低于这个值的成员不会被请来接着说（你的消息和 @ 不受影响）">新意阈值（%） <input id="s-noveltyMin" type="number" min="0" max="100" step="5"></label>
+      <label class="switch" title="Jev 判断观点已收敛时，请一位成员总结后结束本轮">收敛后自动收尾 <input id="s-autoStop" type="checkbox"></label>
+      <label title="收敛度达到这个值就收尾；“大体一致且只在附和/重复”也会收尾">收敛阈值（%） <input id="s-convergeAt" type="number" min="50" max="100" step="5"></label>
+      <label class="switch" title="见仁见智的问题如果没人认真反对就达成一致，收尾前请一位成员唱反调（每轮一次）">太快一致时唱反调 <input id="s-devil" type="checkbox"></label>
+      <label class="switch" title="同样的论点来回重复、没有进展时暂停，等你定方向（每轮一次）">原地打转时暂停 <input id="s-circlePause" type="checkbox"></label>
+    </div>
+  </details>
 </aside>
 <script>
 const $ = s => document.querySelector(s);
@@ -148,11 +308,17 @@ const post = (url, body = {}) => fetch(url, { method: 'POST', body: JSON.stringi
 let messages = [], S = null, replyTo = null, clockSkew = 0, jumpTo = null;
 const member = n => S?.members.find(m => m.name === n);
 const label = n => n === 'user' ? '我' : n === 'system' ? '系统' : n === 'moderator' ? '主持人' : (member(n)?.label || n);
-const color = n => member(n)?.color || '';
+// Agent accents: used only for avatars, the message rail and mini-bars.
+const ACCENT = { claude: '#C2703D', codex: '#14906C', agy: '#3A72E0', opencode: '#7A5FD6' };
+const MONO = { claude: 'Cl', codex: 'Cx', agy: 'Ag', opencode: 'Oc' };
+const color = n => ACCENT[n] || member(n)?.color || '';
+const av = n => `<span class="av" style="--c:${color(n)}">${MONO[n] || esc(label(n).slice(0, 2))}</span>`;
 const utc = s => new Date(s.replace(' ', 'T') + 'Z');
+const hm = s => utc(s).toTimeString().slice(0, 5);
 const when = s => { if (!s) return ''; const d = utc(s), now = new Date();
   return d.toDateString() === now.toDateString() ? d.toTimeString().slice(0, 5) : `${d.getMonth() + 1}/${d.getDate()}`; };
 const pct = x => `${Math.round(x * 100)}%`;
+const mini = (v, tick, c) => `<span class="mini" ${c ? `style="--c:${c}"` : ''}><i style="width:${v == null ? 0 : v * 100}%"></i>${tick != null ? `<b style="left:${tick}%"></b>` : ''}</span>`;
 
 function linkRefs(t) {
   return esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`\n]+)`/g, '<code>$1</code>')
@@ -163,36 +329,48 @@ function renderMsg(m) {
   const el = document.createElement('div');
   el.className = `msg ${m.kind}`; el.id = 'm' + m.id;
   if (m.kind === 'agent') el.style.setProperty('--c', color(m.sender));
-  if (m.kind === 'system') { el.innerHTML = `#${m.id} ${linkRefs(m.text)}`; return el; }
-  if (m.kind === 'moderator') { el.innerHTML = linkRefs(m.text); el.title = `主持人 · ${when(m.created_at)}`; return el; }
+  if (m.kind === 'system') { el.innerHTML = `<span>${linkRefs(m.text)}</span>`; el.title = `#${m.id}`; return el; }
+  if (m.kind === 'moderator') { el.innerHTML = `<span>${linkRefs(m.text)}</span>`; el.title = `主持人 ${when(m.created_at)}`; return el; }
   const talk = messages.filter(x => x.kind === 'user' || x.kind === 'agent');
   const idx = talk.findIndex(x => x.id === m.id);
   const between = m.based_on != null ? talk.slice(0, idx).filter(x => x.id > m.based_on) : [];
-  const hd = [`<b>${esc(label(m.sender))}${m.model ? ` · ${esc(m.model)}` : ''}</b>`, `<span>#${m.id}</span>`,
-    `<span>${utc(m.created_at).toTimeString().slice(0, 5)}</span>`];
-  if (m.reply_to) hd.push(`<span>回复 <a class="ref" data-id="${m.reply_to}">#${m.reply_to}</a></span>`);
-  if (m.latency_ms) hd.push(`<span>⏱ ${Math.round(m.latency_ms / 1000)}s</span>`);
-  if (m.based_on != null) hd.push(`<span class="tag" title="开始思考时看到的最后一条">↪ <a class="ref" data-id="${m.based_on}">#${m.based_on}</a>${between.length ? ` (+${between.length} 条更新的)` : ''}</span>`);
+  const hd = [];
+  if (m.kind === 'agent') hd.push(av(m.sender), `<span class="who">${esc(label(m.sender))}</span>`, m.model ? `<span class="model" title="${esc(m.model)}">${esc(m.model)}</span>` : '');
+  else hd.push(`<span class="who" style="font-weight:500;color:var(--ink-2)">我</span>`);
+  hd.push(`<span title="#${m.id}">${hm(m.created_at)}</span>`);
+  if (m.latency_ms) hd.push(`<span title="思考用时">${Math.round(m.latency_ms / 1000)}s</span>`);
+  if (m.reply_to) hd.push(`<span class="tag">回复 <a class="ref" data-id="${m.reply_to}">#${m.reply_to}</a></span>`);
+  if (m.based_on != null && between.length) hd.push(`<span class="tag" title="开始思考时看到的最后一条是 #${m.based_on}，之后又有 ${between.length} 条">基于 <a class="ref" data-id="${m.based_on}">#${m.based_on}</a> +${between.length}</span>`);
   if (m.stale) hd.push(`<span class="tag warn" title="这条回复写于你的新消息之前">写于你的新消息之前</span>`);
-  if (m.role === 'devil') hd.push(`<span class="tag devil" title="主持人请它站到对立面">😈 唱反调</span>`);
-  if (m.role === 'summary') hd.push(`<span class="tag summary">📝 总结</span>`);
-  if (m.turn_no) hd.push(`<span class="tag">第 ${m.turn_no} 次发言</span>`);
-  hd.push(`<span class="rp" data-reply="${m.id}" title="引用回复">↩ 回复</span>`);
+  if (m.role === 'devil') hd.push(`<span class="tag devil" title="主持人请它站到对立面">唱反调</span>`);
+  if (m.role === 'summary') hd.push(`<span class="tag summary">总结</span>`);
+  if (m.turn_no) hd.push(`<span title="本讨论中的第 ${m.turn_no} 次发言">第 ${m.turn_no} 次</span>`);
+  hd.push(`<span class="rp" data-reply="${m.id}" title="引用回复 #${m.id}">回复</span>`);
   el.innerHTML = `<div class="hd">${hd.join('')}</div><div class="tx">${linkRefs(m.text)}</div>`;
   return el;
 }
 
+const IDEAS = ['单元测试应该 mock 数据库，还是连真实的测试库？', '三个人做内部工具，后端选 Node 还是 Go？', '什么时候值得把单体应用拆成微服务？'];
+function emptyState() {
+  const names = S?.members.filter(m => m.enabled).map(m => m.name) || Object.keys(ACCENT);
+  return `<div class="empty">
+    <div class="members">${names.map(av).join('')}</div>
+    <h1>开一场讨论</h1>
+    <p>提一个问题，${names.length} 位编码助手会各自给出观点、互相补充和反驳；主持人 Jev 安排发言顺序，观点收敛时请人总结。你随时可以插话。</p>
+    <div class="ideas">${IDEAS.map(t => `<button class="idea" data-idea="${esc(t)}">${esc(t)}</button>`).join('')}</div>
+  </div>`;
+}
 function renderAll() {
   const box = $('#msgs'); box.innerHTML = '';
-  if (!messages.length) box.innerHTML = '<div class="empty">提一个问题，四位成员会一起讨论。<br>🧭 主持人 Jev 会安排发言，并在观点收敛时请人总结。</div>';
+  if (!messages.length) box.innerHTML = emptyState();
   for (const m of messages) box.appendChild(renderMsg(m));
-  box.scrollTop = box.scrollHeight;
+  box.style.scrollBehavior = 'auto'; box.scrollTop = box.scrollHeight; box.style.scrollBehavior = '';
   if (jumpTo) { flash(jumpTo); jumpTo = null; }
 }
 function flash(id) {
   const el = $('#m' + id);
   if (!el) return;
-  el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1500);
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1700);
 }
 
 function fmtSecs(ms) { return Math.max(0, Math.round(ms / 1000)) + 's'; }
@@ -204,24 +382,35 @@ let modelLists = {};
 function modelOptions(m) {
   const list = modelLists[m.name] || [];
   const opts = list.some(x => x.id === m.model) ? list : [{ id: m.model, name: m.model || 'default' }, ...list];
-  return opts.map(x => `<option value="${esc(x.id)}" ${x.id === m.model ? 'selected' : ''}>${esc(x.name === x.id ? x.id : `${x.name} · ${x.id || 'default'}`)}</option>`).join('');
+  return opts.map(x => `<option value="${esc(x.id)}" ${x.id === m.model ? 'selected' : ''}>${esc(x.name === x.id ? x.id : `${x.name} (${x.id || 'default'})`)}</option>`).join('');
 }
 
 // ---------- history ----------
 let searchQ = '', searchHits = null;
+const ICON = {
+  rename: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+  export: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></svg>',
+  del: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+};
 function renderHistory() {
   if (searchHits) {
     const re = new RegExp(searchQ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
     return setHTML('#history', searchHits.length ? searchHits.map(h => `<div class="hit" data-hit="${h.chat_id}:${h.id}">
-      <b>${esc(h.title)}</b> · #${h.id} ${esc(label(h.sender))}<div>${esc(h.snippet).replace(re, '<mark>$&</mark>')}</div></div>`).join('')
-      : '<div class="hit">没有找到</div>');
+      <div class="ht">${esc(h.title)}</div><div>${esc(label(h.sender))}：${esc(h.snippet).replace(re, '<mark>$&</mark>')}</div></div>`).join('')
+      : '<div class="group">没有找到匹配的讨论</div>');
   }
-  setHTML('#history', S.chats.map(c => `<div class="chat ${c.id === S.chatId ? 'on' : ''}" data-chat="${c.id}">
-    <div class="t" title="${esc(c.title)}">${esc(c.title)}</div>
-    <div class="p">${esc(c.preview) || '（还没有消息）'}</div>
-    <div class="m">${c.n} 条 · ${when(c.last || c.created_at)}</div>
-    <div class="acts"><span data-rename="${c.id}" title="重命名">✎</span><span data-export="${c.id}" title="导出 Markdown">⤓</span><span data-del="${c.id}" title="删除">🗑</span></div>
-  </div>`).join(''));
+  const day = c => { const d = utc(c.last || c.created_at), t = new Date(); t.setHours(0, 0, 0, 0);
+    return d >= t ? '今天' : d >= new Date(t - 864e5) ? '昨天' : d >= new Date(t - 6 * 864e5) ? '最近 7 天' : '更早'; };
+  let html = '', g = '';
+  for (const c of S.chats) {
+    const gg = day(c);
+    if (gg !== g) { html += `<div class="group">${gg}</div>`; g = gg; }
+    html += `<div class="chat ${c.id === S.chatId ? 'on' : ''}" data-chat="${c.id}" title="${esc(c.title)}${c.preview ? `\n${esc(c.preview)}` : ''}\n${c.n} 条消息">
+      <span class="t">${esc(c.title)}</span><span class="m">${when(c.last || c.created_at)}</span>
+      <span class="acts"><span data-rename="${c.id}" title="重命名">${ICON.rename}</span><span data-export="${c.id}" title="导出 Markdown">${ICON.export}</span><span data-del="${c.id}" title="删除">${ICON.del}</span></span>
+    </div>`;
+  }
+  setHTML('#history', html);
 }
 let searchTimer;
 $('#search').addEventListener('input', e => {
@@ -232,64 +421,89 @@ $('#search').addEventListener('input', e => {
 
 // ---------- moderator ----------
 function renderModerator() {
-  const j = S.jev, mode = S.settings.scheduler;
-  const status = j.assessing ? '<span class="pulse">正在评估谁有新观点…</span>' : j.judging ? '<span class="pulse">正在判断是否收敛…</span>'
-    : j.down ? 'Jev 暂不可用，临时用算法' : j.ms ? `上次判断 ${j.ms}ms` : '待命';
-  const meter = (name, v, tick, hint) => `<div class="meter"><div class="lbl"><span title="${hint}">${name}</span><span>${v == null ? '—' : pct(v)}</span></div>
-    <div class="track"><div class="fill" style="width:${v == null ? 0 : v * 100}%"></div>${tick != null ? `<div class="tick" style="left:${tick}%"></div>` : ''}</div></div>`;
-  let html = `<div class="modcard"><div class="hd">🧭 主持人 · Jev<span class="s">${status}</span></div>
-    <div style="font-size:12px;color:var(--mute);margin-top:2px">调度：${mode === 'jev' ? 'Jev 判断谁有新东西可说' : mode === 'algorithm' ? '算法（信号×公平×新鲜−冷却）' : '广播'}${S.settings.autoStop ? ' · 收敛后自动收尾' : ''}</div>
-    ${meter('观点收敛度', S.mod?.convergence, S.settings.autoStop ? S.settings.convergeAt : null, '红线是收尾阈值')}
-    ${meter('附和/重复', S.mod?.stalling, null, '最近几条是否只在附和或复述')}
-    ${S.settings.circlePause ? meter('原地打转', S.mod?.circling, 70, '同样的论点来回重复；超过红线会暂停') : ''}
-    ${S.mod?.debatable != null ? `<div class="modflags"><span title="问题是否见仁见智（不是有标准答案的事实题）">见仁见智 ${pct(S.mod.debatable)}</span>`
-      + `<span title="本轮有没有人认真反对过多数意见">有人反对 ${pct(S.mod.challenged)}</span></div>` : ''}`;
-  if (mode === 'jev') html += `<div class="meter" style="margin-top:8px">接下来谁有新东西可说（红线是新意阈值）</div>`
-    + S.members.filter(m => m.enabled).map(m => meter(`<span class="dot" style="display:inline-block;background:${m.color}"></span> ${esc(m.label)}`, m.nov, S.settings.noveltyMin, '')).join('');
-  if (S.wrapped) html += `<div style="margin-top:6px;font-size:12px;color:var(--mod)">本轮已收尾，发新消息可继续讨论。</div>`;
-  setHTML('#moderator', html + '</div>');
+  const j = S.jev, mode = S.settings.scheduler, m = S.mod;
+  const status = j.assessing ? '<span class="pulse">在评估谁有新观点</span>' : j.judging ? '<span class="pulse">在判断是否收敛</span>'
+    : j.down ? 'Jev 暂不可用，改用算法' : j.ms ? `上次判断 ${j.ms}ms` : '待命';
+  const row = (name, v, tick, hint) => `<div class="metric" title="${hint}"><span class="ml">${name}</span>${mini(v, tick)}<span class="mv">${v == null ? '–' : pct(v)}</span></div>`;
+  const modeText = mode === 'jev' ? '按新意请人发言' : mode === 'algorithm' ? '按算法调度' : '广播：每条唤醒所有人';
+  let html = `<div class="room"><div class="rh"><span class="glyph"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5Z" fill="currentColor"/></svg></span>
+    <span class="rt">主持人 Jev</span><span class="rs">${status}</span></div>
+    <div class="mode">${modeText}${S.settings.autoStop ? '，收敛后自动收尾' : ''}</div>
+    ${row('观点收敛', m?.convergence, S.settings.autoStop ? S.settings.convergeAt : null, '刻度是收尾阈值')}
+    ${row('附和重复', m?.stalling, null, '最近几条是否只在附和或复述')}
+    ${S.settings.circlePause ? row('原地打转', m?.circling, 70, '同样的论点来回重复；超过刻度会暂停') : ''}
+    ${m?.debatable != null ? `<div class="flags"><span title="问题是否见仁见智（不是有标准答案的事实题）">见仁见智 <b>${pct(m.debatable)}</b></span>`
+      + `<span title="本轮有没有人认真反对过多数意见">有人反对 <b>${pct(m.challenged)}</b></span></div>` : ''}
+    ${S.wrapped ? '<div class="wrapnote">本轮已收尾，发新消息可继续讨论。</div>' : ''}</div>`;
+  setHTML('#moderator', html);
+  const line = $('#convline');
+  line.classList.toggle('off', m?.convergence == null);
+  if (m?.convergence != null) {
+    line.querySelector('i').style.width = pct(m.convergence);
+    line.querySelector('b').style.left = S.settings.autoStop ? `${S.settings.convergeAt}%` : '-10px';
+    line.title = `观点收敛度 ${pct(m.convergence)}${S.settings.autoStop ? `，到 ${S.settings.convergeAt}% 收尾` : ''}`;
+  }
 }
 
-const openLive = new Set();
+// ---------- members ----------
+const openLive = new Set(), openMem = new Set();
+function renderMembers() {
+  return S.members.map(m => {
+    const qi = S.queue.findIndex(x => x.agent === m.name);
+    let st = '空闲', cls = '';
+    if (!m.enabled) st = '未参与';
+    else if (m.status === 'thinking') { st = `<span class="pulse">思考中</span> <span data-since="${m.started}"></span>`; cls = 'busy'; }
+    else if (qi >= 0) { st = `已写好，排第 ${qi + 1}`; cls = 'busy'; }
+    else if (m.hand) { st = `举手：${esc(m.hand.why)}`; cls = 'busy'; }
+    else if (m.error) { st = '出错'; cls = 'err'; }
+    else if (m.note) st = esc(m.note);
+    const right = S.settings.scheduler === 'jev' && m.nov != null
+      ? `<span title="Jev 判断的新意 ${pct(m.nov)}（刻度是阈值）">${mini(m.nov, S.settings.noveltyMin, color(m.name))}</span>`
+      : `<span title="本轮发言 / 上限">${m.sinceUser}/${S.settings.turnCap}</span>`;
+    const open = openMem.has(m.name);
+    return `<div class="mem ${m.enabled ? '' : 'off'} ${open ? 'open' : ''}">
+      <div class="mrow" data-expand="${m.name}" title="${esc(m.hand ? `举手原因：${m.hand.why}${m.score != null ? `，得分 ${m.score}` : ''}` : '点击查看模型、会话和实时输出')}">
+        ${av(m.name)}<span class="mname">${esc(m.label)}</span><span class="mst ${cls}">${st}</span>
+        <span class="mright">${right}</span>
+        <span class="macts"><button data-floor="${m.name}" title="让它马上发言">请发言</button>${m.hand && m.status !== 'thinking' ? `<button data-lower="${m.name}">放下手</button>` : ''}</span>
+      </div>
+      <div class="mdetail">
+        <select data-model="${m.name}" title="模型（下一轮生效，会话保留）">${modelOptions(m)}</select>
+        <div class="kv">
+          <label class="switch"><input type="checkbox" data-enable="${m.name}" ${m.enabled ? 'checked' : ''}>参与</label>
+          <span>本轮 ${m.sinceUser}/${S.settings.turnCap}</span><span>共 ${m.turns} 次</span>
+          <span title="${esc(m.sid || '')}">会话 ${m.sid ? esc(m.sid.slice(0, 8)) : '未开始'}</span>
+        </div>
+        ${m.error ? `<div class="err">${esc(m.error)}</div>` : ''}
+        ${m.live ? `<details data-live="${m.name}" ${openLive.has(m.name) ? 'open' : ''}><summary>实时输出</summary><pre>${esc(m.live)}</pre></details>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
 function renderState() {
   const now = Date.now() - clockSkew;
   renderHistory(); renderModerator();
   const cur = S.chats.find(c => c.id === S.chatId);
   $('#title').textContent = cur?.title || '';
-  setHTML('#members', S.members.map(m => {
-    const qi = S.queue.findIndex(x => x.agent === m.name);
-    let st = '空闲';
-    if (m.status === 'thinking') st = `✋ 思考中 ${fmtSecs(now - m.started)}`;
-    else if (qi >= 0) st = `✍️ 已写好，排第 ${qi + 1}`;
-    else if (m.hand) st = `✋ 举手 (${esc(m.hand.why)}${m.score != null ? `, ${m.score}` : ''})`;
-    else if (m.note) st = m.note;
-    return `<div class="member ${m.enabled ? '' : 'off'}">
-      <div class="top"><span class="dot" style="background:${m.color}"></span><span class="name">${esc(m.label)}</span>
-        <span style="font-size:12px;color:var(--mute)">@${m.name}</span><span class="st">${st}</span></div>
-      <div class="meta"><select data-model="${m.name}" title="模型（下一轮生效，会话保留）" style="max-width:100%">${modelOptions(m)}</select></div>
-      <div class="meta">
-        <span title="本轮（自你上条消息起）/ 上限">本轮 ${m.sinceUser}/${S.settings.turnCap}</span>
-        <span>共 ${m.turns} 次</span>
-        <span title="${esc(m.sid || '')}">会话 ${m.sid ? esc(m.sid.slice(0, 8)) : '—'}</span>
-        <label><input type="checkbox" data-enable="${m.name}" ${m.enabled ? 'checked' : ''}>参与</label>
-        <button data-floor="${m.name}" title="让它马上发言">给发言权</button>
-        ${m.hand && m.status !== 'thinking' ? `<button data-lower="${m.name}">放下手</button>` : ''}
-      </div>
-      ${m.error ? `<div class="err">${esc(m.error)}</div>` : ''}
-      ${m.live ? `<details data-live="${m.name}" ${openLive.has(m.name) ? 'open' : ''}><summary style="font-size:12px;color:var(--mute)">实时输出</summary><pre>${esc(m.live)}</pre></details>` : ''}
-    </div>`;
-  }).join('')) && document.querySelectorAll('[data-live]').forEach(d => {
+  setHTML('#members', renderMembers()) && document.querySelectorAll('[data-live]').forEach(d => {
     d.ontoggle = () => d.open ? openLive.add(d.dataset.live) : openLive.delete(d.dataset.live);
     const pre = d.querySelector('pre'); pre.scrollTop = pre.scrollHeight;
   });
-  setHTML('#ats', S.members.map(m => `<button data-at="${m.name}">@${m.name}</button>`).join(' '));
-  $('#pause').textContent = S.paused ? '▶ 继续' : '⏸ 暂停';
+  // thinking timers tick without re-rendering the rows (keeps dropdowns and hover stable)
+  document.querySelectorAll('[data-since]').forEach(s => (s.textContent = fmtSecs(now - +s.dataset.since)));
+  setHTML('#ats', S.members.filter(m => m.enabled).map(m => `<button class="chip" data-at="${m.name}" title="点名 @${m.name}"><span class="dot" style="--c:${color(m.name)}"></span>@${m.name}</button>`).join(''));
+  const p = $('#pause');
+  setHTML('#pause', S.paused
+    ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l12-7.5Z"/></svg>继续'
+    : '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4" height="15" rx="1.2"/><rect x="14" y="4.5" width="4" height="15" rx="1.2"/></svg>暂停');
+  p.classList.toggle('paused', S.paused); p.title = S.paused ? '继续讨论' : '暂停：正在思考的会完成，回复留在队列';
   const info = [];
-  if (S.paused) info.push('已暂停（正在思考的会完成，回复保留在队列）');
-  if (S.queue.length) info.push(`待发布：${S.queue.map(x => label(x.agent)).join('、')}`);
+  if (S.paused) info.push('已暂停');
+  if (S.queue.length) info.push(`待发布 ${S.queue.map(x => label(x.agent)).join('、')}`);
   if (S.holding) info.push('你在输入，暂缓发布');
-  else if (S.readLeft > 0 && S.queue.length) info.push(`阅读时间还剩 ${fmtSecs(S.readLeft)}`);
-  $('#info').textContent = info.join(' · ');
+  else if (S.readLeft > 0 && S.queue.length) info.push(`阅读中，还剩 ${fmtSecs(S.readLeft)}`);
+  $('#info').textContent = info.join('，');
   for (const k of ['autoStop', 'devil', 'circlePause']) $('#s-' + k).checked = S.settings[k];
   for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin']) {
     const el = $('#s-' + k);
@@ -308,7 +522,7 @@ es.onmessage = e => {
   if (ev.type === 'msg') {
     if (!messages.length) $('#msgs').innerHTML = '';
     messages.push(ev.msg);
-    const box = $('#msgs'), atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+    const box = $('#msgs'), atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
     box.appendChild(renderMsg(ev.msg));
     if (atEnd || ev.msg.kind === 'user') box.scrollTop = box.scrollHeight;
   }
@@ -319,7 +533,7 @@ function rename(id) {
   if (t && t.trim()) post('/api/chat/rename', { id, title: t.trim() });
 }
 document.addEventListener('click', e => {
-  const t = e.target.closest('[data-id],[data-reply],[data-floor],[data-lower],[data-at],[data-chat],[data-hit],[data-rename],[data-export],[data-del]');
+  const t = e.target.closest('[data-id],[data-reply],[data-floor],[data-lower],[data-at],[data-chat],[data-hit],[data-rename],[data-export],[data-del],[data-idea],[data-expand]');
   if (!t) return;
   const d = t.dataset;
   if (d.rename) return rename(+d.rename);
@@ -335,11 +549,13 @@ document.addEventListener('click', e => {
     if (c === S.chatId) flash(id); else { jumpTo = id; post('/api/chat/switch', { id: c }); }
     return;
   }
+  if (d.idea) { const i = $('#input'); i.value = d.idea; i.focus(); grow(); typing(); return; }
+  if (d.expand) { openMem.has(d.expand) ? openMem.delete(d.expand) : openMem.add(d.expand); delete lastHTML['#members']; return renderState(); }
   if (d.id) flash(d.id);
   if (d.reply) setReply(+d.reply);
   if (d.floor) post('/api/floor', { agent: d.floor });
   if (d.lower) post('/api/lower', { agent: d.lower });
-  if (d.at) { const i = $('#input'); i.value = (i.value + ` @${d.at} `).replace(/^ /, ''); i.focus(); typing(); }
+  if (d.at) { const i = $('#input'); i.value = (i.value + ` @${d.at} `).replace(/^ /, ''); i.focus(); grow(); typing(); }
 });
 document.addEventListener('change', e => {
   const d = e.target.dataset;
@@ -354,10 +570,12 @@ function setReply(id) {
   replyTo = id;
   const m = messages.find(x => x.id === id), q = $('#quote');
   q.style.display = id ? 'block' : 'none';
-  if (id) q.innerHTML = `回复 #${id} ${esc(label(m?.sender))}：${esc((m?.text || '').slice(0, 80))} <a class="ref" id="unquote">✕</a>`;
+  if (id) q.innerHTML = `<span class="q"><span>回复 #${id} ${esc(label(m?.sender))}：${esc((m?.text || '').slice(0, 80))}</span><button class="icon" id="unquote" style="width:20px;height:20px" aria-label="取消引用">✕</button></span>`;
   if (id) { $('#unquote').onclick = ev => { ev.stopPropagation(); setReply(null); }; $('#input').focus(); }
 }
 
+// The composer grows with its content.
+const grow = () => { const i = $('#input'); i.style.height = 'auto'; i.style.height = Math.min(i.scrollHeight, 220) + 'px'; };
 // Typing holds the publish queue; the server forgets the hold 15s after the last ping.
 let lastPing = 0;
 function typing() {
@@ -365,7 +583,7 @@ function typing() {
   if (!has) { lastPing = 0; return post('/api/typing', { typing: false }); }
   if (Date.now() - lastPing > 5000) { lastPing = Date.now(); post('/api/typing', { typing: true }); }
 }
-$('#input').addEventListener('input', typing);
+$('#input').addEventListener('input', () => { grow(); typing(); });
 setInterval(() => { if ($('#input').value.trim()) typing(); }, 5000);
 
 async function sendMsg() {
@@ -373,7 +591,7 @@ async function sendMsg() {
   if (!text) return;
   const r = await post('/api/send', { text, reply_to: replyTo, chat_id: S.chatId });
   if (!r.ok) return alert((await r.json().catch(() => ({}))).error || '发送失败'); // keep the text for a retry
-  $('#input').value = ''; lastPing = 0; setReply(null);
+  $('#input').value = ''; grow(); lastPing = 0; setReply(null);
 }
 $('#send').onclick = sendMsg;
 $('#input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMsg(); } });
@@ -383,14 +601,20 @@ $('#next').onclick = () => post('/api/next');
 $('#title').onclick = () => rename(S.chatId);
 const newChat = () => { post('/api/chat/new'); $('#input').focus(); };
 $('#newChat').onclick = newChat;
-const setHist = show => { document.body.classList.toggle('nohist', !show); localStorage.hist = show ? '1' : '0'; };
-setHist(localStorage.hist ? localStorage.hist === '1' : innerWidth >= 1100);
+// Both side panels collapse; the choice is remembered, narrow windows start collapsed.
+const panel = (cls, key, wide) => {
+  const set = show => { document.body.classList.toggle(cls, !show); localStorage[key] = show ? '1' : '0'; };
+  set(localStorage[key] ? localStorage[key] === '1' : innerWidth >= wide);
+  return () => set(document.body.classList.contains(cls));
+};
+const toggleHist = panel('nohist', 'hist', 1100), toggleRoom = panel('noroom', 'room', 1000);
 document.addEventListener('click', e => {
-  if (e.target.closest('[data-toggle-hist]')) setHist(document.body.classList.contains('nohist'));
+  if (e.target.closest('[data-toggle-hist]')) toggleHist();
+  if (e.target.closest('[data-toggle-room]')) toggleRoom();
   if (e.target.closest('[data-new-chat]')) newChat();
 });
 document.addEventListener('keydown', e => {
-  if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); setHist(document.body.classList.contains('nohist')); }
+  if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 's') { e.preventDefault(); toggleHist(); }
 });
 </script>
 </body>
