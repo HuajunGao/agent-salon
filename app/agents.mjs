@@ -214,7 +214,8 @@ export function runTurn(agent, prompt, sid, { cwd, dataDir, model, exec, onLive 
   return new Promise(resolve => {
     let raw = '', buf = '', killed = '';
     // On Linux the CLI gets its own process group so a timeout can kill everything it started.
-    const p = spawn(bin, args, { cwd, env: userEnv(env), ...asUser(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: !WIN });
+    // PWD too: Node doesn't update it for cwd, and some CLIs (opencode 2, agy) take their project directory from it.
+    const p = spawn(bin, args, { cwd, env: { ...userEnv(env), PWD: cwd }, ...asUser(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: !WIN });
     const kill = why => {
       killed = why;
       if (WIN) spawn('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true });
