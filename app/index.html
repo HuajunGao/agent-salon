@@ -663,6 +663,7 @@ function renderState() {
   const info = [];
   if (S.paused) info.push('已暂停');
   if (S.queue.length) info.push(`待发布 ${S.queue.map(x => label(x.agent)).join('、')}`);
+  if (S.speaking) info.push(tts.current ? '正在朗读，读完再放下一条（“下一条”可跳过）' : '有浏览器在朗读，读完再放下一条');
   if (S.holding) info.push('你在输入，暂缓发布');
   else if (S.readLeft > 0 && S.queue.length) info.push(`阅读中，还剩 ${fmtSecs(S.readLeft)}`);
   $('#info').textContent = info.join('，');
