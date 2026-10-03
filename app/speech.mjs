@@ -39,6 +39,8 @@ const REF_LIST = /\s*[(（]\s*#\d+(?:\s*(?:[,，、和与]|and)\s*#\d+)*\s*[)）
 export function speakable(text, nameOf = () => null) {
   return text
     .replace(REF_LIST, '')
+    .replace(/@(\w+)\s*#\d+/g, '@$1') // "@claude #271": the name is already said once
+    .replace(/#(\d+)\s*@(\w+)/g, '@$2')
     .replace(/#(\d+)/g, (_, id) => nameOf(+id) || '')
     .replace(/```[\s\S]*?```/g, '（代码略）')
     .replace(/`([^`\n]+)`/g, '$1')
