@@ -191,6 +191,10 @@
   .memhead .acts { margin-left:auto; display:flex; gap:2px; }
   .memhead .acts button { height:22px; padding:0 7px; border-radius:var(--r-sm); font-size:var(--t-xs); color:var(--ink-3); }
   .memhead .acts button:hover { background:var(--hover); color:var(--ink); }
+  .memtoggle { display:inline-flex; align-items:center; gap:6px; color:inherit; }
+  .memtoggle:hover { color:var(--ink-2); }
+  .memtoggle svg { transition:transform .15s; }
+  .memtoggle[aria-expanded=true] svg { transform:rotate(90deg); }
   .memlist { margin:0; padding:0 var(--s1); list-style:none; font-size:var(--t-sm); color:var(--ink-2); line-height:1.5; }
   .memlist li { position:relative; padding:3px 0 3px 12px; }
   .memlist li::before { content:""; position:absolute; left:2px; top:11px; width:4px; height:4px; border-radius:50%; background:var(--ink-3); }
@@ -544,6 +548,7 @@ function renderModerator() {
 // ---------- memory about the user ----------
 // Facts the agents read at the start of each new discussion; the user can edit or refresh them.
 let memEditing = false;
+let memoryCollapsed = localStorage.getItem('memory-collapsed') !== 'false';
 function renderMemory() {
   if (memEditing) return; // don't overwrite the textarea while the user edits
   const m = S.memory, items = (m.text || '').split('\n').map(l => l.replace(/^-\s*/, '').trim()).filter(Boolean);
@@ -553,12 +558,17 @@ function renderMemory() {
   const SRC = /\s*[(（]\s*(#\d+(?:\s*[,，、]\s*#\d+)*)\s*[)）]\s*$/; // trailing "(#74, #80)" = where the fact came from
   const item = t => { const src = t.match(SRC);
     return `<li>${linkRefs(t.replace(SRC, ''))}${src ? ` <span class="src">${linkRefs(src[1])}</span>` : ''}</li>`; };
-  setHTML('#memory', `<div class="sect memhead">关于你 <span>${status}</span><span class="acts">
+  setHTML('#memory', `<div class="sect memhead"><button class="memtoggle" data-mem-toggle aria-expanded="${!memoryCollapsed}" aria-controls="memory-body"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 5 7 7-7 7"/></svg>关于你</button> <span>${status}</span><span class="acts">
       <button data-mem-curate title="把你最近说的话整理进来">整理</button><button data-mem-edit title="修改或删除记忆">编辑</button></span></div>
-    ${items.length ? `<ul class="memlist">${items.map(item).join('')}</ul>`
-      : '<div class="memempty">还没有关于你的记忆。每轮讨论安静下来后，会从你说过的话里整理出长期有用的信息，新讨论里的成员都会先读到。</div>'}`);
+    <div id="memory-body" ${memoryCollapsed ? 'hidden' : ''}>${items.length ? `<ul class="memlist">${items.map(item).join('')}</ul>`
+      : '<div class="memempty">还没有关于你的记忆。每轮讨论安静下来后，会从你说过的话里整理出长期有用的信息，新讨论里的成员都会先读到。</div>'}</div>`);
 }
 document.addEventListener('click', e => {
+  if (e.target.closest('[data-mem-toggle]')) {
+    memoryCollapsed = !memoryCollapsed;
+    localStorage.setItem('memory-collapsed', String(memoryCollapsed));
+    delete lastHTML['#memory']; renderMemory();
+  }
   if (e.target.closest('[data-mem-curate]')) post('/api/memory/curate');
   if (e.target.closest('[data-mem-edit]')) {
     memEditing = true;
