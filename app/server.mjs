@@ -398,7 +398,9 @@ async function checkConvergence() {
   mod = { ...judgment, msgId: msgs.at(-1).id };
   const pc = x => `${Math.round(x * 100)}%`;
   // Fully converged, or mostly converged while the latest messages only agree/restate.
-  const stop = S.autoStop && (j.convergence >= S.convergeAt / 100 || (j.convergence >= 0.67 && j.stalling >= 0.6));
+  // A one-member answer (e.g. the user @mentioned one agent) is not a discussion to wrap up.
+  const speakers = new Set(msgs.filter(m => m.kind === 'agent').map(m => m.sender)).size;
+  const stop = S.autoStop && speakers >= 2 && (j.convergence >= S.convergeAt / 100 || (j.convergence >= 0.67 && j.stalling >= 0.6));
   logDecision('judge', null, { score: j.convergence, message_id: mod.msgId, latency_ms: j.ms, detail: { ...j, stop } });
 
   // Going in circles: pause and let the user steer (once per round).
