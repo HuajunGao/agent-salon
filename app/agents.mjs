@@ -19,7 +19,15 @@ export function runAs(name) {
   H = home;
   return (RUNAS = { name, uid: +uid, gid: +gid, home });
 }
-const userEnv = env => (RUNAS ? { ...env, HOME: RUNAS.home, USER: RUNAS.name, LOGNAME: RUNAS.name,
+// The service's own secrets stay out of the agents' processes (an agent can read its environment and repeat it):
+// always the app's variables (moderator, speech, search keys); on the server also anything named like a credential,
+// since its systemd environment holds nothing the CLIs need (they log in through files in the agent user's home).
+// A harness lists the variables it does need in `keep`.
+const APP_ENV = /^(TYPESAFE_|SPEECH_|FIRECRAWL_API_KEY$|AGENT_USER$|HOST$|PORT$)/;
+const SECRET = /KEY|TOKEN|SECRET|PASSW|CREDENTIAL/i;
+export const agentEnv = (env, keep = [], server = !!RUNAS) => Object.fromEntries(Object.entries(env)
+  .filter(([k]) => keep.includes(k) || !(APP_ENV.test(k) || (server && SECRET.test(k)))));
+const userEnv = (env, keep) => (env = agentEnv(env, keep), RUNAS ? { ...env, HOME: RUNAS.home, USER: RUNAS.name, LOGNAME: RUNAS.name,
   PATH: [join(RUNAS.home, '.local/bin'), join(RUNAS.home, '.opencode/bin'), env.PATH].join(delimiter) } : env);
 const asUser = () => (RUNAS ? { uid: RUNAS.uid, gid: RUNAS.gid } : {});
 
@@ -179,6 +187,7 @@ export const AGENTS = {
       // run a private server, so this run's environment (output cap, MCP off) applies.
       env: { ...process.env, AGENT_CHAT_MEMBER_API_KEY: o.member?.apiKey || '', OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX: '131072',
         OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...JSON.parse(opencodeNoMcp()), ...providerConfig(o.member, opencodeV2()) }) },
+      keep: ['AGENT_CHAT_MEMBER_API_KEY', 'FIRECRAWL_API_KEY'], // its own provider key; the websearch provider's key
       // Read-only: the plan agent. exec mode: the build agent, auto-approving (v2 --auto) inside the OS-confined user.
       args: ['run', opencodeV2() ? '--standalone' : '--pure', '--agent', o.exec ? 'build' : 'plan',
         ...(o.exec && opencodeV2() ? ['--auto'] : []), ...(o.model ? ['-m', o.model] : []),
@@ -211,7 +220,7 @@ const IDLE_MS = 5 * 60e3, TOTAL_MS = 15 * 60e3;
 // Run one turn. onLive(text) receives a readable live log. Resolves {text, sid, error, ms}.
 export function runTurn(agent, prompt, sid, { cwd, dataDir, model, exec, member, onLive }) {
   const a = AGENTS[agent];
-  const { bin, args, env } = a.cmd(prompt, sid, { dataDir, model, exec, member });
+  const { bin, args, env, keep } = a.cmd(prompt, sid, { dataDir, model, exec, member });
   const t0 = Date.now();
   let log = '';
   const st = {
@@ -222,7 +231,7 @@ export function runTurn(agent, prompt, sid, { cwd, dataDir, model, exec, member,
     let raw = '', buf = '', killed = '';
     // On Linux the CLI gets its own process group so a timeout can kill everything it started.
     // PWD too: Node doesn't update it for cwd, and some CLIs (opencode 2, agy) take their project directory from it.
-    const p = spawn(bin, args, { cwd, env: { ...userEnv(env), PWD: cwd }, ...asUser(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: !WIN });
+    const p = spawn(bin, args, { cwd, env: { ...userEnv(env, keep), PWD: cwd }, ...asUser(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: !WIN });
     const kill = why => {
       killed = why;
       if (WIN) spawn('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true });

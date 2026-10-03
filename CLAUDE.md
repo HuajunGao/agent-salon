@@ -15,7 +15,7 @@ raw HTML in messages is escaped and only http(s)/mailto links are kept). Node â‰
 
 - Run locally: `node app/server.mjs` â†’ http://localhost:3517 (`PORT`, `HOST` env; `.claude/launch.json` has a preview config)
 - Syntax check: `node --check app/server.mjs` (and the other `.mjs` files)
-- Tests (real server + SQLite, fake harness, no paid calls): `node --test app/members.test.mjs app/modes.test.mjs app/speech.test.mjs app/stance.test.mjs`.
+- Tests (real server + SQLite, fake harness, no paid calls): `node --test app/members.test.mjs app/modes.test.mjs app/speech.test.mjs app/stance.test.mjs app/env.test.mjs`.
   Verify adapters by importing them directly, e.g.
   `node -e 'import("./app/agents.mjs").then(async m => console.log(await m.runTurn("codex", "1+1?", null, {cwd: "workspace", dataDir: "data", onLive(){}})))'`
   (a second call with the returned `sid` checks session resume). `moderator.mjs` `judge`/`novelty` and `memory.mjs`
