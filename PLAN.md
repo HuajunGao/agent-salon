@@ -234,6 +234,17 @@ logged in once (`claude auth login`); the desktop app's own login isn't usable b
   real discussion: all four wrote and ran benchmarks in their own workspaces and checked each other's numbers.
 - The app has no login: keep it on the LAN (or Tailscale / a reverse proxy with auth), never port-forward it.
 
+## Discussion modes (2026-10-03, experiment)
+
+`research` / `roundtable` / `debate` per discussion (`chats.mode`, default `auto`). Deliberately prompt-only for now:
+the effective mode adds one paragraph to every turn's footer (every turn, so a mid-discussion switch reaches resumed
+sessions); scheduler, moderation, devil's advocate and wrap-up are unchanged. Auto: one Jev Choice on the first user
+question (`classifyMode`, ~0.25 s; turns wait for it), stored in `chats.auto_mode`; on failure the fallback is
+roundtable. The user overrides from the header select at any time (`POST /api/chat/mode`). For observing whether
+modes change the dynamics: each agent message records `messages.mode`, and classifications/overrides are `mode`
+events in `decisions`. Jev got all six spec examples right (Chinese wording) with ≥ 0.97 confidence.
+Test: `node --test app/modes.test.mjs`.
+
 ## Phases
 
 1. **MVP**: server + SQLite + SSE + UI; four adapters with resume and delta push; a user message wakes all agents

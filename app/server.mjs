@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, chmodSync, 
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { AGENTS, runTurn, listModels, runAs } from './agents.mjs';
-import { judge, novelty } from './moderator.mjs';
+import { judge, novelty, classifyMode } from './moderator.mjs';
 import { curate } from './memory.mjs';
 import { validateMember, memberMentions } from './members.mjs';
 
@@ -36,8 +36,12 @@ CREATE TABLE IF NOT EXISTS decisions(id INTEGER PRIMARY KEY, chat_id INTEGER, at
   event TEXT, agent TEXT, score REAL, detail TEXT, based_on INTEGER, message_id INTEGER, latency_ms INTEGER);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);`);
 db.exec(`CREATE TABLE IF NOT EXISTS members(name TEXT PRIMARY KEY, config TEXT NOT NULL);`);
-for (const col of ['model', 'role']) // role: 'devil' | 'summary' for moderator-requested turns
+// role: 'devil' | 'summary' for moderator-requested turns; mode: the discussion mode an agent message was written in.
+for (const col of ['model', 'role', 'mode'])
   if (!db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === col)) db.exec(`ALTER TABLE messages ADD COLUMN ${col} TEXT`);
+// Discussion mode per chat: 'auto' (Jev classifies the first question into auto_mode) or a mode the user chose.
+for (const [col, def] of [['mode', "TEXT DEFAULT 'auto'"], ['auto_mode', 'TEXT']])
+  if (!db.prepare('PRAGMA table_info(chats)').all().some(c => c.name === col)) db.exec(`ALTER TABLE chats ADD COLUMN ${col} ${def}`);
 const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
 const run = (sql, ...a) => db.prepare(sql).run(...a);
@@ -109,9 +113,9 @@ function logDecision(event, agent, extra = {}) {
 }
 
 function insertMsg(m) {
-  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model, role)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
-    m.latency_ms ?? null, m.turn_no ?? null, m.stale ? 1 : 0, m.model ?? null, m.role ?? null).lastInsertRowid);
+  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model, role, mode)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
+    m.latency_ms ?? null, m.turn_no ?? null, m.stale ? 1 : 0, m.model ?? null, m.role ?? null, m.mode ?? null).lastInsertRowid);
   const msg = q1('SELECT * FROM messages WHERE id=?', id);
   writeTranscript(m.chat_id);
   if (m.chat_id === chatId) send({ type: 'msg', msg });
@@ -159,6 +163,45 @@ const TALK = `kind IN ('user','agent')`;
 const lastTalkId = () => q1(`SELECT coalesce(max(id),0) m FROM messages WHERE chat_id=? AND ${TALK}`, chatId).m;
 const note = text => insertMsg({ chat_id: chatId, sender: 'moderator', kind: 'moderator', text });
 
+// ---------- discussion modes ----------
+// Deliberately prompt-only for now: the mode adds one paragraph to every turn; scheduling and moderation are unchanged.
+const MODES = {
+  research: { label: '研究', prompt: 'Discussion mode: RESEARCH. Establish the facts first, then discuss interpretation. '
+    + 'Say clearly what is fact, inference, opinion or prediction; verify factual claims with your tools when you can and '
+    + 'cite sources; challenge evidence and assumptions rather than manufacturing disagreement; state how uncertain you '
+    + 'are; do not debate for entertainment.' },
+  roundtable: { label: '圆桌', prompt: 'Discussion mode: ROUNDTABLE. Explore the problem from several useful perspectives. '
+    + 'Do not force yourselves into opposing camps; surface missing perspectives, assumptions, trade-offs, edge cases and '
+    + 'failure modes; respond to specific points others made; consensus is fine when it is warranted; do not repeat '
+    + 'summaries of what was already said.' },
+  debate: { label: '辩论', prompt: 'Discussion mode: DEBATE. Create high-quality argumentative tension. Feel free to take a '
+    + 'clear position; directly challenge specific claims or hidden assumptions; answer PASS rather than merely agreeing; '
+    + 'use counterexamples, boundary conditions and reframing; concede, change your position or switch sides when you are '
+    + 'convinced; never argue purely for the sake of disagreement.' },
+};
+const FALLBACK_MODE = 'roundtable'; // while Auto has no classification yet (or Jev failed)
+let modePending = 0; // chat whose first question Jev is classifying: no turn starts with a guessed mode
+const chatMode = c => {
+  const r = q1('SELECT mode, auto_mode FROM chats WHERE id=?', c) || {};
+  const mode = MODES[r.mode] ? r.mode : 'auto';
+  return { mode, auto: r.auto_mode || null, effective: mode === 'auto' ? (r.auto_mode || FALLBACK_MODE) : mode };
+};
+async function classifyChat(c) {
+  const question = q1(`SELECT text FROM messages WHERE chat_id=? AND kind='user' ORDER BY id LIMIT 1`, c)?.text;
+  if (!question) return;
+  modePending = c; sendState();
+  const r = await classifyMode(question);
+  modePending = 0;
+  if (r.error || !MODES[r.mode]) {
+    logDecision('mode-error', null, { detail: r });
+  } else if (chatMode(c).mode === 'auto') { // the user may have picked a mode meanwhile
+    run('UPDATE chats SET auto_mode=? WHERE id=?', r.mode, c);
+    logDecision('mode', null, { score: r.probabilities[r.mode], latency_ms: r.ms, detail: { source: 'jev', ...r } });
+    if (c === chatId) note(`🧭 讨论模式：${MODES[r.mode].label}（Jev 判断，${Math.round(r.probabilities[r.mode] * 100)}%）。可以在顶栏随时切换。`);
+  }
+  pump();
+}
+
 const mentions = text => memberMentions(text, NAMES);
 
 function raise(a, r, why) {
@@ -202,7 +245,7 @@ function eligible(a) {
 
 function pump() {
   publish();
-  if (!paused) {
+  if (!paused && modePending !== chatId) {
     const inflight = () => NAMES.filter(n => rt[n].status === 'thinking').length + ready.filter(r => r.chat === chatId).length;
     let cands = NAMES.filter(eligible).map(a => ({ a, ...score(a) }));
     cands.sort(S.scheduler === 'broadcast' ? (x, y) => rt[x.a].hand.since - rt[y.a].hand.since : (x, y) => y.s - x.s);
@@ -358,6 +401,8 @@ async function startTurn(a, retried = false) {
   prompt += `\n\n(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later. `
     + (execOn() ? `You may run code in your workspace ${wsOf(a)} to check claims; keep it quick.)`
       : `${memberConfigs[a].harness === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.'})`);
+  // Every turn (not only the session intro), because the user can switch modes mid-discussion.
+  if (!summary) prompt += `\n${MODES[chatMode(chat).effective].prompt}`;
   prompt += `\nCurrent participating members (${NAMES.filter(n => S.enabled[n]).length}): ${memberOrder().filter(n => S.enabled[n]).map(describe).join(', ')}. This roster overrides earlier rosters. Use these exact @handles when addressing them.`;
   sendState();
 
@@ -423,7 +468,7 @@ function publishOne(r) {
   const turnNo = q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=?', r.chat, r.agent).n + 1;
   const stale = !!q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user' AND id>? LIMIT 1`, r.chat, r.basedOn);
   const m = insertMsg({ chat_id: r.chat, sender: r.agent, kind: 'agent', text: r.text, based_on: r.basedOn,
-    latency_ms: r.ms, turn_no: turnNo, stale, model: r.model, role: r.role });
+    latency_ms: r.ms, turn_no: turnNo, stale, model: r.model, role: r.role, mode: chatMode(r.chat).effective });
   run('UPDATE agent_sessions SET turns=turns+1 WHERE chat_id=? AND agent=?', r.chat, r.agent);
   logDecision('publish', r.agent, { based_on: r.basedOn, message_id: m.id, latency_ms: r.ms,
     detail: { stale, turn_no: turnNo, waited_ms: Date.now() - r.done } });
@@ -515,6 +560,7 @@ function state() {
     holding: now - typingAt < 15e3,
     chats: listChats(),
     sandboxed: !!RUNAS,
+    discussionMode: { ...chatMode(chatId), pending: modePending === chatId },
     memory: { text: readMemory(), curating: memo.curating, at: memo.at, error: memo.error },
     jev: { on: jevOn(), assessing: jev.assessing, judging: jev.judging, ms: jev.ms, down: S.scheduler === 'jev' && !jevOn() },
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
@@ -609,6 +655,8 @@ const routes = {
     if (at.length) for (const n of at) raise(n, 10, '@ by user');
     else for (const n of NAMES) raise(n, n === target ? 3 : 1, n === target ? `reply to #${reply_to}` : 'user message');
     logDecision('user', null, { message_id: m.id, detail: { mentions: at, reply_to: reply_to || null } });
+    const cm = chatMode(chatId);
+    if (cm.mode === 'auto' && !cm.auto) classifyChat(chatId); // first question of an Auto discussion
   },
   'POST /api/typing'({ typing }) { typingAt = typing ? Date.now() : 0; },
   'POST /api/next'() { readUntil = 0; publish(true); },
@@ -636,6 +684,18 @@ const routes = {
     switchChat(Number(run('INSERT INTO chats(title) VALUES(?)', title || `讨论 ${maxChat() + 1}`).lastInsertRowid));
   },
   'POST /api/chat/switch'({ id }) { if (q1('SELECT 1 FROM chats WHERE id=?', +id)) switchChat(+id); },
+  // The user overrides (or returns to) Auto at any time; it applies from the next turn.
+  'POST /api/chat/mode'({ id, mode }) {
+    id = +id;
+    if (!q1('SELECT 1 FROM chats WHERE id=?', id) || !(mode === 'auto' || MODES[mode])) return;
+    run('UPDATE chats SET mode=? WHERE id=?', mode, id);
+    logDecision('mode', null, { detail: { source: 'user', mode } });
+    const cm = chatMode(id);
+    if (id === chatId) note(mode === 'auto'
+      ? `🧭 讨论模式改回自动${cm.auto ? `：${MODES[cm.auto].label}` : '，Jev 会根据问题判断'}。`
+      : `🧭 讨论模式改为：${MODES[mode].label}（你指定），从下一轮发言开始生效。`);
+    if (mode === 'auto' && !cm.auto) classifyChat(id);
+  },
   'POST /api/chat/rename'({ id, title }) {
     title = String(title || '').trim().slice(0, 80);
     if (title) run('UPDATE chats SET title=? WHERE id=?', title, +id);

@@ -71,3 +71,19 @@ export async function novelty(messages, agents) {
   const r = await ask(messages, questions);
   return r.error ? r : { novelty: Object.fromEntries(agents.map(a => [a.name, r.answers[a.name].noul])), ms: r.ms };
 }
+
+// Discussion mode for a topic (Auto mode): one Choice over the user's question. Returns {mode, probabilities, ms} or {error}.
+export async function classifyMode(question) {
+  const r = await ask([{ id: 0, sender: 'user', text: question }], { mode: { type: 'choice',
+    instructions: 'Which kind of group discussion does the user\'s question `discussion.question` call for?',
+    criteria: {
+      research: { use_when: 'Current facts, evidence, data, external verification, or uncertainty about the real world are central.',
+        examples: ['What do you think about an RBA rate hike in November?', 'Is AI coding actually reducing developer hiring?'] },
+      roundtable: { use_when: 'Mainly trade-offs, architecture, design choices, interpretation or expert judgment, without two naturally opposing sides.',
+        examples: ['When should a monolith be split into microservices?', 'How should we structure a company engineering knowledge base?'] },
+      debate: { use_when: 'A normative choice, a value conflict, or clear opposing positions that can both be meaningfully defended.',
+        examples: ['A pill removes the need to sleep. Should society deploy it?', 'You receive life advice from yourself 30 years in the future. Do you read it?'] },
+    } } });
+  if (r.error) return r;
+  return { mode: r.answers.mode.choice, probabilities: r.answers.mode.probabilities, ms: r.ms };
+}

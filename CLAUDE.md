@@ -14,7 +14,8 @@ No npm dependencies, no build step. Node ≥ 22.5 (uses built-in `node:sqlite`).
 
 - Run locally: `node app/server.mjs` → http://localhost:3517 (`PORT`, `HOST` env; `.claude/launch.json` has a preview config)
 - Syntax check: `node --check app/server.mjs` (and the other `.mjs` files)
-- There is no test suite. Verify adapters by importing them directly, e.g.
+- Tests (real server + SQLite, fake harness, no paid calls): `node --test app/members.test.mjs app/modes.test.mjs`.
+  Verify adapters by importing them directly, e.g.
   `node -e 'import("./app/agents.mjs").then(async m => console.log(await m.runTurn("codex", "1+1?", null, {cwd: "workspace", dataDir: "data", onLive(){}})))'`
   (a second call with the returned `sid` checks session resume). `moderator.mjs` `judge`/`novelty` and `memory.mjs`
   `curate` can be exercised the same way; Jev needs `TYPESAFE_API_KEY`.

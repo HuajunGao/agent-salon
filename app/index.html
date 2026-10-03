@@ -86,6 +86,11 @@
   /* ---------- center ---------- */
   main { flex:1; min-width:0; display:flex; flex-direction:column; position:relative; }
   .bar { position:relative; display:flex; align-items:center; gap:var(--s2); height:52px; padding:0 var(--s4); flex:none; }
+  /* discussion mode: a quiet text-like select next to the title */
+  .modesel { appearance:none; border:none; background:transparent no-repeat right 6px center; flex:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='9' viewBox='0 0 24 24' fill='none' stroke='%239A9DA3' stroke-width='3'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    height:24px; padding:0 20px 0 8px; border-radius:var(--r-sm); font-size:var(--t-sm); color:var(--ink-3); cursor:pointer; }
+  .modesel:hover { background-color:var(--hover); color:var(--ink-2); }
   .bar .title { font:600 var(--t-lg)/1.2 var(--font-display); letter-spacing:-.01em; cursor:pointer; min-width:0;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:4px 6px; margin-left:-6px; border-radius:var(--r-sm); }
   .bar .title:hover { background:var(--hover); }
@@ -319,6 +324,7 @@
     <button class="icon showhist" data-toggle-hist title="展开讨论列表（Ctrl+Shift+S）" aria-label="展开讨论列表"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
     <button class="icon showhist" data-new-chat title="新讨论" aria-label="新讨论"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>
     <span class="title" id="title" title="点击重命名"></span>
+    <select id="mode" class="modesel" title="讨论模式：自动由 Jev 按问题判断，也可以随时指定" aria-label="讨论模式"></select>
     <span class="info" id="info"></span>
     <div class="controls">
       <button id="pause"></button>
@@ -625,7 +631,7 @@ function renderMembers() {
 function renderState() {
   const now = Date.now() - clockSkew;
   if (!messages.length) setHTML('#msgs', emptyState());
-  renderHistory(); renderModerator(); renderMemory();
+  renderHistory(); renderModerator(); renderMemory(); renderMode();
   $('#s-exec').disabled = !S.sandboxed; $('#execrow').style.opacity = S.sandboxed ? '' : '.45';
   const cur = S.chats.find(c => c.id === S.chatId);
   $('#title').textContent = cur?.title || '';
@@ -843,6 +849,16 @@ $('#pause').onclick = () => post('/api/pause', { paused: !S.paused });
 $('#stop').onclick = () => post('/api/stop');
 $('#next').onclick = () => post('/api/next');
 $('#title').onclick = () => rename(S.chatId);
+
+// Discussion mode: Auto shows what Jev chose; picking a mode overrides it from the next turn.
+const MODE_LABEL = { research: '研究', roundtable: '圆桌', debate: '辩论' };
+function renderMode() {
+  const d = S.discussionMode;
+  const auto = d.pending ? '自动 · 判断中…' : d.auto ? `自动 · ${MODE_LABEL[d.auto]}` : '自动';
+  setHTML('#mode', [['auto', auto], ...Object.entries(MODE_LABEL)]
+    .map(([v, l]) => `<option value="${v}" ${v === d.mode ? 'selected' : ''}>${l}</option>`).join(''));
+}
+$('#mode').onchange = e => post('/api/chat/mode', { id: S.chatId, mode: e.target.value });
 const newChat = () => { post('/api/chat/new'); $('#input').focus(); };
 $('#newChat').onclick = newChat;
 // Both side panels collapse; the choice is remembered, narrow windows start collapsed.
