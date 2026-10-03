@@ -202,6 +202,7 @@
   /* read-aloud and voice input */
   #tts.on { color:var(--mod); background:var(--mod-soft); }
   #tts:not(.on) .wave { opacity:.35; }
+  #tts.on.blocked { color:var(--warn); background:var(--warn-soft); }
   .msg.speaking .tx { border-left-color:var(--mod) !important; }
   .msg.speaking .gut::after { content:"朗读中"; font-size:var(--t-xs); color:var(--mod); }
   #mic.rec { color:var(--danger); background:var(--danger-soft); animation:pulse 1.2s ease-in-out infinite; }
@@ -732,6 +733,7 @@ function renderState() {
   const info = [];
   if (S.paused) info.push('已暂停');
   if (S.queue.length) info.push(`待发布 ${S.queue.map(x => label(x.agent)).join('、')}`);
+  if (tts.on && tts.blocked) info.push('浏览器拦截了自动播放：点一下页面任意处，从这条接着朗读');
   if (S.speaking) info.push(tts.current ? '正在朗读，读完再放下一条（“下一条”可跳过）' : '有浏览器在朗读，读完再放下一条');
   if (S.holding) info.push('你在输入，暂缓发布');
   else if (S.readLeft > 0 && S.queue.length) info.push(`阅读中，还剩 ${fmtSecs(S.readLeft)}`);
@@ -972,7 +974,7 @@ function voiceOptions(name) {
 
 // Each browser decides for itself whether to read aloud. While it plays (or still has replies to play) it holds the
 // server's publish queue, so the next reply appears when the current one has been heard.
-const tts = { on: localStorage.tts === '1', queue: [], audio: null, current: null, ping: null };
+const tts = { on: localStorage.tts === '1', queue: [], audio: null, current: null, ping: null, blocked: false };
 function setSpeaking(active) {
   clearInterval(tts.ping); tts.ping = null;
   post('/api/speaking', { speaking: active });
@@ -983,7 +985,7 @@ function markSpeaking(id) {
   if (id) $('#m' + id)?.classList.add('speaking');
 }
 async function playNext() {
-  if (tts.current || !tts.on) return;
+  if (tts.current || !tts.on || tts.blocked) return;
   const id = tts.queue.shift();
   if (!id) { markSpeaking(null); return setSpeaking(false); }
   tts.current = id; markSpeaking(id);
@@ -993,8 +995,15 @@ async function playNext() {
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.status);
     const url = URL.createObjectURL(await r.blob());
     tts.audio = new Audio(url);
-    await new Promise(res => { tts.audio.onended = tts.audio.onerror = tts.audio.onpause = res; tts.audio.play().catch(res); });
+    const played = await new Promise(res => { tts.audio.onended = tts.audio.onerror = tts.audio.onpause = () => res(true);
+      tts.audio.play().catch(e => res(e.name !== 'NotAllowedError')); });
     URL.revokeObjectURL(url);
+    // Blocked by the browser's autoplay rule (no click or key press since the page loaded, e.g. after a refresh): keep
+    // this reply first in line and don't hold the room; the next interaction resumes reading.
+    if (!played) {
+      tts.queue.unshift(id); tts.audio = null; tts.current = null; tts.blocked = true;
+      markSpeaking(null); setSpeaking(false); renderTts(); return;
+    }
   } catch (err) { console.warn('朗读失败', id, err); }
   tts.audio = null; tts.current = null;
   playNext();
@@ -1007,15 +1016,19 @@ function stopSpeaking() {
 function renderTts() {
   const b = $('#tts');
   b.hidden = !S.speech?.on;
-  b.classList.toggle('on', tts.on); b.setAttribute('aria-pressed', tts.on);
-  b.title = tts.on ? '正在朗读新发言（点击关闭）' : '朗读新发言（局域网语音服务）；朗读时暂缓发布下一条';
+  b.classList.toggle('on', tts.on); b.classList.toggle('blocked', tts.blocked); b.setAttribute('aria-pressed', tts.on);
+  b.title = tts.blocked ? '浏览器拦截了自动播放：点一下继续朗读' : tts.on ? '正在朗读新发言（点击关闭）' : '朗读新发言（局域网语音服务）；朗读时暂缓发布下一条';
   const mic = $('#mic');
   mic.hidden = !S.speech?.on;
   // Browsers only allow the microphone on HTTPS or localhost.
   mic.disabled = !window.isSecureContext || !navigator.mediaDevices;
   if (mic.disabled) mic.title = '语音输入需要 HTTPS 或 localhost 访问：浏览器不允许在普通 http 局域网地址上使用麦克风';
 }
+const unblock = () => { tts.blocked = false; renderTts(); playNext(); };
+for (const ev of ['pointerdown', 'keydown'])
+  addEventListener(ev, e => { if (tts.blocked && !e.target.closest?.('#tts')) unblock(); }, true);
 $('#tts').onclick = () => {
+  if (tts.blocked) return unblock(); // the click that unblocks shouldn't also turn reading off
   tts.on = !tts.on; localStorage.tts = tts.on ? '1' : '0';
   if (!tts.on) stopSpeaking();
   renderTts();
