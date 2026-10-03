@@ -91,6 +91,14 @@ The conversation must move at the user's reading speed, not as fast as agents ca
   relevant (stale ones are collapsed).
 
 ### Moderator (TypeSafe Jev)
+- **Implemented: convergence wrap-up** (app/moderator.mjs). After each published agent message, once everyone woken
+  this round has weighed in (nobody without a message this round is still thinking, queued or holding a hand), one
+  request asks a Score "how converged are the views" (4 levels; "same main answer, stated independently or by
+  agreeing" counts as fully converged) and a Noul "do recent messages only agree/restate". Stop when convergence ≥
+  threshold (UI, default 80%) or (≥ 67% and restating ≥ 0.6): hands are cleared, a 🧭 note is posted, and after
+  slow agents still thinking have published, the member most engaged this round writes a summary. A new user
+  message starts a new round. Measured: ~230–320 ms per request, ~1.1–1.6k input tokens.
+  On the first three test chats it separated "still arguing" (14–74%) from "everyone gave the same answer" (97–100%).
 - `POST https://api.typesafe.ai/v1/systemone`, `Authorization: Bearer <key>`, model `jev-latest`; body
   `{state, model, questions}`; answers carry probabilities/confidence. The key is in a `TYPESAFE*` env var
   (keep server-side). Read https://docs.typesafe.ai/llms.txt and the API/primitive pages before coding.

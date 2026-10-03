@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { AGENTS, runTurn } from './agents.mjs';
+import { judge } from './moderator.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DATA = join(ROOT, 'data'), WORK = join(ROOT, 'workspace'), TRANSCRIPT = join(DATA, 'transcript.md');
@@ -29,7 +30,7 @@ const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
 const run = (sql, ...a) => db.prepare(sql).run(...a);
 
-const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm',
+const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80,
   enabled: Object.fromEntries(NAMES.map(n => [n, true])) };
 let S = { ...DEFAULTS, ...JSON.parse(q1(`SELECT value FROM settings WHERE key='s'`)?.value || '{}') };
 const saveSettings = () => run(`INSERT OR REPLACE INTO settings VALUES('s', ?)`, JSON.stringify(S));
@@ -70,6 +71,8 @@ function writeTranscript(c) {
 const rt = Object.fromEntries(NAMES.map(n => [n, { status: 'idle', started: 0, live: '', hand: null, note: '', error: '' }]));
 let ready = [];          // finished replies waiting to be published: {chat, agent, text, basedOn, ms, hand, turnNo}
 let readUntil = 0, typingAt = 0;
+let mod = null;                         // latest Jev judgment this round: {convergence, stalling, msgId}
+let wrapRound = 0;                      // round (= last user message id) already wrapped up
 
 const MENTION = { claude: 'claude', codex: 'codex', agy: 'agy', gemini: 'agy', opencode: 'opencode', glm: 'opencode' };
 const mentions = text => [...new Set([...text.matchAll(/@(\w+)/g)].map(m => MENTION[m[1].toLowerCase()]).filter(Boolean))];
@@ -101,6 +104,8 @@ const inQueue = a => ready.some(r => r.chat === chatId && r.agent === a);
 function eligible(a) {
   const h = rt[a].hand;
   if (!h || !S.enabled[a] || rt[a].status !== 'idle' || inQueue(a)) return false;
+  // The summary waits for slow agents still thinking: they get their say and the summary includes them.
+  if (h.why === 'summary') return NAMES.every(n => rt[n].status !== 'thinking') && !ready.some(r => r.chat === chatId);
   if (h.r >= 100) return true;
   return turnsSinceUser(a) < S.turnCap && hasUnseen(a);
 }
@@ -139,7 +144,7 @@ Rules:
 
 async function startTurn(a, retried = false) {
   const chat = chatId, s = sess(chat, a), basedOn = maxId(chat);
-  const floor = rt[a].hand?.r >= 100;
+  const floor = rt[a].hand?.r >= 100, summary = rt[a].hand?.why === 'summary';
   Object.assign(rt[a], { status: 'thinking', started: Date.now(), live: '', hand: null, note: '', error: '' });
   let msgs, prompt;
   if (s.cli_session_id) {
@@ -153,9 +158,11 @@ async function startTurn(a, retried = false) {
   }
   prompt += msgs.map(m => (m.sender === a ? `#${m.id} (you): ${m.text}` : fmt(m))).join('\n\n') || '(no new messages)';
   const k = turnsSinceUser(a) + 1, n = msgs.filter(m => m.sender !== a).length;
-  prompt += `\n\n(Your turn ${k} of at most ${S.turnCap} since the user's last message; ${n} new message(s).`
+  if (summary) prompt += `\n\nThe moderator judged that the discussion has converged. Write a short summary for the user: `
+    + `the conclusion, who agreed (cite #N), and caveats still open. No new arguments, no @mentions, no [HAND].`;
+  else prompt += `\n\n(Your turn ${k} of at most ${S.turnCap} since the user's last message; ${n} new message(s).`
     + (k >= S.turnCap && !floor ? ' This is your last turn here: PASS unless something essential is missing.)' : ')');
-  if (floor) prompt += `\n\nThe user has given you the floor: please speak now.`;
+  if (floor && !summary) prompt += `\n\nThe user has given you the floor: please speak now.`;
   prompt += `\n\n(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later.)`;
   sendState();
 
@@ -180,7 +187,7 @@ async function startTurn(a, retried = false) {
   } else {
     const hand = /\[HAND\]\s*$/.test(res.text);
     const text = res.text.replace(/\s*\[HAND\]\s*$/, '').trim();
-    if (/^PASS[.。!！]?$/i.test(text)) {
+    if (/^PASS[.。!！]?$/i.test(text) && !summary) {
       rt[a].note = 'PASS';
       logDecision('pass', a, { based_on: basedOn, latency_ms: res.ms });
     } else {
@@ -188,6 +195,8 @@ async function startTurn(a, retried = false) {
       logDecision('ready', a, { based_on: basedOn, latency_ms: res.ms, detail: { hand, chars: text.length } });
     }
   }
+  // A PASS or failure may have been the last thing the convergence check was waiting for.
+  if (chat === chatId && (res.error || rt[a].note === 'PASS') && wrapRound !== lastUserId(chat)) checkConvergence();
   pump();
 }
 
@@ -215,12 +224,44 @@ function publishOne(r) {
   run('UPDATE agent_sessions SET turns=turns+1 WHERE chat_id=? AND agent=?', r.chat, r.agent);
   logDecision('publish', r.agent, { based_on: r.basedOn, message_id: m.id, latency_ms: r.ms,
     detail: { stale, turn_no: turnNo, waited_ms: Date.now() - r.done } });
-  if (r.chat === chatId) {
+  // After the wrap-up nobody's hand goes up again, so the round ends quietly until the user posts.
+  if (r.chat === chatId && wrapRound !== lastUserId(chatId)) {
     if (S.scheduler === 'broadcast') for (const n of NAMES) { if (n !== r.agent) raise(n, 1, 'broadcast'); }
     if (r.hand) raise(r.agent, 1.5, '[HAND]');
     for (const n of mentions(r.text)) if (n !== r.agent) raise(n, 2, `@ by ${r.agent}`);
+    checkConvergence(); // after raising hands: someone just @mentioned hasn't had their say yet
   }
   return m;
+}
+
+// ---------- moderator: stop when views have converged ----------
+async function checkConvergence() {
+  const round = lastUserId(chatId);
+  const msgs = q(`SELECT id, sender, kind, text FROM messages WHERE chat_id=? AND id>=? AND kind<>'system' ORDER BY id`, chatId, round);
+  // Only judge once everyone woken this round has weighed in: a slow agent still thinking, queued, or waiting
+  // for a free slot may yet disagree. (Agents that passed or failed are idle without a hand, so they don't block.)
+  const pending = a => S.enabled[a] && !msgs.some(m => m.sender === a)
+    && (rt[a].status === 'thinking' || rt[a].hand || inQueue(a));
+  if (!S.autoStop || !round || !msgs.some(m => m.kind === 'agent') || NAMES.some(pending)) return;
+  const j = await judge(msgs);
+  // The round moved on while Jev answered (a new message or a new speaker): the next check will cover it.
+  const lastNow = q1(`SELECT max(id) m FROM messages WHERE chat_id=? AND kind<>'system'`, chatId).m;
+  if (lastNow !== msgs.at(-1).id || wrapRound === round || NAMES.some(pending)) return;
+  if (j.error) return logDecision('judge-error', null, { detail: j });
+  mod = { convergence: j.convergence, stalling: j.stalling, msgId: msgs.at(-1).id };
+  // Fully converged, or mostly converged while the latest messages only agree/restate.
+  const stop = j.convergence >= S.convergeAt / 100 || (j.convergence >= 0.67 && j.stalling >= 0.6);
+  logDecision('judge', null, { score: j.convergence, message_id: mod.msgId, latency_ms: j.ms, detail: { ...j, stop } });
+  if (!stop) return sendState();
+  wrapRound = round;
+  for (const n of NAMES) rt[n].hand = null;
+  // The member most engaged in this round writes the summary.
+  const writer = NAMES.filter(n => S.enabled[n]).sort((x, y) => turnsSinceUser(y) - turnsSinceUser(x))[0];
+  rt[writer].hand = { r: 100, since: Date.now(), why: 'summary' };
+  logDecision('converged', writer, { score: j.convergence, message_id: mod.msgId, detail: j });
+  insertMsg({ chat_id: chatId, sender: 'system', kind: 'system', text: `🧭 主持人：观点已收敛（收敛度 ${Math.round(j.convergence * 100)}%，`
+    + `重复度 ${j.stalling.toFixed(2)}）。等思考中的成员说完后请 ${AGENTS[writer].label} 总结，本轮结束；发新消息可继续讨论。` });
+  pump();
 }
 
 // ---------- SSE ----------
@@ -229,7 +270,7 @@ const send = ev => { const s = `data: ${JSON.stringify(ev)}\n\n`; for (const c o
 function state() {
   const now = Date.now();
   return {
-    type: 'state', now, chatId, paused, settings: S, readLeft: Math.max(0, readUntil - now),
+    type: 'state', now, chatId, paused, mod, wrapped: wrapRound === lastUserId(chatId), settings: S, readLeft: Math.max(0, readUntil - now),
     holding: now - typingAt < 15e3,
     chats: q('SELECT id, title FROM chats ORDER BY id DESC'),
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
@@ -249,7 +290,7 @@ const routes = {
   'POST /api/send'({ text, reply_to }) {
     text = String(text || '').trim();
     if (!text) return;
-    typingAt = 0;
+    typingAt = 0; mod = null;
     const m = insertMsg({ chat_id: chatId, sender: 'user', kind: 'user', text, reply_to: reply_to || null });
     const at = mentions(text);
     const target = reply_to && q1('SELECT sender FROM messages WHERE id=?', reply_to)?.sender;
@@ -269,7 +310,8 @@ const routes = {
   'POST /api/lower'({ agent }) { if (AGENTS[agent]) rt[agent].hand = null; },
   'POST /api/settings'(body) {
     for (const k of ['language', 'scheduler']) if (typeof body[k] === 'string' && body[k]) S[k] = body[k];
-    for (const k of ['turnCap', 'readSpeed', 'maxThinkers']) if (+body[k] > 0) S[k] = +body[k];
+    if (typeof body.autoStop === 'boolean') S.autoStop = body.autoStop;
+    for (const k of ['turnCap', 'readSpeed', 'maxThinkers', 'convergeAt']) if (+body[k] > 0) S[k] = +body[k];
     if (body.enabled) S.enabled = { ...S.enabled, ...body.enabled };
     saveSettings();
   },
@@ -282,7 +324,7 @@ const maxChat = () => q1('SELECT coalesce(max(id),0) m FROM chats').m;
 function switchChat(id) {
   chatId = id; paused = !!q1('SELECT paused FROM chats WHERE id=?', id).paused;
   for (const n of NAMES) rt[n].hand = null;
-  readUntil = 0; writeTranscript(id);
+  readUntil = 0; mod = null; writeTranscript(id);
   send(init());
 }
 const init = () => ({ type: 'init', messages: q('SELECT * FROM messages WHERE chat_id=? ORDER BY id', chatId), state: state() });

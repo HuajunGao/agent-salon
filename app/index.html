@@ -64,6 +64,8 @@
       <option value="broadcast">broadcast（每条都唤醒所有人）</option>
       <option value="jev">jev（第二阶段；暂同 algorithm）</option>
     </select></label>
+    <label title="Jev 判断观点已收敛时，请一位成员总结后暂停">收敛后自动收尾 <input id="s-autoStop" type="checkbox"></label>
+    <label title="收敛度达到这个值就收尾；“大体一致且只在附和/重复”也会收尾">收敛阈值（%） <input id="s-convergeAt" type="number" min="50" max="100" step="5"></label>
   </section>
 </aside>
 <main>
@@ -160,12 +162,15 @@ function renderState() {
   setHTML('#ats', S.members.map(m => `<button data-at="${m.name}">@${m.name}</button>`).join(' '));
   $('#pause').textContent = S.paused ? '▶ 继续' : '⏸ 暂停';
   const info = [];
+  if (S.mod) info.push(`🧭 收敛度 ${Math.round(S.mod.convergence * 100)}% · 重复度 ${S.mod.stalling.toFixed(2)}（截至 #${S.mod.msgId}）`);
+  if (S.wrapped) info.push('已收尾');
+  $('#s-autoStop').checked = S.settings.autoStop;
   if (S.paused) info.push('已暂停（正在思考的会完成，回复保留在队列）');
   if (S.queue.length) info.push(`待发布：${S.queue.map(x => label(x.agent)).join('、')}`);
   if (S.holding) info.push('你在输入，暂缓发布');
   else if (S.readLeft > 0 && S.queue.length) info.push(`阅读时间还剩 ${fmtSecs(S.readLeft)}`);
   $('#info').textContent = info.join(' · ');
-  for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler']) {
+  for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt']) {
     const el = $('#s-' + k);
     if (document.activeElement !== el) el.value = S.settings[k];
   }
@@ -196,7 +201,8 @@ document.addEventListener('change', e => {
   const d = e.target.dataset;
   if (d.enable) post('/api/settings', { enabled: { [d.enable]: e.target.checked } });
 });
-for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler'])
+$('#s-autoStop').onchange = e => post('/api/settings', { autoStop: e.target.checked });
+for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt'])
   $('#s-' + k).addEventListener('change', e => post('/api/settings', { [k]: e.target.value }));
 
 function setReply(id) {
