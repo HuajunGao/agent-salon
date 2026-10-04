@@ -373,12 +373,17 @@ async function maybeCurate(force = false) {
   if (!curator) { if (force) { memo.error = '请先启用一位空闲成员来整理记忆'; sendState(); } return; }
   const member = { ...memberConfigs[curator], model: S.models[curator] || '' };
   memo.curating = true; sendState();
-  const r = await curate(readMemory(), pending, { language: S.language, cwd: wsOf(curator), dataDir: DATA,
+  // Facts without a month get the month of their latest source message, so the curator can tell old from recent.
+  const dated = readMemory().replace(/[(（]\s*(#\d+(?:\s*[,，、]\s*#\d+)*)\s*[)）]\s*$/gm, (all, refs) => {
+    const at = q1(`SELECT max(created_at) at FROM messages WHERE id IN (${refs.match(/\d+/g).join(',')})`)?.at;
+    return at ? `(${refs}, ${at.slice(0, 7)})` : all;
+  });
+  const r = await curate(dated, pending, { language: S.language, cwd: wsOf(curator), dataDir: DATA,
     harness: member.harness, model: member.model, member });
   memo.curating = false; memo.error = r.error || ''; memo.retryAt = r.error ? Date.now() + 10 * 60e3 : 0; // back off after a failure
   if (r.text) { writeFileSync(MEMORY, r.text); memo.at = Date.now(); }
   if (!r.error) run(`INSERT OR REPLACE INTO settings VALUES('memoryAt', ?)`, String(pending.at(-1).id));
-  logDecision('memory', null, { message_id: pending.at(-1).id, detail: r.error ? { error: r.error } : { changed: !!r.text } });
+  logDecision('memory', curator, { message_id: pending.at(-1).id, detail: { model: member.model || 'default', ...(r.error ? { error: r.error } : { changed: !!r.text }) } });
   sendState();
 }
 

@@ -679,9 +679,10 @@ function renderMemory() {
   const status = m.curating ? '<span class="pulse">整理中</span>'
     : m.error ? `<span style="color:var(--danger)" title="${esc(m.error)}">整理失败，10 分钟后重试</span>`
     : !S.settings.memory ? '已关闭' : '';
-  const SRC = /\s*[(（]\s*(#\d+(?:\s*[,，、]\s*#\d+)*)\s*[)）]\s*$/; // trailing "(#74, #80)" = where the fact came from
+  // trailing "(#74, #80, 2026-10)" = where the fact came from and when the user last said it
+  const SRC = /\s*[(（]\s*(#\d+(?:\s*[,，、]\s*#\d+)*)(?:\s*[,，、]\s*(\d{4}-\d{2}(?:-\d{2})?))?\s*[)）]\s*$/;
   const item = t => { const src = t.match(SRC);
-    return `<li>${linkRefs(t.replace(SRC, ''))}${src ? ` <span class="src">${linkRefs(src[1])}</span>` : ''}</li>`; };
+    return `<li>${linkRefs(t.replace(SRC, ''))}${src ? ` <span class="src">${linkRefs(src[1])}${src[2] ? ` · ${src[2]}` : ''}</span>` : ''}</li>`; };
   setHTML('#memory', `<div class="sect memhead"><button class="memtoggle" data-mem-toggle aria-expanded="${!memoryCollapsed}" aria-controls="memory-body"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 5 7 7-7 7"/></svg>关于你</button> <span>${status}</span><span class="acts">
       <button data-mem-curate title="把你最近说的话整理进来">整理</button><button data-mem-edit title="修改或删除记忆">编辑</button></span></div>
     <div id="memory-body" ${memoryCollapsed ? 'hidden' : ''}><label class="username" title="朗读时，别人引用你的发言（如 #12）会念成这个称呼">朗读时称呼你
