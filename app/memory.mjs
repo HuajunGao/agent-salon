@@ -15,11 +15,11 @@ user last said it, like (#74, 2026-10).`;
 
 // userMsgs: [{id, text, chat, created_at}] written by the user since the last curation. Returns {text} (new memory),
 // {unchanged: true}, or {error}.
-export async function curate(memory, userMsgs, { language, cwd, dataDir, harness, model, member }) {
+export async function curate(memory, userMsgs, { language, cwd, dataDir, harness, model, member, signal }) {
   const byChat = Map.groupBy(userMsgs, m => m.chat);
   const news = [...byChat].map(([chat, ms]) => `Discussion "${chat}":\n`
     + ms.map(m => `- #${m.id} (${(m.created_at || '').slice(0, 10)}): ${m.text}`).join('\n')).join('\n\n');
-  const ask = prompt => runTurn(harness, prompt, null, { cwd, dataDir, model, member, onLive() {} });
+  const ask = prompt => runTurn(harness, prompt, null, { cwd, dataDir, model, member, signal, onLive() {} });
   const bulletsOf = text => text.split('\n').map(l => l.trim()).filter(l => l.startsWith('- '));
   const r = await ask(`You maintain a short memory about one person: the user of a group chat with several AI agents.
 The agents read this memory at the start of every new discussion, so it should help them understand who they talk to.

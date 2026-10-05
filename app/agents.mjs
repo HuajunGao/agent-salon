@@ -223,11 +223,11 @@ const IDLE_MS = 5 * 60e3, TOTAL_MS = 15 * 60e3;
 // X-Hermes-Session-Id header, so like a resumed CLI session it only gets the new messages.
 AGENTS.hermes = {
   label: 'Hermes', color: '#b45309', defaultModel: '', optional: true,
-  async http(prompt, sid) {
+  async http(prompt, sid, { signal }) {
     const base = (process.env.HERMES_BASE_URL || '').replace(/\/+$/, '');
     if (!base) return { sid, error: 'HERMES_BASE_URL 未配置' };
     sid ||= `agent-chat-${randomUUID()}`;
-    const r = await fetch(base + '/chat/completions', { method: 'POST', signal: AbortSignal.timeout(TOTAL_MS),
+    const r = await fetch(base + '/chat/completions', { method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout(TOTAL_MS)].filter(Boolean)),
       headers: { authorization: `Bearer ${process.env.HERMES_API_KEY || ''}`, 'content-type': 'application/json', 'X-Hermes-Session-Id': sid },
       body: JSON.stringify({ model: 'hermes-agent', messages: [{ role: 'user', content: prompt }] }) });
     if (!r.ok) return { sid, error: r.status === 401 ? 'auth' : `hermes ${r.status}: ${short(await r.text(), 200)}` };
@@ -235,13 +235,14 @@ AGENTS.hermes = {
   },
 };
 
-// Run one turn. onLive(text) receives a readable live log. Resolves {text, sid, error, ms}.
-export function runTurn(agent, prompt, sid, { cwd, dataDir, model, exec, member, onLive }) {
+// Run one turn. onLive(text) receives a readable live log; aborting `signal` ends it (error 'stopped').
+// Resolves {text, sid, error, ms}.
+export function runTurn(agent, prompt, sid, { cwd, dataDir, model, exec, member, onLive, signal }) {
   const a = AGENTS[agent];
   const t0 = Date.now();
   if (a.http) {
     onLive('…');
-    return a.http(prompt, sid, { model }).catch(e => ({ sid, error: `${agent}: ${e.message}` }))
+    return a.http(prompt, sid, { model, signal }).catch(e => ({ sid, error: signal?.aborted ? 'stopped' : `${agent}: ${e.message}` }))
       .then(r => ({ text: (r.text || '').trim(), sid: r.sid ?? sid, error: r.error || (r.text?.trim() ? '' : 'no reply'), ms: Date.now() - t0 }));
   }
   const { bin, args, env, keep } = a.cmd(prompt, sid, { dataDir, model, exec, member });
@@ -260,6 +261,7 @@ export function runTurn(agent, prompt, sid, { cwd, dataDir, model, exec, member,
       if (WIN) spawn('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true });
       else try { process.kill(-p.pid, 'SIGKILL'); } catch {}
     };
+    if (signal?.aborted) kill('stopped'); else signal?.addEventListener('abort', () => kill('stopped'), { once: true });
     let idle = setTimeout(() => kill('idle timeout'), IDLE_MS);
     const total = setTimeout(() => kill('total timeout'), TOTAL_MS);
     const onData = d => {

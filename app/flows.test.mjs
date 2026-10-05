@@ -56,7 +56,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import net from 'node:net';
 
-async function server(t) {
+async function server(t, slowFirst = 0) {
   const root = mkdtempSync(join(tmpdir(), 'agent-chat-flow-test-'));
   const app = join(root, 'app'); mkdirSync(app);
   for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
@@ -67,8 +67,11 @@ async function server(t) {
     import {appendFileSync} from 'node:fs';
     let story = 0;
     export async function listModels(){return {}};
-    export async function runTurn(h,p){appendFileSync(${JSON.stringify(log)},JSON.stringify({h,at:Date.now(),p})+'\\n');
-      await new Promise(r=>setTimeout(r,150));
+    let calls = 0;
+    export async function runTurn(h,p,s,o){appendFileSync(${JSON.stringify(log)},JSON.stringify({h,at:Date.now(),p})+'\\n');
+      const ms = calls++ < ${slowFirst} ? 5000 : 150; // the first turns can be slow (to stop them)
+      await new Promise(r=>{ const t=setTimeout(r,ms); o.signal?.addEventListener('abort',()=>{ clearTimeout(t); r(); }); });
+      if (o.signal?.aborted) return {error:'stopped', ms:1};
       const text = p.includes('STORY RELAY') ? h+' 的一段。'+(story++ ? '' : '\\n@opencode')+'\\n[NOTE add] '+h+' 登场'
         : p.includes('You are the judge') ? '评判：正方赢在定义。' : h+' 发言。';
       return {text, sid:'s-'+h, ms:150}};`);
@@ -147,4 +150,24 @@ test('debate mode with an even number: the user judges, and the verdict opens fr
   const s = await until(async () => { const x = await init(); return x.messages.filter(m => m.kind === 'agent').length > before && x; });
   assert.equal(s.state.debate.done, true);
   assert.ok(s.messages.some(m => m.text.includes('辩论结束')));
+});
+
+test('stop: cancels thinking turns, drops what was not published, and the next message carries on', async t => {
+  const { post, init, until, turns } = await server(t, 4); // the four opening turns take 5 s
+  const id = (await init()).state.chatId;
+  await post('/api/chat/mode', { id, mode: 'roundtable' });
+  await post('/api/send', { text: '远程办公好吗？', chat_id: id });
+  await until(async () => turns().length >= 4);
+  await post('/api/stop');
+  let s = await init();
+  assert.ok(s.state.members.every(m => m.status !== 'thinking'));
+  assert.equal(s.state.queue.length, 0);
+  assert.equal(s.state.paused, false);
+  await new Promise(r => setTimeout(r, 500));
+  s = await init();
+  assert.equal(s.messages.filter(m => m.kind === 'agent').length, 0); // nothing posted, no error notes
+  assert.equal(s.messages.filter(m => m.kind === 'system').length, 0);
+  assert.equal(turns().length, 4);                                      // and nothing new started
+  await post('/api/send', { text: '那就简单说说吧', chat_id: id });
+  await until(async () => (await init()).messages.some(m => m.kind === 'agent'));
 });

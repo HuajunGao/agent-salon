@@ -469,15 +469,16 @@ async function maybeCurate(force = false) {
   const curator = memberOrder().find(n => S.enabled[n] && rt[n].status === 'idle');
   if (!curator) { if (force) { memo.error = '请先启用一位空闲成员来整理记忆'; sendState(); } return; }
   const member = { ...memberConfigs[curator], model: S.models[curator] || '' };
-  memo.curating = true; sendState();
+  memo.curating = true; memo.abort = new AbortController(); sendState();
   // Facts without a month get the month of their latest source message, so the curator can tell old from recent.
   const dated = readMemory().replace(/[(（]\s*(#\d+(?:\s*[,，、]\s*#\d+)*)\s*[)）]\s*$/gm, (all, refs) => {
     const at = q1(`SELECT max(created_at) at FROM messages WHERE id IN (${refs.match(/\d+/g).join(',')})`)?.at;
     return at ? `(${refs}, ${at.slice(0, 7)})` : all;
   });
   const r = await curate(dated, pending, { language: S.language, cwd: wsOf(curator), dataDir: DATA,
-    harness: member.harness, model: member.model, member });
-  memo.curating = false; memo.error = r.error || ''; memo.retryAt = r.error ? Date.now() + 10 * 60e3 : 0; // back off after a failure
+    harness: member.harness, model: member.model, member, signal: memo.abort.signal });
+  // back off after a failure; a stopped curation just tries again later, quietly
+  memo.curating = false; memo.error = r.error === 'stopped' ? '' : r.error || ''; memo.retryAt = r.error ? Date.now() + 10 * 60e3 : 0;
   if (r.text) { writeFileSync(MEMORY, r.text); memo.at = Date.now(); }
   if (!r.error) run(`INSERT OR REPLACE INTO settings VALUES('memoryAt', ?)`, String(pending.at(-1).id));
   logDecision('memory', curator, { message_id: pending.at(-1).id, detail: { model: member.model || 'default', ...(r.error ? { error: r.error } : { changed: !!r.text }) } });
@@ -573,11 +574,20 @@ async function startTurn(a, retried = false) {
   sendState();
 
   const model = S.models[a];
+  rt[a].abort = new AbortController();
   const res = await runTurn(memberConfigs[a].harness, prompt, s.cli_session_id, {
     cwd: wsOf(a), dataDir: DATA, model, exec: execOn(), member: memberConfigs[a] && { ...memberConfigs[a], model },
-    onLive: log => { rt[a].live = log; sendStateSoon(); },
+    onLive: log => { rt[a].live = log; sendStateSoon(); }, signal: rt[a].abort.signal,
   });
+  rt[a].abort = null;
   if (!q1('SELECT 1 FROM chats WHERE id=?', chat)) { rt[a].status = 'idle'; return pump(); } // discussion deleted meanwhile
+  // Stopped by the user: nothing is posted, the session isn't advanced (the messages count as unseen next time),
+  // and the flow doesn't move on, so a debate slot or the relay baton is played again when the discussion resumes.
+  if (res.error === 'stopped') {
+    Object.assign(rt[a], { status: 'idle', note: '已停止' });
+    logDecision('cancelled', a, { based_on: basedOn, latency_ms: res.ms });
+    return pump();
+  }
   // A resume that fails for a non-quota/auth reason: start a fresh session seeded from our own history.
   if (res.error && s.cli_session_id && !retried && !/quota|auth/.test(res.error)) {
     run('UPDATE agent_sessions SET cli_session_id=NULL WHERE chat_id=? AND agent=?', chat, a);
@@ -880,10 +890,23 @@ const routes = {
   'POST /api/speaking'({ speaking }) { speakingAt = speaking ? Date.now() : 0; ttsActiveAt = Date.now(); },
   'POST /api/next'() { readUntil = 0; publish(true); },
   'POST /api/pause'({ paused: p }) { paused = !!p; jev.circlePaused = false; run('UPDATE chats SET paused=? WHERE id=?', +paused, chatId); },
+  // Stop ends the round at once, leaving the server idle: thinking turns are cancelled, written replies not yet
+  // published are dropped, read-aloud stops. The discussion keeps its place (debate slot, relay baton, notes): the
+  // user's next message carries on from there.
   'POST /api/stop'() {
-    paused = true; run('UPDATE chats SET paused=1 WHERE id=?', chatId);
-    for (const n of NAMES) rt[n].hand = null;
-    logDecision('stop', null);
+    const cancelled = NAMES.filter(n => rt[n].status === 'thinking');
+    for (const n of NAMES) { rt[n].hand = null; rt[n].abort?.abort(); }
+    memo.abort?.abort();
+    const dropped = ready.filter(r => r.chat === chatId);
+    ready = ready.filter(r => r.chat !== chatId);
+    held.length = 0;
+    // a dropped debate reply had already moved the debate on: its slot is played again
+    const st = chatState(chatId), slots = dropped.map(r => r.slot).filter(x => x != null);
+    if (st.debate && !st.debate.done && slots.length) { st.debate.at = Math.min(st.debate.at, ...slots); saveState(chatId, st); }
+    paused = jev.circlePaused = false; run('UPDATE chats SET paused=0 WHERE id=?', chatId);
+    wrapRound = lastUserId(chatId); // the round is over: nothing raises hands until the user writes again
+    readUntil = speakingAt = 0;
+    logDecision('stop', null, { detail: { cancelled, dropped: dropped.map(r => r.agent) } });
   },
   'POST /api/floor'({ agent }) { if (NAMES.includes(agent)) { raise(agent, 100, 'floor from user'); logDecision('floor', agent); } },
   'POST /api/lower'({ agent }) { if (NAMES.includes(agent)) rt[agent].hand = null; },
