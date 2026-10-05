@@ -196,3 +196,24 @@ test('a shared link shows one discussion read-only: its messages live, nothing e
   const bad = (await (await fetch(`${url}/events?s=nope`)).body.getReader().read()).value;
   assert.match(new TextDecoder().decode(bad), /已失效/);
 });
+
+test('attachments: uploaded, sent with a message, their paths reach the members, served back safely', async t => {
+  const { post, init, until, turns, url } = await server(t);
+  const id = (await init()).state.chatId;
+  const up = await (await fetch(`${url}/api/upload?name=${encodeURIComponent('预算 表.csv')}`, { method: 'POST', body: 'a,b', headers: { 'content-type': 'text/csv' } })).json();
+  assert.equal(up.file.split('/')[0], String(id));
+  assert.equal(up.size, 3);
+  await post('/api/send', { text: '看看这个表', chat_id: id, files: [up, { file: '999/x.csv', name: 'x' }, { file: `${id}/../../chat.db`, name: 'db' }] });
+  const msg = (await init()).messages.find(m => m.kind === 'user');
+  assert.deepEqual(JSON.parse(msg.files).map(f => f.name), ['预算 表.csv']); // other discussions' files and paths are refused
+  const r = await fetch(`${url}/files/${up.file.split('/').map(encodeURIComponent).join('/')}`);
+  assert.equal(await r.text(), 'a,b');
+  assert.equal(r.headers.get('content-security-policy'), 'sandbox');
+  assert.equal((await fetch(`${url}/files/${id}/..%2F..%2Fchat.db`)).status, 404);
+  await until(async () => turns().length >= 1);
+  assert.ok(turns()[0].p.includes('预算 表.csv') && turns()[0].p.includes('uploads'));
+  // a message can be only attachments
+  const up2 = await (await fetch(`${url}/api/upload?name=a.png`, { method: 'POST', body: 'png', headers: { 'content-type': 'image/png' } })).json();
+  assert.ok((await post('/api/send', { text: '', chat_id: id, files: [up2] })).ok);
+  await until(async () => (await init()).messages.some(m => m.kind === 'user' && m.text === '' && m.files));
+});

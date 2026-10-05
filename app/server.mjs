@@ -17,6 +17,9 @@ const DATA = join(ROOT, 'data'), WORK = join(ROOT, 'workspace');
 // Every discussion is archived as data/discussions/<id>.md plus an index, so agents can look up earlier ones.
 const ARCHIVE = join(DATA, 'discussions'), MEMORY = join(DATA, 'memory.md');
 mkdirSync(ARCHIVE, { recursive: true }); mkdirSync(WORK, { recursive: true });
+// Files the user attaches: data/uploads/<chat>/<stamp>-<name>, readable by the agents (their paths go into prompts).
+const UPLOADS = join(DATA, 'uploads');
+mkdirSync(UPLOADS, { recursive: true });
 // AGENT_USER (Linux, server as root): the CLIs run as that user, each in its own workspace it may write and execute in;
 // the database stays root-only, the archive and memory are readable. Without it (e.g. Windows) all share workspace/.
 const RUNAS = process.env.AGENT_USER ? runAs(process.env.AGENT_USER) : null;
@@ -42,7 +45,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS members(name TEXT PRIMARY KEY, config TEXT N
 // role: 'devil' | 'summary' for moderator-requested turns; mode: the discussion mode an agent message was written in;
 // stance: JSON {t: position, c: confidence 0-100, changed?, evidence?: Jev's view of a change} from the reply's [STANCE] line.
 // seat: the speaker's part in a debate (正方一辩, 评委); note_ops: the notes this reply changed ([{op, n}]).
-for (const col of ['model', 'role', 'mode', 'stance', 'seat', 'note_ops'])
+// files: the user's attachments, JSON [{file: '<chat>/<stored name>', name, size, type}].
+for (const col of ['model', 'role', 'mode', 'stance', 'seat', 'note_ops', 'files'])
   if (!db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === col)) db.exec(`ALTER TABLE messages ADD COLUMN ${col} TEXT`);
 // Discussion mode per chat: 'auto' (Jev classifies the first question into auto_mode) or a mode the user chose.
 // state: JSON {notes: [{n, text, by, msg}], debate: {pro, con, judge, motion, script, at, done}}.
@@ -135,10 +139,10 @@ function logDecision(event, agent, extra = {}) {
 }
 
 function insertMsg(m) {
-  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model, role, mode, stance, seat, note_ops)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
+  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model, role, mode, stance, seat, note_ops, files)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
     m.latency_ms ?? null, m.turn_no ?? null, m.stale ? 1 : 0, m.model ?? null, m.role ?? null, m.mode ?? null,
-    m.stance ? JSON.stringify(m.stance) : null, m.seat ?? null, m.note_ops ?? null).lastInsertRowid);
+    m.stance ? JSON.stringify(m.stance) : null, m.seat ?? null, m.note_ops ?? null, m.files?.length ? JSON.stringify(m.files) : null).lastInsertRowid);
   const msg = q1('SELECT * FROM messages WHERE id=?', id);
   writeTranscript(m.chat_id);
   if (m.chat_id === chatId) send({ type: 'msg', msg });
@@ -153,7 +157,9 @@ const describe = a => `@${a} (${aliasOf(a)}, ${memberConfigs[a].harness} running
 // Members (and Jev) see each other's stated stance and confidence, as in ReConcile's round table.
 const withStance = m => { const st = m.stance && JSON.parse(m.stance);
   return st ? `${m.text}\n[STANCE ${st.c}%] ${st.t}` : m.text; };
-const fmt = m => `#${m.id} ${who(m.sender)}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${withStance(m)}`;
+const attached = m => { const fs = m.files && JSON.parse(m.files);
+  return fs?.length ? `\n(Attached: ${fs.map(f => `${join(UPLOADS, f.file)} (${f.name}, ${f.type || 'file'}, ${Math.ceil(f.size / 1024)} KB)`).join('; ')})` : ''; };
+const fmt = m => `#${m.id} ${who(m.sender)}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${withStance(m)}${attached(m)}`;
 const archiveFile = c => join(ARCHIVE, `${c}.md`);
 function writeTranscript(c) {
   const chat = q1('SELECT title, created_at FROM chats WHERE id=?', c);
@@ -521,6 +527,8 @@ Rules:
 - If you have nothing worth adding right now, answer exactly PASS. If a message @mentions someone else and not you, usually PASS.
 - To speak again after others respond, end your message with [HAND]. To ask a member something, @mention them.
 - You may search the web, read web pages and read files to inform the discussion. ${toolRule(a)}
+- The user may attach files or images; their paths come with the message. Open them with your file tools (images too,
+  if you can see images); if you can't open one, say so rather than guess what it contains.
 - This discussion's full transcript is ${archiveFile(chat)}. Earlier discussions are archived in ${ARCHIVE}: index.md lists
   them with their conclusions, <id>.md is one discussion. When the user refers to something discussed before, look it up
   there (read / search the files) instead of guessing.
@@ -891,18 +899,22 @@ const routes = {
     delete memberConfigs[name]; delete rt[name]; delete S.models[name]; delete S.enabled[name];
     saveSettings(); logDecision('member-delete', name); send(init());
   },
-  'POST /api/send'({ text, reply_to, chat_id }) {
+  'POST /api/send'({ text, reply_to, chat_id, files }) {
     text = String(text || '').trim();
-    if (!text) return;
     // The current discussion is shared by all windows: refuse a message typed while looking at another one.
     if (chat_id && +chat_id !== chatId) throw new Error('当前讨论已在别的窗口切换，消息未发送，请确认后重发。');
+    // attachments: this discussion's uploads only, as /api/upload returned them
+    files = (Array.isArray(files) ? files : []).filter(f => typeof f?.file === 'string' && f.file.startsWith(`${chatId}/`)
+      && !/\.\.|\\/.test(f.file) && existsSync(join(UPLOADS, f.file)))
+      .map(f => ({ file: f.file, name: String(f.name || '').slice(0, 120), size: +f.size || 0, type: String(f.type || '').slice(0, 80) }));
+    if (!text && !files.length) return;
     typingAt = 0; mod = null;
     if (jev.circlePaused) { jev.circlePaused = paused = false; run('UPDATE chats SET paused=0 WHERE id=?', chatId); } // the user set a direction
     // An untitled discussion is named after its first question.
     const c = q1('SELECT title FROM chats WHERE id=?', chatId);
     if (/^讨论 \d+$/.test(c.title) && !q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user'`, chatId))
-      run('UPDATE chats SET title=? WHERE id=?', text.replace(/\s+/g, ' ').slice(0, 30), chatId);
-    const m = insertMsg({ chat_id: chatId, sender: 'user', kind: 'user', text, reply_to: reply_to || null });
+      run('UPDATE chats SET title=? WHERE id=?', (text || files[0].name).replace(/\s+/g, ' ').slice(0, 30), chatId);
+    const m = insertMsg({ chat_id: chatId, sender: 'user', kind: 'user', text, reply_to: reply_to || null, files });
     logDecision('user', null, { message_id: m.id, detail: { mentions: mentions(text), reply_to: reply_to || null } });
     const cm = chatMode(chatId);
     if (modePending === chatId) return;                                      // the pending classification wakes the room
@@ -1000,6 +1012,7 @@ const routes = {
     for (const t of ['messages', 'agent_sessions', 'decisions']) run(`DELETE FROM ${t} WHERE chat_id=?`, id);
     run('DELETE FROM chats WHERE id=?', id);
     rmSync(archiveFile(id), { force: true }); writeIndex();
+    rmSync(join(UPLOADS, String(id)), { recursive: true, force: true });
     ready = ready.filter(r => r.chat !== id);
     if (id === chatId) switchChat(q1('SELECT max(id) m FROM chats').m || Number(run(`INSERT INTO chats(title) VALUES('讨论 1')`).lastInsertRowid));
   },
@@ -1071,6 +1084,32 @@ http.createServer((req, res) => {
       .then(text => { res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ text })); })
       .catch(e => { res.writeHead(502, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: e.message })); }));
     return;
+  }
+  // An attachment for the current discussion (raw body, ?name=): returns {file, name, size, type} for /api/send.
+  if (key === 'POST /api/upload') {
+    const name = (url.searchParams.get('name') || 'file').slice(0, 120), chat = chatId, chunks = [];
+    let size = 0;
+    req.on('data', d => { size += d.length; if (size > 20e6) req.destroy(); else chunks.push(d); });
+    req.on('end', () => {
+      const dir = join(UPLOADS, String(chat)), stored = `${Date.now().toString(36)}-${name.replace(/[^\p{L}\p{N}._-]+/gu, '_')}`;
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, stored), Buffer.concat(chunks));
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ file: `${chat}/${stored}`, name, size, type: String(req.headers['content-type'] || '') }));
+    });
+    return;
+  }
+  // Attachments are served back with a sandbox policy (an uploaded HTML or SVG can't run in the app's origin);
+  // only images, PDFs and plain text open in the browser, anything else downloads.
+  const fm = req.method === 'GET' && url.pathname.match(/^\/files\/(\d+)\/([^/]+)$/);
+  if (fm) {
+    const name = decodeURIComponent(fm[2]), p = join(UPLOADS, fm[1], name);
+    if (/\.\.|[\\/]/.test(name) || !existsSync(p)) { res.writeHead(404); return res.end(); }
+    const type = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf',
+      txt: 'text/plain; charset=utf-8', md: 'text/plain; charset=utf-8', csv: 'text/plain; charset=utf-8', json: 'text/plain; charset=utf-8' }[name.split('.').pop().toLowerCase()];
+    res.writeHead(200, { 'content-type': type || 'application/octet-stream', 'content-security-policy': 'sandbox', 'x-content-type-options': 'nosniff',
+      'content-disposition': `${type ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name.replace(/^[a-z0-9]+-/, ''))}`, 'cache-control': 'max-age=86400' });
+    return res.end(readFileSync(p));
   }
   if (key === 'GET /api/export') { // markdown download of one discussion
     const c = q1('SELECT * FROM chats WHERE id=?', +url.searchParams.get('id'));
