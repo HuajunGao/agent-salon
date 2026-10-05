@@ -389,13 +389,19 @@ function pump() {
     const blind = blindOpen(), free = rules(chatId).flow === 'free';
     for (const c of cands) {
       if (!blind && inflight() >= S.maxThinkers) break;
-      // jev mode: follow-up hands wait for a fresh novelty judgment; the user's own wake-ups don't.
-      const followUp = free && c.r < 10 && c.why !== 'user message';
-      if (jevOn() && followUp && !novFresh(c.a)) { assess(); continue; }
+      // jev mode: follow-up hands wait for a fresh novelty judgment; the user's own wake-ups don't, and neither does
+      // everyone's one turn after a debate (each says what they actually think, or passes).
+      const opening = c.why === 'user message' || c.why === 'after the debate';
+      const followUp = free && c.r < 10 && !opening;
+      if (jevOn() && followUp && !novFresh(c.a)) {
+        // a hand Jev won't judge (e.g. a member at the turn cap) is dropped, or it would ask Jev again every second
+        if (assessable(c.a)) assess(); else { logDecision('skip', c.a, { score: c.s, detail: { ...c, reason: 'not assessable' } }); rt[c.a].hand = null; }
+        continue;
+      }
       if (jevOn() && followUp && c.nov < S.noveltyMin / 100) {
         logDecision('skip', c.a, { score: c.s, detail: { ...c, reason: 'jev: nothing new' } }); rt[c.a].hand = null; continue;
       }
-      if (S.scheduler !== 'broadcast' && c.s <= 0 && c.r < 100) {
+      if (S.scheduler !== 'broadcast' && c.s <= 0 && c.r < 100 && !opening) {
         logDecision('skip', c.a, { score: c.s, detail: c }); rt[c.a].hand = null; continue;
       }
       if (blind) {
@@ -413,14 +419,15 @@ function pump() {
 }
 
 // ---------- Jev scheduler: who would add something new? ----------
+const assessable = a => S.enabled[a] && rt[a].status === 'idle' && !inQueue(a)
+  && (turnsSinceUser(a) < S.turnCap || rt[a].hand?.r >= 10) && hasUnseen(a);
 async function assess() {
   const round = lastUserId(chatId);
   if (!jevOn() || !round || wrapRound === round || rules(chatId).flow !== 'free') return;
   const at = lastTalkId();
   if (jev.assessing) return void (jev.again ||= at !== jev.at); // re-ask only if the discussion moved on
   jev.at = at;
-  const cands = NAMES.filter(a => S.enabled[a] && rt[a].status === 'idle' && !inQueue(a)
-    && (turnsSinceUser(a) < S.turnCap || rt[a].hand?.r >= 10) && hasUnseen(a));
+  const cands = NAMES.filter(assessable);
   if (!cands.length) return;
   jev.assessing = true; sendState();
   const msgs = q(`SELECT id, sender, text, stance FROM messages WHERE chat_id=? AND id>=? AND ${TALK} ORDER BY id`, chatId, round)
