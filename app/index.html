@@ -271,6 +271,18 @@
   .stance .sh .mv { min-width:30px; text-align:right; font-size:var(--t-xs); color:var(--ink-3); }
   .stance .stx { margin:2px 0 0 15px; font-size:var(--t-xs); line-height:1.5; color:var(--ink-2); }
   .stance .tag { margin:4px 0 0 15px; }
+  /* debate: who argues which side */
+  .seats { display:grid; grid-template-columns:auto 1fr; gap:3px var(--s3); margin-top:var(--s2); font-size:var(--t-sm); color:var(--ink-2); }
+  .seats b { font-weight:500; color:var(--ink-3); }
+  /* the discussion's notes (resources, story setting, debate lines), kept by the members */
+  .notelist { margin:0; padding:0 var(--s1); list-style:none; font-size:var(--t-sm); color:var(--ink-2); line-height:1.5; }
+  .notelist li { position:relative; display:flex; gap:var(--s2); padding:3px 0; }
+  .notelist .nn { flex:none; min-width:22px; font-size:var(--t-xs); color:var(--ink-3); line-height:1.9; }
+  .notelist .nt { flex:1; min-width:0; }
+  .notelist .nm { flex:none; display:flex; align-items:flex-start; gap:2px; font-size:var(--t-xs); color:var(--ink-3); line-height:1.9; }
+  .notelist .nm button { display:none; width:20px; height:20px; place-items:center; border-radius:5px; color:var(--ink-3); }
+  .notelist li:hover .nm button, .notelist .nm button:focus-visible { display:inline-grid; }
+  .notelist .nm button:hover { background:var(--hover); color:var(--ink); }
   /* members */
   .mem { border-radius:var(--r-sm); }
   .mem.open { background:var(--surface); box-shadow:0 1px 2px rgba(15,17,20,.04); }
@@ -414,6 +426,7 @@
 </main>
 <aside id="right">
   <section id="moderator"></section>
+  <section id="notes"></section>
   <section id="memory"></section>
   <section><div class="sect member-heading">成员 <span class="member-tools"><button id="order-members">调整顺序</button><button id="add-member">＋ 新成员</button></span></div><div id="member-order-hint" hidden>用上下箭头调整显示顺序，自动保存。</div><div id="members"></div></section>
   <details class="settings">
@@ -543,6 +556,9 @@ function renderMsg(m) {
   if (m.stale) hd.push(`<span class="tag warn" title="这条回复写于你的新消息之前">写于你的新消息之前</span>`);
   if (m.role === 'devil') hd.push(`<span class="tag devil" title="主持人请它站到对立面">唱反调</span>`);
   if (m.role === 'summary') hd.push(`<span class="tag summary">总结</span>`);
+  if (m.seat) hd.unshift(`<span class="tag${m.role === 'verdict' ? ' summary' : ''}">${esc(m.seat)}${m.role === 'verdict' ? '评判' : ''}</span>`);
+  const ops = m.note_ops && JSON.parse(m.note_ops);
+  if (ops?.length) hd.push(`<span title="这条发言更新了本场讨论的笔记">笔记 ${ops.map(o => `${{ add: '+', edit: '~', drop: '−' }[o.op]}N${o.n}`).join(' ')}</span>`);
   if (m.turn_no) hd.push(`<span class="dim" title="本讨论中的第 ${m.turn_no} 次发言">第 ${m.turn_no} 次</span>`);
   el.innerHTML = `${gut}<div><div class="meta">${hd.join('')}</div><div class="tx">${md(m.text)}</div></div>`
     + `<span class="rp" data-reply="${m.id}" title="引用回复 #${m.id}">回复</span>`;
@@ -636,7 +652,7 @@ function renderModerator() {
   const modeText = mode === 'jev' ? '按新意请人发言' : mode === 'algorithm' ? '按算法调度' : '广播：每条唤醒所有人';
   let html = `<div class="room"><div class="rh"><span class="glyph"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5Z" fill="currentColor"/></svg></span>
     <span class="rt">主持人 Jev</span><span class="rs">${status}</span></div>
-    <div class="mode">${modeText}${S.settings.autoStop ? '，收敛后自动收尾' : ''}</div>
+    <div class="mode">${flowText(modeText)}</div>${renderSeats()}
     ${m?.convergence != null ? row('观点收敛', m.convergence, S.settings.autoStop ? S.settings.convergeAt : null, '刻度是收尾阈值') : ''}
     ${m?.convergence != null ? `<div class="quiet">${[
       `<span title="最近几条是否只在附和或复述">附和重复 <b>${pct(m.stalling)}</b></span>`,
@@ -644,7 +660,7 @@ function renderModerator() {
       m.debatable != null ? `<span title="问题是否见仁见智（不是有标准答案的事实题）">见仁见智 <b>${pct(m.debatable)}</b></span>` : '',
       m.challenged != null ? `<span title="本轮有没有人认真反对过多数意见">有人反对 <b>${pct(m.challenged)}</b></span>` : '',
     ].filter(Boolean).join('，')}</div>` : ''}
-    ${S.wrapped ? '<div class="wrapnote">本轮已收尾，发新消息可继续讨论。</div>' : ''}${renderStances()}</div>`;
+    ${S.wrapped ? '<div class="wrapnote">本轮已收尾，发新消息可继续讨论。</div>' : ''}${S.discussionMode.rules.stance ? renderStances() : ''}</div>`;
   setHTML('#moderator', html);
   const line = $('#convline');
   line.classList.toggle('off', m?.convergence == null);
@@ -654,6 +670,42 @@ function renderModerator() {
     line.title = `观点收敛度 ${pct(m.convergence)}${S.settings.autoStop ? `，到 ${S.settings.convergeAt}% 收尾` : ''}`;
   }
 }
+
+// How the room takes turns in the current mode.
+const PHASE_LABEL = { opening: '开篇立论', rebuttal: '驳论', free: '自由辩', closing: '结辩', verdict: '评判' };
+function flowText(schedulerText) {
+  const d = S.debate, flow = S.discussionMode.rules.flow;
+  if (flow === 'relay') return '故事接力：一人一段，按顺序或 @ 交棒';
+  if (flow === 'debate') return d ? `辩论：${PHASE_LABEL[d.phase] || '评判'}（第 ${d.step}/${d.steps} 步）` : '辩论：你发出辩题后抽签分持方';
+  return (d?.done ? '辩论已结束，自由讨论；' : '') + schedulerText + (S.settings.autoStop ? '，收敛后自动收尾' : '');
+}
+function renderSeats() {
+  const d = S.debate;
+  if (!d) return '';
+  const who = n => (n === 'user' ? '你' : `<span style="color:${color(n)}">${esc(label(n))}</span>`);
+  return `<div class="seats"><b>正方</b><span>${d.pro.map(who).join('、')}</span><b>反方</b><span>${d.con.map(who).join('、')}</span>`
+    + `<b>评委</b><span>${who(d.judge)}</span></div>`;
+}
+
+// ---------- the discussion's notes ----------
+// Kept by the members with [NOTE] lines at the end of their replies, and seen by every turn; the user can edit them here.
+function renderNotes() {
+  const title = S.discussionMode.rules.notesTitle;
+  setHTML('#notes', `<div class="sect memhead"><span title="成员发言时会把需要保持一致的内容记在这里，之后每一轮都会参考">${esc(title)}</span>`
+    + `<span class="acts"><button data-note-add>添加</button></span></div>`
+    + (S.notes.length ? `<ul class="notelist">${S.notes.map(x => `<li><span class="nn">N${x.n}</span><span class="nt">${linkRefs(x.text)}</span>`
+      + `<span class="nm">${x.msg ? ref(x.msg) : x.by === 'user' ? '你' : ''}<button data-note-edit="${x.n}" title="修改" aria-label="修改 N${x.n}">${ICON.rename}</button>`
+      + `<button data-note-drop="${x.n}" title="删除" aria-label="删除 N${x.n}">${ICON.del}</button></span></li>`).join('')}</ul>`
+      : `<div class="memempty">成员发言时会把需要前后一致的内容记在这里（${esc(title)}），之后每一轮都会参考。你也可以自己添加或修改。</div>`));
+}
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-note-add],[data-note-edit],[data-note-drop]');
+  if (!t) return;
+  const title = S.discussionMode.rules.notesTitle, note = n => S.notes.find(x => x.n === n);
+  if ('noteAdd' in t.dataset) { const text = prompt(`添加一条${title}`); if (text?.trim()) post('/api/notes', { chat_id: S.chatId, op: 'add', text }); }
+  if (t.dataset.noteEdit) { const n = +t.dataset.noteEdit, text = prompt(`修改 N${n}`, note(n)?.text || ''); if (text?.trim()) post('/api/notes', { chat_id: S.chatId, op: 'edit', n, text }); }
+  if (t.dataset.noteDrop) { const n = +t.dataset.noteDrop; if (confirm(`删除 N${n}：${note(n)?.text || ''}？`)) post('/api/notes', { chat_id: S.chatId, op: 'drop', n }); }
+});
 
 // Each member ends a message with its position and confidence; Jev judges whether a change was moved by a new argument.
 function renderStances() {
@@ -749,7 +801,7 @@ function renderMembers() {
 function renderState() {
   const now = Date.now() - clockSkew;
   if (!messages.length) setHTML('#msgs', emptyState());
-  renderHistory(); renderModerator(); renderMemory(); renderMode(); renderTts(); renderThinking();
+  renderHistory(); renderModerator(); renderNotes(); renderMemory(); renderMode(); renderTts(); renderThinking();
   $('#s-exec').disabled = !S.sandboxed; $('#execrow').style.opacity = S.sandboxed ? '' : '.45';
   const cur = S.chats.find(c => c.id === S.chatId);
   $('#title').textContent = cur?.title || '';
@@ -975,7 +1027,7 @@ $('#next').onclick = () => post('/api/next');
 $('#title').onclick = () => rename(S.chatId);
 
 // Discussion mode: Auto shows what Jev chose; picking a mode overrides it from the next turn.
-const MODE_LABEL = { research: '研究', roundtable: '圆桌', debate: '辩论' };
+const MODE_LABEL = { research: '研究', roundtable: '圆桌', debate: '辩论', story: '故事' };
 function renderMode() {
   const d = S.discussionMode;
   const auto = d.pending ? '自动 · 判断中…' : d.auto ? `自动 · ${MODE_LABEL[d.auto]}` : '自动';

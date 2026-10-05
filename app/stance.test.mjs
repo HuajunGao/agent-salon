@@ -7,15 +7,15 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import net from 'node:net';
-import { parseReply } from './moderator.mjs';
+import { parseReply } from './modes.mjs';
 
 test('parseReply takes the stance line and [HAND] off the reply', () => {
   assert.deepEqual(parseReply('用真实库更可靠，见 #3。\n[STANCE 70%] 集成测试用真实测试库'),
-    { text: '用真实库更可靠，见 #3。', hand: false, stance: { t: '集成测试用真实测试库', c: 70 } });
+    { text: '用真实库更可靠，见 #3。', hand: false, stance: { t: '集成测试用真实测试库', c: 70 }, notes: [] });
   assert.deepEqual(parseReply('同意。\n**[立场：85%]** 拆分要等团队变大 [HAND]'),
-    { text: '同意。', hand: true, stance: { t: '拆分要等团队变大', c: 85 } });
-  assert.deepEqual(parseReply('观点。\n[STANCE 60%] 先上单体\n[HAND]'), { text: '观点。', hand: true, stance: { t: '先上单体', c: 60 } });
-  assert.deepEqual(parseReply('没有立场行 [HAND]'), { text: '没有立场行', hand: true, stance: null });
+    { text: '同意。', hand: true, stance: { t: '拆分要等团队变大', c: 85 }, notes: [] });
+  assert.deepEqual(parseReply('观点。\n[STANCE 60%] 先上单体\n[HAND]'), { text: '观点。', hand: true, stance: { t: '先上单体', c: 60 }, notes: [] });
+  assert.deepEqual(parseReply('没有立场行 [HAND]'), { text: '没有立场行', hand: true, stance: null, notes: [] });
   assert.equal(parseReply('PASS').text, 'PASS');
   assert.equal(parseReply('[STANCE 250%] x').stance.c, 100);
   assert.deepEqual(parseReply('好。\n[STANCE 75%] 条件支持：小额、核实过再捐').stance, { t: '小额、核实过再捐', c: 75, l: '条件支持' });
@@ -26,7 +26,7 @@ test('parseReply takes the stance line and [HAND] off the reply', () => {
 test('research mode: everyone answers the question at once, stances reach the state', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agent-chat-stance-test-'));
   const app = join(root, 'app'); mkdirSync(app);
-  for (const f of ['server.mjs', 'members.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
+  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
     copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
   const log = join(root, 'turns.jsonl');
   writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};

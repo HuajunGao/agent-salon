@@ -15,7 +15,7 @@ raw HTML in messages is escaped and only http(s)/mailto links are kept). Node �
 
 - Run locally: `node app/server.mjs` → http://localhost:3517 (`PORT`, `HOST` env; `.claude/launch.json` has a preview config)
 - Syntax check: `node --check app/server.mjs` (and the other `.mjs` files)
-- Tests (real server + SQLite, fake harness, no paid calls): `node --test app/members.test.mjs app/modes.test.mjs app/speech.test.mjs app/stance.test.mjs app/env.test.mjs`.
+- Tests (real server + SQLite, fake harness, no paid calls): `node --test app/members.test.mjs app/modes.test.mjs app/speech.test.mjs app/stance.test.mjs app/env.test.mjs app/flows.test.mjs`.
   Verify adapters by importing them directly, e.g.
   `node -e 'import("./app/agents.mjs").then(async m => console.log(await m.runTurn("codex", "1+1?", null, {cwd: "workspace", dataDir: "data", onLive(){}})))'`
   (a second call with the returned `sid` checks session resume). `moderator.mjs` `judge`/`novelty` and `memory.mjs`
@@ -37,6 +37,9 @@ Restart the server only when no agent is thinking (check `/events` state) — th
 - **app/agents.mjs** — one adapter per CLI (`AGENTS[name].cmd` builds argv/env, `.parse` consumes one JSON event).
   `runTurn` spawns one headless process per turn, resuming the agent's own CLI session and pushing only unseen
   messages. Also `listModels` (each CLI's model list) and `runAs` (spawn as an unprivileged user).
+- **app/modes.mjs** — the discussion modes as rules plus pure functions: each mode's flow (`free` raised hands,
+  `relay` for stories, `debate` with drawn sides and an order of play), whether replies carry a [STANCE] line, whether
+  the moderator steers, and what its notes are for; also the reply protocol (`parseReply`: [NOTE]/[STANCE]/[HAND]).
 - **app/moderator.mjs** — Jev calls: `judge` (one request: convergence Score + stalling/debatable/challenged/circling
   Nouls) and `novelty` (one Noul per candidate: would it add something new?).
 - **app/memory.mjs** — `curate`: a configured active member folds the user's new messages into `data/memory.md` (or NO_CHANGE).
@@ -49,7 +52,15 @@ after the previous message's reading time (`readMs`, counts CJK chars + Latin wo
 the user types → publishing raises new hands ([HAND] marker, @mentions, broadcast mode) and triggers `assess()`
 (Jev novelty, jev mode) and `checkConvergence()` (Jev judge → wrap-up summary, devil's advocate, or circling pause).
 
-Scheduling: score = relevance × fairness × freshness − cooldown (fairness modifies priority, it doesn't decide it);
+Modes (per discussion, Jev picks one for Auto): research and roundtable use the free flow below; story is a relay
+(one member at a time, the baton goes to whoever the passage @mentions, else the next member; skips members at the
+turn cap); debate draws sides at its first message (odd member count: one member judges, even: the user does), plays
+`debateScript` slot by slot (hands carry `slot`), and after the verdict continues as free discussion. Relay and debate
+turns start only when nothing else is thinking or queued, so each sees the previous reply. Every discussion keeps
+notes in `chats.state` (resources / setting / key lines): members change them with [NOTE add|edit|drop] lines, the
+user in the UI, and every turn's prompt includes them (`notesPrompt`) so long discussions and stories don't drift.
+
+Scheduling (free flow): score = relevance × fairness × freshness − cooldown (fairness modifies priority, it doesn't decide it);
 modes `broadcast` / `algorithm` / `jev`. Every scheduler event is written to the `decisions` table for later A/B
 analysis — keep logging new decision types there. Research mode opens a discussion with an independent round: until the first reply is published, every woken member
 starts at once (ignoring `maxThinkers`), so nobody answers after reading another's answer (setting `blind`).

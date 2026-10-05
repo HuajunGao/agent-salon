@@ -83,6 +83,8 @@ export async function classifyMode(question) {
         examples: ['When should a monolith be split into microservices?', 'How should we structure a company engineering knowledge base?'] },
       debate: { use_when: 'A normative choice, a value conflict, or clear opposing positions that can both be meaningfully defended.',
         examples: ['A pill removes the need to sleep. Should society deploy it?', 'You receive life advice from yourself 30 years in the future. Do you read it?'] },
+      story: { use_when: 'The user wants the group to write fiction together: a story, a relay, characters or a world to continue.',
+        examples: ['我们来接龙写个故事：一个程序员在凌晨三点收到了自己发来的邮件。', 'Let\'s write a mystery together, one paragraph each.'] },
     } } });
   if (r.error) return r;
   return { mode: r.answers.mode.choice, probabilities: r.answers.mode.probabilities, ms: r.ms };
@@ -102,24 +104,4 @@ export async function stanceShift(messages, member, before, after) {
         false: 'No new substance: the move follows agreement, repetition or the majority.' } },
   }, { shift: { member: `@${member}`, before: `${before.t} (confidence ${before.c}%)`, after: `${after.t} (confidence ${after.c}%)` } });
   return r.error ? r : { changed: r.answers.changed.noul, evidence: r.answers.evidence.noul, ms: r.ms };
-}
-
-// A reply ends with "[STANCE 70%] the member's position in one sentence" (confidence 0-100), then optionally [HAND].
-// The position may start with a short verdict label ("条件支持：…"), kept as l.
-// Returns {text, hand, stance: {t, c, l?} | null}; the stance line is removed from the text.
-const STANCE = /^[ \t>*_]*\[(?:STANCE|立场)\s*[:：]?\s*(\d{1,3})\s*%?\][ \t*_:：]*(.*)$/im;
-export function parseReply(raw) {
-  let text = raw, stance = null;
-  const m = text.match(STANCE);
-  if (m) {
-    text = text.replace(m[0], m[2].includes('[HAND]') ? '[HAND]' : '');
-    const t = m[2].replace(/\[HAND\]/g, '').replace(/^[\s*_]+|[\s*_]+$/g, '');
-    const lt = t.match(/^([^：:，,。]{1,8})[：:]\s*(.+)$/);
-    if (t) stance = { t: (lt ? lt[2] : t).slice(0, 300), c: Math.min(100, +m[1]), ...(lt && { l: lt[1].trim() }) };
-  }
-  text = text.trim();
-  const hand = /\[HAND\]\s*$/.test(text);
-  // Agents sometimes write a reply and then a stray "PASS" on its own last line: drop it (a bare PASS stays a pass).
-  text = text.replace(/\s*\[HAND\]\s*$/, '').trim().replace(/\n\s*PASS[.。!！]?$/i, '').trim();
-  return { text, hand, stance };
 }

@@ -5,7 +5,8 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, chmodSync, 
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { AGENTS, runTurn, listModels, runAs } from './agents.mjs';
-import { judge, novelty, classifyMode, stanceShift, parseReply } from './moderator.mjs';
+import { judge, novelty, classifyMode, stanceShift } from './moderator.mjs';
+import { MODES, rulesOf, relayNext, debateSetup, debateScript, debateBrief, seatOf, PHASES, parseReply, applyNotes } from './modes.mjs';
 import { curate } from './memory.mjs';
 import { validateMember, memberMentions } from './members.mjs';
 import { speechOn, loadCatalog, ttsModels, speakable, synth, transcribe, defaultVoice, FALLBACK_TTS } from './speech.mjs';
@@ -39,10 +40,12 @@ CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);`);
 db.exec(`CREATE TABLE IF NOT EXISTS members(name TEXT PRIMARY KEY, config TEXT NOT NULL);`);
 // role: 'devil' | 'summary' for moderator-requested turns; mode: the discussion mode an agent message was written in;
 // stance: JSON {t: position, c: confidence 0-100, changed?, evidence?: Jev's view of a change} from the reply's [STANCE] line.
-for (const col of ['model', 'role', 'mode', 'stance'])
+// seat: the speaker's part in a debate (正方一辩, 评委); note_ops: the notes this reply changed ([{op, n}]).
+for (const col of ['model', 'role', 'mode', 'stance', 'seat', 'note_ops'])
   if (!db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === col)) db.exec(`ALTER TABLE messages ADD COLUMN ${col} TEXT`);
 // Discussion mode per chat: 'auto' (Jev classifies the first question into auto_mode) or a mode the user chose.
-for (const [col, def] of [['mode', "TEXT DEFAULT 'auto'"], ['auto_mode', 'TEXT']])
+// state: JSON {notes: [{n, text, by, msg}], debate: {pro, con, judge, motion, script, at, done}}.
+for (const [col, def] of [['mode', "TEXT DEFAULT 'auto'"], ['auto_mode', 'TEXT'], ['state', 'TEXT']])
   if (!db.prepare('PRAGMA table_info(chats)').all().some(c => c.name === col)) db.exec(`ALTER TABLE chats ADD COLUMN ${col} ${def}`);
 const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
@@ -130,10 +133,10 @@ function logDecision(event, agent, extra = {}) {
 }
 
 function insertMsg(m) {
-  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model, role, mode, stance)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
+  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model, role, mode, stance, seat, note_ops)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
     m.latency_ms ?? null, m.turn_no ?? null, m.stale ? 1 : 0, m.model ?? null, m.role ?? null, m.mode ?? null,
-    m.stance ? JSON.stringify(m.stance) : null).lastInsertRowid);
+    m.stance ? JSON.stringify(m.stance) : null, m.seat ?? null, m.note_ops ?? null).lastInsertRowid);
   const msg = q1('SELECT * FROM messages WHERE id=?', id);
   writeTranscript(m.chat_id);
   if (m.chat_id === chatId) send({ type: 'msg', msg });
@@ -193,30 +196,20 @@ const TALK = `kind IN ('user','agent')`;
 const lastTalkId = () => q1(`SELECT coalesce(max(id),0) m FROM messages WHERE chat_id=? AND ${TALK}`, chatId).m;
 const note = text => insertMsg({ chat_id: chatId, sender: 'moderator', kind: 'moderator', text });
 
-// ---------- discussion modes ----------
-// Deliberately prompt-only for now: the mode adds one paragraph to every turn; scheduling and moderation are unchanged.
-const MODES = {
-  research: { label: '研究', prompt: 'Discussion mode: RESEARCH. Establish the facts first, then discuss interpretation. '
-    + 'Say clearly what is fact, inference, opinion or prediction; verify factual claims with your tools when you can and '
-    + 'cite sources; challenge evidence and assumptions rather than manufacturing disagreement; state how uncertain you '
-    + 'are; do not debate for entertainment.' },
-  roundtable: { label: '圆桌', prompt: 'Discussion mode: ROUNDTABLE. Explore the problem from several useful perspectives. '
-    + 'Do not force yourselves into opposing camps; surface missing perspectives, assumptions, trade-offs, edge cases and '
-    + 'failure modes; respond to specific points others made; consensus is fine when it is warranted; do not repeat '
-    + 'summaries of what was already said.' },
-  debate: { label: '辩论', prompt: 'Discussion mode: DEBATE. Create high-quality argumentative tension. Feel free to take a '
-    + 'clear position; directly challenge specific claims or hidden assumptions; answer PASS rather than merely agreeing; '
-    + 'use counterexamples, boundary conditions and reframing; concede, change your position or switch sides when you are '
-    + 'convinced; never argue purely for the sake of disagreement.' },
-};
+// ---------- discussion modes (rules in modes.mjs) ----------
 const FALLBACK_MODE = 'roundtable'; // while Auto has no classification yet (or Jev failed)
 let modePending = 0; // chat whose first question Jev is classifying: no turn starts with a guessed mode
 const chatMode = c => {
   const r = q1('SELECT mode, auto_mode FROM chats WHERE id=?', c) || {};
   const mode = MODES[r.mode] ? r.mode : 'auto';
-  return { mode, auto: r.auto_mode || null, effective: mode === 'auto' ? (r.auto_mode || FALLBACK_MODE) : mode };
+  return { mode, auto: MODES[r.auto_mode] ? r.auto_mode : null, effective: mode === 'auto' ? (MODES[r.auto_mode] ? r.auto_mode : FALLBACK_MODE) : mode };
 };
-async function classifyChat(c) {
+const chatState = c => JSON.parse(q1('SELECT state FROM chats WHERE id=?', c)?.state || '{}');
+const saveState = (c, st) => run('UPDATE chats SET state=? WHERE id=?', JSON.stringify(st), c);
+// The rules in force: the mode's, except that a finished debate continues as free discussion.
+const rules = c => rulesOf(chatMode(c).effective, chatState(c).debate);
+// msg: the user message that started the discussion; the room wakes once its mode is known.
+async function classifyChat(c, msg) {
   const question = q1(`SELECT text FROM messages WHERE chat_id=? AND kind='user' ORDER BY id LIMIT 1`, c)?.text;
   if (!question) return;
   modePending = c; sendState();
@@ -229,6 +222,7 @@ async function classifyChat(c) {
     logDecision('mode', null, { score: r.probabilities[r.mode], latency_ms: r.ms, detail: { source: 'jev', ...r } });
     if (c === chatId) note(`🧭 讨论模式：${MODES[r.mode].label}（Jev 判断，${Math.round(r.probabilities[r.mode] * 100)}%）。可以在顶栏随时切换。`);
   }
+  if (msg && c === chatId) wake(msg);
   pump();
 }
 
@@ -238,8 +232,99 @@ const mentions = text => memberMentions(text, NAMES);
 // everyone woken starts at once, so nobody answers after reading another's answer. Most of what multi-agent debate
 // gains comes from independent answers, and discussion mostly adds conformity (Debate or Vote, NeurIPS 2025).
 // Follow-up questions are discussed normally.
-const blindOpen = () => S.blind && chatMode(chatId).effective === 'research' && lastUserId(chatId) > 0
+const blindOpen = () => S.blind && rules(chatId).blindOpening && lastUserId(chatId) > 0
   && !q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='agent'`, chatId);
+
+// ---------- who speaks next: the mode's flow ----------
+const busy = () => NAMES.some(n => rt[n].status === 'thinking') || ready.some(r => r.chat === chatId);
+const enabledOrder = () => memberOrder().filter(n => S.enabled[n]);
+const lastAgent = () => q1(`SELECT sender FROM messages WHERE chat_id=? AND kind='agent' ORDER BY id DESC LIMIT 1`, chatId)?.sender;
+
+// A user message wakes the room according to the flow.
+function wake(m) {
+  const flow = rules(chatId).flow;
+  if (flow === 'relay') return void (busy() || relay(lastAgent(), m.text)); // a busy relay hands on after its turn
+  if (flow === 'debate') return debateOnUser(m);
+  const at = mentions(m.text);
+  const target = m.reply_to && q1('SELECT sender FROM messages WHERE id=?', m.reply_to)?.sender;
+  if (at.length) for (const n of at) raise(n, 10, '@ by user');
+  else for (const n of NAMES) raise(n, n === target ? 3 : 1, n === target ? `reply to #${m.reply_to}` : 'user message');
+}
+
+// Story relay: the baton goes to the member the text @mentions, else to the next one after `after`, skipping members
+// that have had their turns since the user last spoke. When everyone has, the room goes quiet and hands the floor back.
+function relay(after, text) {
+  const order = enabledOrder(), open = n => turnsSinceUser(n) < S.turnCap;
+  let next = order.length && relayNext(order, after, mentions(text || '')[0]);
+  for (let i = 0; next && !open(next) && i < order.length; i++) next = relayNext(order, next, null);
+  if (next && open(next)) raise(next, 5, 'relay');
+}
+
+// Debate: the first message in a debate is the motion: sides are drawn, then the script's slots are played in order.
+function debateOnUser(m) {
+  const st = chatState(chatId), d = st.debate;
+  if (!d) {
+    const names = enabledOrder();
+    if (names.length < 2) {
+      st.debate = { done: true, skipped: true }; saveState(chatId, st);
+      note('🧭 辩论至少需要 2 位参与成员，先按自由讨论进行。');
+      return wake(m);
+    }
+    const nd = { ...debateSetup(names), motion: m.id };
+    st.debate = { ...nd, script: debateScript(nd) }; saveState(chatId, st);
+    const who = n => (n === 'user' ? '你' : `@${n}`);
+    logDecision('debate', null, { message_id: m.id, detail: { pro: nd.pro, con: nd.con, judge: nd.judge } });
+    note(`🧭 辩论开始，辩题是 #${m.id}。抽签结果：正方 ${nd.pro.map(who).join('、')}；反方 ${nd.con.map(who).join('、')}；`
+      + `评委 ${who(nd.judge)}。顺序：开篇立论、驳论、自由辩、结辩，最后由评委评判，之后自由讨论。你随时可以插话。`);
+    return nextSlot(chatId);
+  }
+  if (d.script[d.at]?.phase === 'verdict' && d.judge === 'user') return finishDebate(chatId); // the user's verdict
+  if (!busy() && !NAMES.some(n => rt[n].hand)) nextSlot(chatId); // nothing scheduled (e.g. after a stop): carry on
+}
+// Raise the hand for the current slot (skipping members no longer taking part); free-debate slots go to whoever of
+// that side has spoken least. When the user judges, the debate waits for their verdict.
+function nextSlot(c) {
+  if (c !== chatId) return;
+  const st = chatState(c), d = st.debate;
+  for (; d.at < d.script.length; d.at++) {
+    const s = d.script[d.at], prev = d.script[d.at - 1];
+    if (s.phase === 'verdict' && d.judge === 'user') { note('🧭 结辩结束。请你作为评委判胜负、说说理由；你发言后进入自由讨论。'); break; }
+    const spoke = n => q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=? AND id>?', c, n, d.motion).n;
+    const who = s.phase === 'free' ? d[s.side].filter(n => S.enabled[n]).sort((x, y) => spoke(x) - spoke(y))[0] : s.who;
+    if (!who || !S.enabled[who]) continue;
+    if (prev && prev.phase !== s.phase) note(`🧭 进入${PHASES[s.phase]}。`);
+    rt[who].hand = { r: 50, since: Date.now(), why: 'debate', slot: d.at, seat: seatOf(d, who) };
+    break;
+  }
+  saveState(c, st);
+}
+// A slot's turn is over (published, passed or failed): on to the next one. The judge's verdict ends the debate when
+// it is published (see publishOne), so the free discussion starts from it.
+function advanceDebate(c, slot, published) {
+  const st = chatState(c), d = st.debate;
+  if (!d || d.done || d.at !== slot) return;
+  if (d.script[slot].phase === 'verdict') return void (published || finishDebate(c));
+  d.at++; saveState(c, st);
+  nextSlot(c);
+}
+function finishDebate(c) {
+  const st = chatState(c);
+  st.debate.done = true; saveState(c, st);
+  logDecision('debate-over', null, { message_id: lastTalkId() });
+  if (c !== chatId) return;
+  note('🧭 辩论结束，进入自由讨论：大家不必再守持方，说说自己真实的想法。');
+  for (const n of NAMES) raise(n, 1, 'after the debate');
+}
+
+// ---------- the discussion's notes ----------
+function notesPrompt(c) {
+  const { notes = [] } = chatState(c), r = rules(c);
+  return `\nThe discussion's notes (${r.notes.title}: ${r.notes.keep}). Stay consistent with them:\n`
+    + (notes.map(x => `N${x.n} ${x.text}`).join('\n') || '(none yet)')
+    + `\nTo keep them current you may add lines at the end of your message: [NOTE add] <text> / [NOTE edit N2] <text> / `
+    + `[NOTE drop N2]. Change them sparingly: add only what later turns must stay consistent with, edit or drop only to `
+    + `correct them. Most turns change nothing.`;
+}
 
 function raise(a, r, why) {
   if (!S.enabled[a]) return;
@@ -276,7 +361,10 @@ function eligible(a) {
   if (!h || !S.enabled[a] || rt[a].status !== 'idle' || inQueue(a)) return false;
   // The summary waits for slow agents still thinking: they get their say and the summary includes them.
   if (h.why === 'summary') return NAMES.every(n => rt[n].status !== 'thinking') && !ready.some(r => r.chat === chatId);
-  if (h.r >= 100) return true;
+  // Relay and debate turns follow one another: the next starts once the previous reply is published.
+  if (rules(chatId).flow !== 'free' && busy()) return false;
+  // Floor from the user, a debate slot, and the round after a debate (whatever was said during it) aren't capped.
+  if (h.r >= 100 || h.slot != null || h.why === 'after the debate') return true;
   return turnsSinceUser(a) < S.turnCap && hasUnseen(a);
 }
 
@@ -286,11 +374,11 @@ function pump() {
     const inflight = () => NAMES.filter(n => rt[n].status === 'thinking').length + ready.filter(r => r.chat === chatId).length;
     let cands = NAMES.filter(eligible).map(a => ({ a, ...score(a) }));
     cands.sort(S.scheduler === 'broadcast' ? (x, y) => rt[x.a].hand.since - rt[y.a].hand.since : (x, y) => y.s - x.s);
-    const blind = blindOpen();
+    const blind = blindOpen(), free = rules(chatId).flow === 'free';
     for (const c of cands) {
       if (!blind && inflight() >= S.maxThinkers) break;
       // jev mode: follow-up hands wait for a fresh novelty judgment; the user's own wake-ups don't.
-      const followUp = c.r < 10 && c.why !== 'user message';
+      const followUp = free && c.r < 10 && c.why !== 'user message';
       if (jevOn() && followUp && !novFresh(c.a)) { assess(); continue; }
       if (jevOn() && followUp && c.nov < S.noveltyMin / 100) {
         logDecision('skip', c.a, { score: c.s, detail: { ...c, reason: 'jev: nothing new' } }); rt[c.a].hand = null; continue;
@@ -315,7 +403,7 @@ function pump() {
 // ---------- Jev scheduler: who would add something new? ----------
 async function assess() {
   const round = lastUserId(chatId);
-  if (!jevOn() || !round || wrapRound === round) return;
+  if (!jevOn() || !round || wrapRound === round || rules(chatId).flow !== 'free') return;
   const at = lastTalkId();
   if (jev.assessing) return void (jev.again ||= at !== jev.at); // re-ask only if the discussion moved on
   jev.at = at;
@@ -344,7 +432,7 @@ async function assess() {
 // When the room goes quiet without wrapping up, the moderator hands the floor back to the user (once per lull).
 let floorTimer;
 function floorBack() {
-  const quiet = () => !paused && !jev.assessing && !jev.judging && wrapRound !== lastUserId(chatId)
+  const quiet = () => !paused && !jev.assessing && !jev.judging && wrapRound !== lastUserId(chatId) && rules(chatId).flow !== 'debate'
     && NAMES.every(n => rt[n].status !== 'thinking' && !rt[n].hand) && !ready.some(r => r.chat === chatId)
     && q1(`SELECT kind FROM messages WHERE chat_id=? AND ${TALK} ORDER BY id DESC LIMIT 1`, chatId)?.kind === 'agent';
   if (!quiet() || jev.idleNoted === lastTalkId()) return;
@@ -420,10 +508,45 @@ ${memory ? `\nWhat you know about the user from earlier discussions (a curated m
 says now wins):\n${memory}\n` : ''}\n`;
 }
 
+// What this turn is asked to do, by flow. Sent every turn (not only in the session intro): the mode can change.
+const STANCE_RULE = `\nEnd your message with one line: [STANCE n%] verdict: your current position on the question in one `
+  + `short sentence. n = your confidence (0-100); verdict = 2-6 characters such as 支持 / 反对 / 条件支持 / 中立, or the `
+  + `option you pick (e.g. 选 Go). Keep your position unless an argument or fact actually convinces you; when it `
+  + `changes, say what convinced you (#N).`;
+function turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, role }) {
+  const tools = execOn() ? `You may run code in your workspace ${wsOf(a)} to check claims; keep it quick.`
+    : memberConfigs[a].harness === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.';
+  const roster = `\nCurrent participating members (${enabledOrder().length}): ${enabledOrder().map(describe).join(', ')}. `
+    + 'This roster overrides earlier rosters. Use these exact @handles when addressing them.';
+  const reply = `(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later. ${tools})`;
+  if (summary) return `\n\nThe moderator judged that the discussion has converged. Write a short summary for the user: `
+    + `the conclusion, who agreed (cite #N), and caveats still open. No new arguments, no @mentions, no [HAND].\n\n${reply}${roster}`;
+  let ask;
+  if (r.flow === 'relay') ask = `\n\n(Your turn in the relay. Reply in ${S.language}. ${tools})\n${r.prompt}`;
+  else if (r.flow === 'debate' && d && !d.skipped && seatOf(d, a)) {
+    const motion = q1('SELECT text FROM messages WHERE id=?', d.motion)?.text || '';
+    ask = `\n\n${debateBrief(d, a, phase || d.script[d.at]?.phase || 'free', motion, x => `@${x}`)}\n(Reply in ${S.language}. ${tools})`;
+  } else {
+    ask = `\n\n(Your turn ${k} of at most ${S.turnCap} since the user's last message; ${n} new message(s).`
+      + (k >= S.turnCap && !floor ? ' This is your last turn here: PASS unless something essential is missing.)' : ')');
+    if (role === 'devil') ask += `\n\nThe moderator asks you to play devil's advocate: the group agreed quickly and nobody `
+      + `pushed back. Argue the strongest case against the emerging consensus, concretely (cite #N): when would it be wrong, `
+      + `what does it cost, what is the best alternative? Say briefly that you are taking the opposing side on request.`;
+    else if (floor) ask += `\n\nThe user has given you the floor: please speak now.`;
+    if (invited) ask += `\n\nThe moderator invited you to speak: you seem to have something new to add here.`;
+    if (blind) ask += `\n\nIndependent opening: every member is answering this question at the same time without seeing the `
+      + `others' answers, so the group first hears independent views. Give your own answer and your reasons; don't PASS.`;
+    ask += `\n\n${reply}${r.stance ? STANCE_RULE : ''}\n${r.prompt}`;
+  }
+  return ask + notesPrompt(chat) + roster;
+}
+
 async function startTurn(a, retried = false) {
   const chat = chatId, s = sess(chat, a), basedOn = maxId(chat);
-  const why = rt[a].hand?.why, floor = rt[a].hand?.r >= 100, summary = why === 'summary', invited = why === 'Jev', blind = rt[a].hand?.blind;
-  const role = summary ? 'summary' : why === 'devil' ? 'devil' : null;
+  const { why, blind, slot, seat } = rt[a].hand || {};
+  const floor = rt[a].hand?.r >= 100, summary = why === 'summary', invited = why === 'Jev';
+  const r = rules(chat), d = chatState(chat).debate, phase = slot != null ? d.script[slot].phase : null;
+  const role = summary ? 'summary' : why === 'devil' ? 'devil' : phase === 'verdict' ? 'verdict' : null;
   Object.assign(rt[a], { status: 'thinking', started: Date.now(), live: '', hand: null, note: '', error: '', role });
   let msgs, prompt;
   if (s.cli_session_id) {
@@ -437,26 +560,7 @@ async function startTurn(a, retried = false) {
   }
   prompt += msgs.map(m => (m.sender === a ? `#${m.id} (you): ${m.text}` : fmt(m))).join('\n\n') || '(no new messages)';
   const k = turnsSinceUser(a) + 1, n = msgs.filter(m => m.sender !== a).length;
-  if (summary) prompt += `\n\nThe moderator judged that the discussion has converged. Write a short summary for the user: `
-    + `the conclusion, who agreed (cite #N), and caveats still open. No new arguments, no @mentions, no [HAND].`;
-  else prompt += `\n\n(Your turn ${k} of at most ${S.turnCap} since the user's last message; ${n} new message(s).`
-    + (k >= S.turnCap && !floor ? ' This is your last turn here: PASS unless something essential is missing.)' : ')');
-  if (role === 'devil') prompt += `\n\nThe moderator asks you to play devil's advocate: the group agreed quickly and nobody `
-    + `pushed back. Argue the strongest case against the emerging consensus, concretely (cite #N): when would it be wrong, `
-    + `what does it cost, what is the best alternative? Say briefly that you are taking the opposing side on request.`;
-  else if (floor && !summary) prompt += `\n\nThe user has given you the floor: please speak now.`;
-  if (invited) prompt += `\n\nThe moderator invited you to speak: you seem to have something new to add here.`;
-  if (blind) prompt += `\n\nIndependent opening: every member is answering this question at the same time without seeing the `
-    + `others' answers, so the group first hears independent views. Give your own answer and your reasons; don't PASS.`;
-  prompt += `\n\n(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later. `
-    + (execOn() ? `You may run code in your workspace ${wsOf(a)} to check claims; keep it quick.)`
-      : `${memberConfigs[a].harness === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.'})`);
-  // Every turn (not only the session intro), because the user can switch modes mid-discussion.
-  if (!summary) prompt += `\nEnd your message with one line: [STANCE n%] verdict: your current position on the question in one `
-    + `short sentence. n = your confidence (0-100); verdict = 2-6 characters such as 支持 / 反对 / 条件支持 / 中立, or the `
-    + `option you pick (e.g. 选 Go). Keep your position unless an argument or fact actually convinces you; when it `
-    + `changes, say what convinced you (#N).\n${MODES[chatMode(chat).effective].prompt}`;
-  prompt += `\nCurrent participating members (${NAMES.filter(n => S.enabled[n]).length}): ${memberOrder().filter(n => S.enabled[n]).map(describe).join(', ')}. This roster overrides earlier rosters. Use these exact @handles when addressing them.`;
+  prompt += turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, role });
   sendState();
 
   const model = S.models[a];
@@ -475,24 +579,31 @@ async function startTurn(a, retried = false) {
   run(`UPDATE agent_sessions SET cli_session_id=?, last_seen_id=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE chat_id=? AND agent=?`,
     res.error ? s.cli_session_id : res.sid || s.cli_session_id, basedOn, res.error ? 'error' : 'ok', chat, a);
   rt[a].status = 'idle';
+  let text = '';
   if (res.error) {
     rt[a].error = res.error;
     logDecision('error', a, { based_on: basedOn, latency_ms: res.ms, detail: { error: res.error } });
     insertMsg({ chat_id: chat, sender: 'system', kind: 'system', text: `⚠ ${memberConfigs[a].label} 出错: ${res.error}`, based_on: basedOn, latency_ms: res.ms });
   } else {
-    const { text, hand, stance } = parseReply(res.text);
+    const reply = parseReply(res.text), { hand, stance, notes } = reply;
+    text = reply.text;
     if (/^PASS[.。!！]?$/i.test(text) && !summary) {
-      rt[a].note = 'PASS';
+      rt[a].note = 'PASS'; text = '';
       logDecision('pass', a, { based_on: basedOn, latency_ms: res.ms });
     } else {
-      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, stance, model: model || 'default', role, done: Date.now() });
+      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, stance, notes, seat, slot, model: model || 'default', role, done: Date.now() });
       // A browser is reading aloud: synthesize while the reply waits in the queue, so it plays without delay.
       if (speechOn() && Date.now() - ttsActiveAt < 120e3) synth(spoken(a, text), voiceOf(a)).catch(() => {});
       logDecision('ready', a, { based_on: basedOn, latency_ms: res.ms, detail: { hand, chars: text.length } });
     }
   }
+  // The flow moves on: the relay hands the baton on, the debate goes to its next slot (a published reply first waits
+  // for its reading time: the next turn starts once it is out).
+  const passed = !!res.error || rt[a].note === 'PASS';
+  if (chat === chatId && rules(chat).flow === 'relay') relay(a, passed ? '' : text);
+  if (slot != null) advanceDebate(chat, slot, !passed);
   // A PASS or failure may have been the last thing the convergence check was waiting for.
-  if (chat === chatId && (res.error || rt[a].note === 'PASS') && wrapRound !== lastUserId(chat)) checkConvergence();
+  if (chat === chatId && passed && wrapRound !== lastUserId(chat)) checkConvergence();
   pump();
 }
 
@@ -520,14 +631,23 @@ function publish(force = false) {
 function publishOne(r) {
   const turnNo = q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=?', r.chat, r.agent).n + 1;
   const stale = !!q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user' AND id>? LIMIT 1`, r.chat, r.basedOn);
+  // The reply's [NOTE] lines update the discussion's notes; the message records what changed.
+  const st = chatState(r.chat);
+  const changed = r.notes?.length ? applyNotes(st.notes ??= [], r.notes, { by: r.agent }) : [];
   const m = insertMsg({ chat_id: r.chat, sender: r.agent, kind: 'agent', text: r.text, based_on: r.basedOn,
-    latency_ms: r.ms, turn_no: turnNo, stale, model: r.model, role: r.role, mode: chatMode(r.chat).effective, stance: r.stance });
+    latency_ms: r.ms, turn_no: turnNo, stale, model: r.model, role: r.role, mode: chatMode(r.chat).effective, stance: r.stance,
+    seat: r.seat, note_ops: changed.length ? JSON.stringify(changed) : null });
+  if (changed.length) {
+    for (const x of st.notes) if (changed.some(o => o.n === x.n && o.op !== 'drop')) x.msg = m.id;
+    saveState(r.chat, st);
+  }
   if (r.stance && r.role !== 'devil' && r.role !== 'summary') checkShift(m);
+  if (r.role === 'verdict') finishDebate(r.chat);
   run('UPDATE agent_sessions SET turns=turns+1 WHERE chat_id=? AND agent=?', r.chat, r.agent);
   logDecision('publish', r.agent, { based_on: r.basedOn, message_id: m.id, latency_ms: r.ms,
     detail: { stale, turn_no: turnNo, waited_ms: Date.now() - r.done } });
   // After the wrap-up nobody's hand goes up again, so the round ends quietly until the user posts.
-  if (r.chat === chatId && wrapRound !== lastUserId(chatId)) {
+  if (r.chat === chatId && wrapRound !== lastUserId(chatId) && rules(chatId).flow === 'free' && r.role !== 'verdict') {
     if (S.scheduler === 'broadcast') for (const n of NAMES) { if (n !== r.agent) raise(n, 1, 'broadcast'); }
     if (r.hand) raise(r.agent, 1.5, '[HAND]');
     // The consensus has to answer the devil's advocate (in jev mode, only those with something new).
@@ -567,6 +687,7 @@ function stances() {
 
 // ---------- moderator: stop when views have converged ----------
 async function checkConvergence() {
+  if (!rules(chatId).moderated) return;
   const round = lastUserId(chatId);
   const msgs = q(`SELECT id, sender, kind, text, role, stance FROM messages WHERE chat_id=? AND id>=? AND ${TALK} ORDER BY id`, chatId, round)
     .map(m => ({ ...m, text: withStance(m) }));
@@ -642,7 +763,11 @@ function state() {
     speech: { on: speechOn(), models: ttsModels(), defaults: Object.fromEntries(NAMES.map(n => [n, defaultVoice(NAMES.indexOf(n))])) },
     chats: listChats(),
     sandboxed: !!RUNAS,
-    discussionMode: { ...chatMode(chatId), pending: modePending === chatId },
+    discussionMode: { ...chatMode(chatId), pending: modePending === chatId,
+      rules: (({ flow, stance, notes }) => ({ flow, stance: !!stance, notesTitle: notes.title }))(rules(chatId)) },
+    notes: chatState(chatId).notes || [],
+    debate: (({ debate: d }) => d && !d.skipped ? { pro: d.pro, con: d.con, judge: d.judge, done: d.done, motion: d.motion,
+      phase: d.script[d.at]?.phase || null, step: Math.min(d.at + 1, d.script.length), steps: d.script.length } : null)(chatState(chatId)),
     stances: stances(),
     memory: { text: readMemory(), curating: memo.curating, at: memo.at, error: memo.error },
     jev: { on: jevOn(), assessing: jev.assessing, judging: jev.judging, ms: jev.ms, down: S.scheduler === 'jev' && !jevOn() },
@@ -733,13 +858,11 @@ const routes = {
     if (/^讨论 \d+$/.test(c.title) && !q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user'`, chatId))
       run('UPDATE chats SET title=? WHERE id=?', text.replace(/\s+/g, ' ').slice(0, 30), chatId);
     const m = insertMsg({ chat_id: chatId, sender: 'user', kind: 'user', text, reply_to: reply_to || null });
-    const at = mentions(text);
-    const target = reply_to && q1('SELECT sender FROM messages WHERE id=?', reply_to)?.sender;
-    if (at.length) for (const n of at) raise(n, 10, '@ by user');
-    else for (const n of NAMES) raise(n, n === target ? 3 : 1, n === target ? `reply to #${reply_to}` : 'user message');
-    logDecision('user', null, { message_id: m.id, detail: { mentions: at, reply_to: reply_to || null } });
+    logDecision('user', null, { message_id: m.id, detail: { mentions: mentions(text), reply_to: reply_to || null } });
     const cm = chatMode(chatId);
-    if (cm.mode === 'auto' && !cm.auto) classifyChat(chatId); // first question of an Auto discussion
+    if (modePending === chatId) return;                                      // the pending classification wakes the room
+    if (cm.mode === 'auto' && !cm.auto) return void classifyChat(chatId, m); // first question of an Auto discussion
+    wake(m);
   },
   'POST /api/typing'({ typing }) { typingAt = typing ? Date.now() : 0; },
   'POST /api/speaking'({ speaking }) { speakingAt = speaking ? Date.now() : 0; ttsActiveAt = Date.now(); },
@@ -797,6 +920,14 @@ const routes = {
     writeFileSync(MEMORY, t ? `${t}\n` : ''); memo.at = Date.now(); logDecision('memory-edit', null);
   },
   'POST /api/memory/curate'() { maybeCurate(true); },
+  // The user edits the discussion's notes directly: {op: add | edit | drop, n, text}.
+  'POST /api/notes'({ chat_id, op, n, text }) {
+    const c = +chat_id;
+    if (!q1('SELECT 1 FROM chats WHERE id=?', c) || !['add', 'edit', 'drop'].includes(op)) return;
+    const st = chatState(c);
+    const changed = applyNotes(st.notes ??= [], [{ op, n: +n, text: String(text || '').trim().slice(0, 300) }].filter(o => o.op === 'drop' || o.text), { by: 'user' });
+    saveState(c, st); logDecision('notes', null, { detail: { op, n: +n, changed } });
+  },
   'POST /api/chat/delete'({ id }) {
     id = +id;
     if (!q1('SELECT 1 FROM chats WHERE id=?', id)) return;

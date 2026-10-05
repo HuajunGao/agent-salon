@@ -38,7 +38,7 @@ test('OpenCode v1 and v2 receive per-member providers without embedding credenti
 test('HTTP member lifecycle persists, keeps credentials private and routes @handles', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agent-chat-member-test-'));
   const app = join(root, 'app'); mkdirSync(app);
-  for (const f of ['server.mjs', 'members.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
+  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
     copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
   // Exercise the actual server and SQLite with a deterministic harness, without calling paid models.
   writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};

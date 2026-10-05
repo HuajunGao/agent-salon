@@ -12,7 +12,7 @@ import net from 'node:net';
 test('discussion modes: Auto fallback, user override reaches the turn prompt, persists and is recorded', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agent-chat-mode-test-'));
   const app = join(root, 'app'); mkdirSync(app);
-  for (const f of ['server.mjs', 'members.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
+  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
     copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
   const turnFile = join(root, 'turn.json');
   writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
@@ -43,7 +43,7 @@ test('discussion modes: Auto fallback, user override reaches the turn prompt, pe
     await post('/api/settings', { memory: false, autoStop: false, devil: false, circlePause: false, scheduler: 'algorithm', readSpeed: 100000 });
     let s = await init();
     const id = s.state.chatId;
-    assert.deepEqual(s.state.discussionMode, { mode: 'auto', auto: null, effective: 'roundtable', pending: false });
+    assert.deepEqual((({ rules, ...dm }) => dm)(s.state.discussionMode), { mode: 'auto', auto: null, effective: 'roundtable', pending: false });
 
     await post('/api/chat/mode', { id, mode: 'debate' });
     await post('/api/chat/mode', { id, mode: 'chaos' }); // ignored
@@ -56,14 +56,14 @@ test('discussion modes: Auto fallback, user override reaches the turn prompt, pe
     await post('/api/send', { text: '远程办公应该成为默认吗？', chat_id: id });
     await post('/api/floor', { agent: member });
     const turn = await until(() => existsSync(turnFile) && JSON.parse(readFileSync(turnFile, 'utf8')));
-    assert.ok(turn.p.includes('Discussion mode: DEBATE'));
+    assert.ok(turn.p.includes('Debate on the motion: "远程办公应该成为默认吗？"'));
     assert.ok(!turn.p.includes('Discussion mode: ROUNDTABLE'));
     const agentMsg = await until(async () => (await init()).messages.find(m => m.kind === 'agent'));
     assert.equal(agentMsg.mode, 'debate');
 
     await post('/api/chat/mode', { id, mode: 'auto' }); // no Jev key: classification fails, fallback applies
     s = await until(async () => { const x = await init(); return !x.state.discussionMode.pending && x; });
-    assert.deepEqual(s.state.discussionMode, { mode: 'auto', auto: null, effective: 'roundtable', pending: false });
+    assert.deepEqual((({ rules, ...dm }) => dm)(s.state.discussionMode), { mode: 'auto', auto: null, effective: 'roundtable', pending: false });
 
     await post('/api/chat/mode', { id, mode: 'research' });
     await stop(); await boot();
