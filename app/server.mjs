@@ -784,13 +784,16 @@ function state() {
     })),
   };
 }
-// History list: newest activity first, with size and the latest question as a preview.
-const listChats = () => q(`SELECT c.id, c.title, c.created_at,
+// History list: newest activity first, with size, the latest question as a preview, and the discussion's mode
+// (kind: the chosen mode, else what Auto classified, else the mode its replies were written in; null when none).
+const listChats = () => q(`SELECT c.id, c.title, c.created_at, c.mode, c.auto_mode,
+    (SELECT mode FROM messages WHERE chat_id=c.id AND mode IS NOT NULL ORDER BY id DESC LIMIT 1) used,
     (SELECT count(*) FROM messages WHERE chat_id=c.id AND ${TALK}) n,
     (SELECT max(created_at) FROM messages WHERE chat_id=c.id) last,
     (SELECT text FROM messages WHERE chat_id=c.id AND kind='user' ORDER BY id DESC LIMIT 1) preview
   FROM chats c ORDER BY coalesce(last, c.created_at) DESC, c.id DESC`)
-  .map(c => ({ ...c, preview: c.preview?.slice(0, 60) || '' }));
+  .map(({ mode, auto_mode, used, ...c }) => ({ ...c, preview: c.preview?.slice(0, 60) || '',
+    kind: [mode, auto_mode, used].find(k => MODES[k]) || null })); // used: the mode its replies were written in
 const sendState = () => send(state());
 let stateTimer;
 const sendStateSoon = () => { stateTimer ??= setTimeout(() => { stateTimer = null; sendState(); }, 400); };
