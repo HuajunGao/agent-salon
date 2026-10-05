@@ -94,7 +94,7 @@ async function server(t, slowFirst = 0) {
   for (let i = 0; i < 200; i++) { try { if ((await fetch(url)).ok) break; } catch {} await new Promise(r => setTimeout(r, 30)); }
   await post('/api/settings', { memory: false, autoStop: false, devil: false, circlePause: false, scheduler: 'algorithm',
     readSpeed: 100000, maxThinkers: 4, turnCap: 1 });
-  return { post, init, until, turns };
+  return { post, init, until, turns, url };
 }
 
 test('story mode: one member at a time, an @mention takes the baton, notes kept by the members', async t => {
@@ -170,4 +170,29 @@ test('stop: cancels thinking turns, drops what was not published, and the next m
   assert.equal(turns().length, 4);                                      // and nothing new started
   await post('/api/send', { text: '那就简单说说吧', chat_id: id });
   await until(async () => (await init()).messages.some(m => m.kind === 'agent'));
+});
+
+
+test('a shared link shows one discussion read-only: its messages live, nothing else', async t => {
+  const { post, init, until, url } = await server(t);
+  const id = (await init()).state.chatId;
+  await post('/api/send', { text: '分享测试：周末去哪玩？', chat_id: id });
+  const { share } = await (await post('/api/chat/share', { id })).json();
+  assert.equal((await (await post('/api/chat/share', { id })).json()).share, share); // one code per discussion
+  assert.ok((await fetch(`${url}/s/${share}`)).ok);                                    // the page itself
+  // the viewer's event stream: the discussion, then its new messages as they are published
+  const c = new AbortController(), rd = (await fetch(`${url}/events?s=${share}`, { signal: c.signal })).body.getReader();
+  let buf = '';
+  const next = async () => { while (!buf.includes('\n\n')) buf += new TextDecoder().decode((await rd.read()).value);
+    const i = buf.indexOf('\n\n'), ev = JSON.parse(buf.slice(6, i)); buf = buf.slice(i + 2); return ev; };
+  const first = await next();
+  assert.equal(first.type, 'init');
+  assert.deepEqual(first.messages.map(m => m.text), ['分享测试：周末去哪玩？']);
+  assert.deepEqual(Object.keys(first.state).sort(), ['chatId', 'members', 'now', 'title', 'type']); // no memory, settings, chats
+  await until(async () => (await init()).messages.some(m => m.kind === 'agent'));
+  let ev; do ev = await next(); while (ev.type !== 'msg');
+  assert.equal(ev.msg.chat_id, id);
+  c.abort();
+  const bad = (await (await fetch(`${url}/events?s=nope`)).body.getReader().read()).value;
+  assert.match(new TextDecoder().decode(bad), /已失效/);
 });

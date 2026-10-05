@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, chmodSync, chownSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { AGENTS, runTurn, listModels, runAs } from './agents.mjs';
 import { judge, novelty, classifyMode, stanceShift } from './moderator.mjs';
 import { MODES, rulesOf, relayNext, debateSetup, debateScript, debateBrief, seatOf, PHASES, parseReply, applyNotes } from './modes.mjs';
@@ -45,7 +46,8 @@ for (const col of ['model', 'role', 'mode', 'stance', 'seat', 'note_ops'])
   if (!db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === col)) db.exec(`ALTER TABLE messages ADD COLUMN ${col} TEXT`);
 // Discussion mode per chat: 'auto' (Jev classifies the first question into auto_mode) or a mode the user chose.
 // state: JSON {notes: [{n, text, by, msg}], debate: {pro, con, judge, motion, script, at, done}}.
-for (const [col, def] of [['mode', "TEXT DEFAULT 'auto'"], ['auto_mode', 'TEXT'], ['state', 'TEXT']])
+// share: the code of the discussion's read-only link (/s/<share>), made when the user first shares it.
+for (const [col, def] of [['mode', "TEXT DEFAULT 'auto'"], ['auto_mode', 'TEXT'], ['state', 'TEXT'], ['share', 'TEXT']])
   if (!db.prepare('PRAGMA table_info(chats)').all().some(c => c.name === col)) db.exec(`ALTER TABLE chats ADD COLUMN ${col} ${def}`);
 const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
@@ -140,6 +142,7 @@ function insertMsg(m) {
   const msg = q1('SELECT * FROM messages WHERE id=?', id);
   writeTranscript(m.chat_id);
   if (m.chat_id === chatId) send({ type: 'msg', msg });
+  sendViewers(m.chat_id, { type: 'msg', msg });
   return msg;
 }
 
@@ -772,8 +775,18 @@ async function checkConvergence() {
 }
 
 // ---------- SSE ----------
-const clients = new Set();
-const send = ev => { const s = `data: ${JSON.stringify(ev)}\n\n`; for (const c of clients) c.write(s); };
+// Browser connections: the app itself (view null), or a shared discussion opened read-only (view: its chat id).
+const clients = new Map();
+const data = ev => `data: ${JSON.stringify(ev)}\n\n`;
+const send = ev => { const s = data(ev); for (const [c, view] of clients) if (view == null) c.write(s); };
+function sendViewers(chat, ev) {
+  let s;
+  for (const [c, view] of clients) if (view === chat) c.write(s ??= data(typeof ev === 'function' ? ev() : ev));
+}
+// All a shared page gets: the discussion's title and who is talking. No memory, settings or other discussions.
+const viewState = c => ({ type: 'state', now: Date.now(), chatId: c, title: q1('SELECT title FROM chats WHERE id=?', c)?.title || '',
+  members: memberOrder().map(n => ({ name: n, label: aliasOf(n), color: memberConfigs[n].color, enabled: S.enabled[n],
+    status: c === chatId ? rt[n].status : 'idle', started: rt[n].started })) });
 function state() {
   const now = Date.now();
   return {
@@ -813,7 +826,10 @@ const listChats = () => q(`SELECT c.id, c.title, c.created_at, c.mode, c.auto_mo
   FROM chats c ORDER BY coalesce(last, c.created_at) DESC, c.id DESC`)
   .map(({ mode, auto_mode, used, ...c }) => ({ ...c, preview: c.preview?.slice(0, 60) || '',
     kind: [mode, auto_mode, used].find(k => MODES[k]) || null })); // used: the mode its replies were written in
-const sendState = () => send(state());
+const sendState = () => {
+  send(state());
+  for (const c of new Set(clients.values())) if (c != null) sendViewers(c, () => viewState(c));
+};
 let stateTimer;
 const sendStateSoon = () => { stateTimer ??= setTimeout(() => { stateTimer = null; sendState(); }, 400); };
 
@@ -944,6 +960,14 @@ const routes = {
       : `🧭 讨论模式改为：${MODES[mode].label}（你指定），从下一轮发言开始生效。`);
     if (mode === 'auto' && !cm.auto) classifyChat(id);
   },
+  // The discussion's read-only link code (made once, kept): /s/<code>.
+  'POST /api/chat/share'({ id }) {
+    const c = q1('SELECT share FROM chats WHERE id=?', +id);
+    if (!c) throw new Error('讨论不存在');
+    const share = c.share || randomBytes(6).toString('base64url');
+    if (!c.share) { run('UPDATE chats SET share=? WHERE id=?', share, +id); logDecision('share', null, { detail: { chat: +id } }); }
+    return { share };
+  },
   'POST /api/chat/rename'({ id, title }) {
     title = String(title || '').trim().slice(0, 80);
     if (title) run('UPDATE chats SET title=? WHERE id=?', title, +id);
@@ -997,7 +1021,7 @@ const init = () => ({ type: 'init', messages: q('SELECT * FROM messages WHERE ch
 
 http.createServer((req, res) => {
   const key = `${req.method} ${req.url.split('?')[0]}`;
-  if (key === 'GET /') {
+  if (key === 'GET /' || /^GET \/s\/[\w-]+$/.test(key)) { // /s/<code>: the same page, showing one discussion read-only
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(readFileSync(join(ROOT, 'app/index.html')));
   }
@@ -1008,8 +1032,11 @@ http.createServer((req, res) => {
   if (key === 'GET /events') {
     // x-accel-buffering: behind nginx (the home reverse proxy) events must not wait in its buffer.
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no' });
-    clients.add(res); req.on('close', () => clients.delete(res));
-    return res.write(`data: ${JSON.stringify(init())}\n\n`);
+    const code = new URL(req.url, 'http://x').searchParams.get('s');
+    const view = code ? q1('SELECT id FROM chats WHERE share=?', code)?.id ?? -1 : null; // -1: no such link
+    clients.set(res, view); req.on('close', () => clients.delete(res));
+    return res.write(data(view == null ? init() : { type: 'init', state: view < 0 ? { ...viewState(view), title: '这个分享链接已失效' } : viewState(view),
+      messages: q('SELECT * FROM messages WHERE chat_id=? ORDER BY id', view) }));
   }
   const url = new URL(req.url, 'http://x');
   if (req.method === 'GET' && getRoutes[url.pathname]) {
