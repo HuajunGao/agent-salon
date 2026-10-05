@@ -233,6 +233,9 @@
   /* moderator module */
   .room { padding:var(--s3); border-radius:var(--r-md); background:var(--surface); box-shadow:0 1px 2px rgba(15,17,20,.04); }
   .room .rh { display:flex; align-items:center; gap:var(--s2); margin-bottom:var(--s2); }
+  .room.folded .rh { margin-bottom:0; }
+  .room .rh .memtoggle { gap:var(--s2); color:var(--ink); }
+  .sect .count { color:var(--ink-3); font-weight:400; }
   .room .rh .glyph { width:22px; height:22px; border-radius:7px; display:grid; place-items:center; color:var(--mod); background:var(--mod-soft); }
   .room .rh .rt { font-weight:600; }
   .room .rh .rs { margin-left:auto; font-size:var(--t-xs); color:var(--ink-3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:150px; }
@@ -471,7 +474,7 @@
   <section id="moderator"></section>
   <section id="notes"></section>
   <section id="memory"></section>
-  <section><div class="sect member-heading">成员 <span class="member-tools"><button id="order-members">调整顺序</button><button id="add-member">＋ 新成员</button></span></div><div id="member-order-hint" hidden>用上下箭头调整显示顺序，自动保存。</div><div id="members"></div></section>
+  <section><div class="sect member-heading"><button class="memtoggle" data-fold="members" aria-expanded="true" title="展开或收起"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 5 7 7-7 7"/></svg>成员</button> <span class="member-tools"><button id="order-members">调整顺序</button><button id="add-member">＋ 新成员</button></span></div><div id="member-order-hint" hidden>用上下箭头调整显示顺序，自动保存。</div><div id="members"></div></section>
   <details class="settings">
     <summary><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m9 5 7 7-7 7"/></svg>讨论设置</summary>
     <div class="grp">
@@ -700,8 +703,8 @@ function renderModerator() {
     : j.down ? 'Jev 暂不可用，改用算法' : j.ms ? `上次判断 ${j.ms}ms` : '待命';
   const row = (name, v, tick, hint) => `<div class="metric" title="${hint}"><span class="ml">${name}</span>${mini(v, tick)}<span class="mv">${v == null ? '–' : pct(v)}</span></div>`;
   const modeText = mode === 'jev' ? '按新意请人发言' : mode === 'algorithm' ? '按算法调度' : '广播：每条唤醒所有人';
-  let html = `<div class="room"><div class="rh"><span class="glyph"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5Z" fill="currentColor"/></svg></span>
-    <span class="rt">主持人 Jev</span><span class="rs">${status}</span></div>
+  const head = `<div class="rh">${foldButton('moderator', `<span class="glyph"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5Z" fill="currentColor"/></svg></span><span class="rt">主持人 Jev</span>`)}<span class="rs">${status}</span></div>`;
+  let html = folded.has('moderator') ? `<div class="room folded">${head}</div>` : `<div class="room">${head}
     <div class="mode">${flowText(modeText)}</div>${renderSeats()}
     ${m?.convergence != null ? row('观点收敛', m.convergence, S.settings.autoStop ? S.settings.convergeAt : null, '刻度是收尾阈值') : ''}
     ${m?.convergence != null ? `<div class="quiet">${[
@@ -737,13 +740,26 @@ function renderSeats() {
     + `<b>评委</b><span>${who(d.judge)}</span></div>`;
 }
 
+// ---------- folding the right panel's sections ----------
+// The room card, the notes and the members fold (the memory and the settings have their own toggles); remembered.
+const folded = new Set(JSON.parse(localStorage.folded || '[]'));
+const foldButton = (key, inner) => `<button class="memtoggle" data-fold="${key}" aria-expanded="${!folded.has(key)}" title="展开或收起"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 5 7 7-7 7"/></svg>${inner}</button>`;
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-fold]');
+  if (!b) return;
+  const k = b.dataset.fold;
+  folded.has(k) ? folded.delete(k) : folded.add(k);
+  localStorage.folded = JSON.stringify([...folded]);
+  renderState();
+});
+
 // ---------- the discussion's notes ----------
 // Kept by the members with [NOTE] lines at the end of their replies, and seen by every turn; the user can edit them here.
 function renderNotes() {
   const title = S.discussionMode.rules.notesTitle;
-  setHTML('#notes', `<div class="sect memhead"><span title="成员发言时会把需要保持一致的内容记在这里，之后每一轮都会参考">${esc(title)}</span>`
+  setHTML('#notes', `<div class="sect memhead">${foldButton('notes', `${esc(title)}${S.notes.length ? ` <span class="count">${S.notes.length}</span>` : ''}`)}`
     + `<span class="acts"><button data-note-add>添加</button></span></div>`
-    + (S.notes.length ? `<ul class="notelist">${S.notes.map(x => `<li><span class="nn">N${x.n}</span><span class="nt">${linkRefs(x.text)}</span>`
+    + (folded.has('notes') ? '' : S.notes.length ? `<ul class="notelist">${S.notes.map(x => `<li><span class="nn">N${x.n}</span><span class="nt">${linkRefs(x.text)}</span>`
       + `<span class="nm">${x.msg ? ref(x.msg) : x.by === 'user' ? '你' : ''}<button data-note-edit="${x.n}" title="修改" aria-label="修改 N${x.n}">${ICON.rename}</button>`
       + `<button data-note-drop="${x.n}" title="删除" aria-label="删除 N${x.n}">${ICON.del}</button></span></li>`).join('')}</ul>`
       : `<div class="memempty">成员发言时会把需要前后一致的内容记在这里（${esc(title)}），之后每一轮都会参考。你也可以自己添加或修改。</div>`));
@@ -852,6 +868,8 @@ function renderState() {
   const now = Date.now() - clockSkew;
   if (!messages.length) setHTML('#msgs', emptyState());
   renderHistory(); renderModerator(); renderNotes(); renderMemory(); renderMode(); renderTts(); renderThinking();
+  $('#members').hidden = folded.has('members');
+  $('[data-fold=members]').setAttribute('aria-expanded', !folded.has('members'));
   $('#s-exec').disabled = !S.sandboxed; $('#execrow').style.opacity = S.sandboxed ? '' : '.45';
   const cur = S.chats.find(c => c.id === S.chatId);
   $('#title').textContent = cur?.title || '';
