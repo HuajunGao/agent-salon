@@ -195,6 +195,14 @@ const jev = { assessing: false, again: false, judging: false, ms: null, downAt: 
 const TALK = `kind IN ('user','agent')`;
 const lastTalkId = () => q1(`SELECT coalesce(max(id),0) m FROM messages WHERE chat_id=? AND ${TALK}`, chatId).m;
 const note = text => insertMsg({ chat_id: chatId, sender: 'moderator', kind: 'moderator', text });
+// A note about what comes next ("进入自由辩") waits until the replies already written are published, so it lands
+// between the last reply of one phase and the first of the next even while replies wait for reading or read-aloud.
+const held = [];
+const noteNext = text => held.push({ chat: chatId, text });
+function releaseHeld() {
+  if (ready.some(r => r.chat === chatId)) return;
+  for (const h of held.splice(0)) if (h.chat === chatId) note(h.text);
+}
 
 // ---------- discussion modes (rules in modes.mjs) ----------
 const FALLBACK_MODE = 'roundtable'; // while Auto has no classification yet (or Jev failed)
@@ -288,11 +296,11 @@ function nextSlot(c) {
   const st = chatState(c), d = st.debate;
   for (; d.at < d.script.length; d.at++) {
     const s = d.script[d.at], prev = d.script[d.at - 1];
-    if (s.phase === 'verdict' && d.judge === 'user') { note('🧭 结辩结束。请你作为评委判胜负、说说理由；你发言后进入自由讨论。'); break; }
+    if (s.phase === 'verdict' && d.judge === 'user') { noteNext('🧭 结辩结束。请你作为评委判胜负、说说理由；你发言后进入自由讨论。'); break; }
     const spoke = n => q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=? AND id>?', c, n, d.motion).n;
     const who = s.phase === 'free' ? d[s.side].filter(n => S.enabled[n]).sort((x, y) => spoke(x) - spoke(y))[0] : s.who;
     if (!who || !S.enabled[who]) continue;
-    if (prev && prev.phase !== s.phase) note(`🧭 进入${PHASES[s.phase]}。`);
+    if (prev && prev.phase !== s.phase) noteNext(`🧭 进入${PHASES[s.phase]}。`);
     rt[who].hand = { r: 50, since: Date.now(), why: 'debate', slot: d.at, seat: seatOf(d, who) };
     break;
   }
@@ -370,6 +378,7 @@ function eligible(a) {
 
 function pump() {
   publish();
+  releaseHeld();
   if (!paused && modePending !== chatId) {
     const inflight = () => NAMES.filter(n => rt[n].status === 'thinking').length + ready.filter(r => r.chat === chatId).length;
     let cands = NAMES.filter(eligible).map(a => ({ a, ...score(a) }));

@@ -135,8 +135,12 @@ test('debate mode with an even number: the user judges, and the verdict opens fr
   await post('/api/chat/mode', { id, mode: 'debate' });
   await post('/api/send', { text: '该不该提前还房贷？', chat_id: id });
   await until(async () => (await init()).messages.some(m => m.text.includes('请你作为评委')));
-  const before = (await init()).messages.filter(m => m.kind === 'agent').length;
+  const all = (await init()).messages, before = all.filter(m => m.kind === 'agent').length;
   assert.equal(before, 10); // 2 openings, 2 rebuttals, 4 free, 2 closings
+  // each phase note sits between the last reply of one phase and the first of the next (not before a queued reply)
+  const order = all.filter(m => m.kind === 'agent' || /进入|结辩结束/.test(m.text)).map(m => m.kind === 'agent' ? m.seat : m.text);
+  assert.deepEqual(order, ['正方一辩', '反方一辩', '🧭 进入驳论。', '正方二辩', '反方二辩', '🧭 进入自由辩。',
+    ...order.slice(6, 10), '🧭 进入结辩。', '反方二辩', '正方二辩', '🧭 结辩结束。请你作为评委判胜负、说说理由；你发言后进入自由讨论。']);
   await post('/api/send', { text: '我判反方赢：现金流更重要。', chat_id: id });
   const s = await until(async () => { const x = await init(); return x.messages.filter(m => m.kind === 'agent').length > before && x; });
   assert.equal(s.state.debate.done, true);
