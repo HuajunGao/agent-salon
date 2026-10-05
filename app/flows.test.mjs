@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { relayNext, debateSetup, debateScript, seatOf, parseReply, applyNotes, rulesOf } from './modes.mjs';
+import { relayNext, debateSetup, debateScript, debateBrief, seatOf, parseReply, applyNotes, rulesOf } from './modes.mjs';
 
 test('story relay: an @mention takes the baton, else the next member in order', () => {
   const order = ['a', 'b', 'c'];
@@ -27,6 +27,10 @@ test('debate: sides at random, an odd member out judges, the order of play', () 
     'opening:p1', 'opening:c1', 'rebuttal:p2', 'rebuttal:c2',
     'free:pro', 'free:con', 'free:pro', 'free:con', 'closing:c2', 'closing:p2', 'verdict:user']);
   assert.equal(rulesOf('debate', { done: true }).moderated, true); // after the verdict: free discussion
+  // spoken style everywhere but research
+  assert.ok(rulesOf('roundtable').prompt.includes('口语化') && rulesOf('debate', { done: true }).prompt.includes('口语化'));
+  assert.ok(!rulesOf('research').prompt.includes('口语化'));
+  assert.ok(debateBrief(d, 'p1', 'free', 'm', x => x).includes('口语化'));
   assert.equal(rulesOf('debate', { done: false }).flow, 'debate');
 });
 

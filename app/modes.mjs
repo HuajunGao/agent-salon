@@ -7,6 +7,12 @@
 //              and every turn sees, so a long discussion or story doesn't drift from what was established
 // Everything in this file is pure.
 
+// Replies may be read aloud, so outside research (which keeps its precise, sourced style) members talk like people talk.
+const SPOKEN = ' Talk the way you would say it out loud in a lively conversation (口语化): plain spoken words and short '
+  + 'sentences, no lists, tables or headings, few parentheses, no URLs or code unless essential. It may be read aloud.';
+const READ_ALOUD = ' Write prose that reads well aloud: natural rhythm, short sentences, dialogue welcome; no lists, headings '
+  + 'or bracketed notes.';
+
 export const MODES = {
   research: {
     label: '研究', flow: 'free', stance: true, moderated: true, blindOpening: true,
@@ -21,7 +27,8 @@ export const MODES = {
     notes: { title: '要点', keep: 'key points, agreements and open questions' },
     prompt: 'Discussion mode: ROUNDTABLE. Explore the problem from several useful perspectives. Do not force yourselves into '
       + 'opposing camps; surface missing perspectives, assumptions, trade-offs, edge cases and failure modes; respond to '
-      + 'specific points others made; consensus is fine when it is warranted; do not repeat summaries of what was already said.',
+      + 'specific points others made; consensus is fine when it is warranted; do not repeat summaries of what was already said.'
+      + SPOKEN,
   },
   debate: {
     label: '辩论', flow: 'debate',
@@ -34,7 +41,7 @@ export const MODES = {
     prompt: 'Discussion mode: STORY RELAY. The members write one story together, one passage per turn. Continue exactly '
       + 'from the latest passage, keep every established character, relationship and fact (see the notes), and when the '
       + 'user interjects, weave it into the story. Write the passage itself (up to about 300 Chinese characters), no '
-      + 'commentary or summary, never PASS. You may end by @mentioning who takes the baton next.',
+      + 'commentary or summary, never PASS. You may end by @mentioning who takes the baton next.' + READ_ALOUD,
   },
 };
 
@@ -92,11 +99,11 @@ export function debateBrief(d, name, phase, motion, handle) {
   const judge = d.judge === 'user' ? 'the user' : handle(d.judge);
   if (name === d.judge) return `Debate on the motion: "${motion}". You are the judge (评委). Pro: ${list('pro')}. Con: ${list('con')}.\n`
     + 'The debate is over. Decide which side argued better and why (cite #N), name the best debater, and say in a line '
-    + 'what each side missed. After your verdict the floor opens for free discussion.';
+    + 'what each side missed. After your verdict the floor opens for free discussion.' + SPOKEN;
   const side = d.pro.includes(name) ? 'pro' : 'con';
   return `Debate on the motion: "${motion}". You are ${seatOf(d, name)}, on the ${side === 'pro' ? 'pro side (for' : 'con side (against'} `
     + `the motion). Pro: ${list('pro')}. Con: ${list('con')}. Judge: ${judge}.\nNow: ${PHASES[phase]}. ${PHASE_GUIDE[phase]} `
-    + 'Your side is assigned, not your own view: argue it as well as you can, and answer the user if they interjected.';
+    + 'Your side is assigned, not your own view: argue it as well as you can, and answer the user if they interjected.' + SPOKEN;
 }
 
 // ---------- the reply protocol ----------
