@@ -4,7 +4,9 @@ import { relayNext, debateSetup, debateScript, debateBrief, seatOf, parseReply, 
 
 test('story relay: an @mention takes the baton, else the next member in order', () => {
   const order = ['a', 'b', 'c'];
-  assert.equal(relayNext(order, null, null), 'a');
+  assert.equal(relayNext(order, null, null, () => 0), 'a');      // the opener is drawn at random
+  assert.equal(relayNext(order, null, null, () => 0.99), 'c');
+  assert.equal(relayNext(order, null, 'b'), 'b');                // unless the user @mentions one
   assert.equal(relayNext(order, 'a', null), 'b');
   assert.equal(relayNext(order, 'c', null), 'a');
   assert.equal(relayNext(order, 'a', 'c'), 'c');
@@ -96,7 +98,7 @@ test('story mode: one member at a time, an @mention takes the baton, notes kept 
   const { post, init, until, turns } = await server(t);
   const id = (await init()).state.chatId;
   await post('/api/chat/mode', { id, mode: 'story' });
-  await post('/api/send', { text: '开个头：雨夜，一封没有署名的信。', chat_id: id });
+  await post('/api/send', { text: '开个头：雨夜，一封没有署名的信。@claude 你先来', chat_id: id });
   const s = await until(async () => { const x = await init(); return x.messages.filter(m => m.kind === 'agent').length >= 4 && x; });
   assert.deepEqual(s.messages.filter(m => m.kind === 'agent').map(m => m.sender), ['claude', 'opencode', 'codex', 'agy']);
   const tt = turns();

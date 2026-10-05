@@ -52,9 +52,11 @@ export const rulesOf = (mode, debate) => (mode === 'debate' && debate?.done ? { 
 
 // ---------- story relay ----------
 // The baton goes to the member the latest message @mentioned, else to the next member after `after` (display order).
-export function relayNext(order, after, mentioned) {
+// Who opens the story (nobody before) is drawn at random.
+export function relayNext(order, after, mentioned, rand = Math.random) {
   if (mentioned && order.includes(mentioned) && mentioned !== after) return mentioned;
-  return order[(order.indexOf(after) + 1) % order.length]; // indexOf -1 (nobody yet) → the first member
+  if (!order.includes(after)) return order[Math.floor(rand() * order.length)];
+  return order[(order.indexOf(after) + 1) % order.length];
 }
 
 // ---------- debate ----------
