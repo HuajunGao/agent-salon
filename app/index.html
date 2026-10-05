@@ -2,7 +2,7 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>agent-chat</title>
 <style>
   /* ---------- design tokens ---------- */
@@ -205,7 +205,7 @@
   #input::placeholder { color:var(--ink-3); }
   .composer { container-type:inline-size; }
   .crow { display:flex; align-items:center; gap:var(--s1); }
-  #ats { display:flex; gap:2px; flex-wrap:nowrap; min-width:0; overflow:hidden; }
+  #ats { display:flex; gap:2px; flex-wrap:nowrap; min-width:0; overflow-x:auto; scrollbar-width:none; }
   @container (max-width: 600px) { .hint { display:none; } #send { margin-left:auto; } }
   #ats .chip { height:24px; padding:0 8px; font-size:var(--t-xs); background:transparent; }
   #ats .chip:hover { background:var(--hover); }
@@ -382,10 +382,39 @@
   .settings #s-language { width:80px; }
   .settings select { max-width:150px; }
 
-  @media (max-width: 720px) { #left { position:absolute; z-index:5; height:100%; box-shadow:var(--shadow); } .hint { display:none; } }
+  /* touch screens have no hover: show the actions hover would reveal (on the current discussion), bigger rows */
+  @media (hover: none) {
+    .chat { height:40px; }
+    .chat.on .m { display:none; }
+    .chat.on .acts { display:flex; }
+    .chat .acts span { width:32px; height:32px; }
+    .notelist .nm button { display:inline-grid; }
+    .msg .rp { opacity:.6; }
+  }
+  /* phones: the side panels become drawers over the conversation (tap outside to close), the header takes two rows */
+  #scrim { display:none; }
+  @media (max-width: 720px) {
+    html, body { height:100dvh; }
+    #left, #right { position:fixed; top:0; bottom:0; z-index:20; width:min(320px, 86vw); box-shadow:var(--shadow);
+      padding-top:max(var(--s2), env(safe-area-inset-top)); }
+    #left { left:0; }
+    #right { right:0; }
+    body.nohist #left, body.noroom #right { width:0; box-shadow:none; }
+    body:not(.nohist) #scrim, body:not(.noroom) #scrim { display:block; position:fixed; inset:0; z-index:15; background:rgba(24,28,35,.28); }
+    .bar { flex-wrap:wrap; height:auto; row-gap:2px; padding:max(6px, env(safe-area-inset-top)) var(--s3) 6px; }
+    .bar > * { order:3; }
+    .bar [data-toggle-hist] { order:0; }
+    .bar .title { order:1; flex:1 1 calc(100% - 80px); }
+    .bar [data-toggle-room] { order:2; }
+    .bar [data-new-chat] { display:none !important; }
+    .controls .lbl { display:none; }
+    footer { padding:var(--s4) var(--s3) max(var(--s3), env(safe-area-inset-bottom)); }
+    .hint { display:none; }
+  }
 </style>
 </head>
 <body>
+<div id="scrim" aria-hidden="true"></div>
 <aside id="left">
   <div class="lefttop">
     <button class="icon" data-toggle-hist title="收起讨论列表（Ctrl+Shift+S）" aria-label="收起讨论列表"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
@@ -814,8 +843,8 @@ function renderState() {
   setHTML('#ats', S.members.filter(m => m.enabled).map(m => `<button class="chip" data-at="${m.name}" title="点名 @${m.name}"><span class="dot" style="--c:${color(m.name)}"></span>@${m.name}</button>`).join(''));
   const p = $('#pause');
   setHTML('#pause', S.paused
-    ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l12-7.5Z"/></svg>继续'
-    : '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4" height="15" rx="1.2"/><rect x="14" y="4.5" width="4" height="15" rx="1.2"/></svg>暂停');
+    ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l12-7.5Z"/></svg><span class="lbl">继续</span>'
+    : '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4" height="15" rx="1.2"/><rect x="14" y="4.5" width="4" height="15" rx="1.2"/></svg><span class="lbl">暂停</span>');
   p.classList.toggle('paused', S.paused); p.title = S.paused ? '继续讨论' : '暂停：正在思考的会完成，回复留在队列';
   const info = [];
   if (S.paused) info.push('已暂停');
@@ -867,10 +896,11 @@ document.addEventListener('click', e => {
     if (confirm(`删除「${c?.title}」？消息和决策记录会一起删除，无法恢复。`)) post('/api/chat/delete', { id: +d.del });
     return;
   }
-  if (d.chat) { if (+d.chat !== S.chatId) post('/api/chat/switch', { id: +d.chat }); return; }
+  if (d.chat) { if (+d.chat !== S.chatId) post('/api/chat/switch', { id: +d.chat }); if (phone()) closeDrawers(); return; }
   if (d.hit) {
     const [c, id] = d.hit.split(':').map(Number);
     if (c === S.chatId) flash(id); else { jumpTo = id; post('/api/chat/switch', { id: c }); }
+    if (phone()) closeDrawers();
     return;
   }
   if (d.idea) { const i = $('#input'); i.value = d.idea; i.focus(); grow(); typing(); return; }
@@ -1037,13 +1067,17 @@ function renderMode() {
 $('#mode').onchange = e => post('/api/chat/mode', { id: S.chatId, mode: e.target.value });
 const newChat = () => { post('/api/chat/new'); $('#input').focus(); };
 $('#newChat').onclick = newChat;
-// Both side panels collapse; the choice is remembered, narrow windows start collapsed.
+// Both side panels collapse; the choice is remembered, narrow windows start collapsed. On a phone they are drawers:
+// closed on load, one at a time, and tapping outside closes them.
+const phone = () => matchMedia('(max-width: 720px)').matches;
 const panel = (cls, key, wide) => {
-  const set = show => { document.body.classList.toggle(cls, !show); localStorage[key] = show ? '1' : '0'; };
-  set(localStorage[key] ? localStorage[key] === '1' : innerWidth >= wide);
-  return () => set(document.body.classList.contains(cls));
+  const set = show => { document.body.classList.toggle(cls, !show); if (!phone()) localStorage[key] = show ? '1' : '0'; };
+  set(!phone() && (localStorage[key] ? localStorage[key] === '1' : innerWidth >= wide));
+  return () => { const show = document.body.classList.contains(cls); if (show && phone()) closeDrawers(); set(show); };
 };
+const closeDrawers = () => document.body.classList.add('nohist', 'noroom');
 const toggleHist = panel('nohist', 'hist', 1100), toggleRoom = panel('noroom', 'room', 1000);
+$('#scrim').onclick = closeDrawers;
 document.addEventListener('click', e => {
   if (e.target.closest('[data-toggle-hist]')) toggleHist();
   if (e.target.closest('[data-toggle-room]')) toggleRoom();
@@ -1102,7 +1136,20 @@ function stopSpeaking() {
   if (tts.audio) tts.audio.pause();
   markSpeaking(null); setSpeaking(false);
 }
+// While read-aloud is on, keep the screen awake so a phone can be left playing (Screen Wake Lock: HTTPS or localhost).
+// The browser drops the lock when the tab is hidden; it is taken again when the tab comes back.
+const wake = { lock: null, failedAt: 0 };
+async function keepAwake(on) {
+  if (!navigator.wakeLock) return;
+  if (!on) return void (wake.lock?.release(), wake.lock = null);
+  if (wake.lock || document.visibilityState !== 'visible' || Date.now() - wake.failedAt < 30e3) return;
+  try { wake.lock = await navigator.wakeLock.request('screen'); wake.lock.onrelease = () => (wake.lock = null); }
+  catch { wake.failedAt = Date.now(); }
+}
+document.addEventListener('visibilitychange', () => keepAwake(tts.on));
+
 function renderTts() {
+  keepAwake(tts.on);
   const b = $('#tts');
   b.hidden = !S.speech?.on;
   b.classList.toggle('on', tts.on); b.classList.toggle('blocked', tts.blocked); b.setAttribute('aria-pressed', tts.on);

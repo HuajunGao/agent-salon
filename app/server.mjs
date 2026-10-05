@@ -971,7 +971,8 @@ http.createServer((req, res) => {
     return res.end(readFileSync(join(ROOT, 'app/vendor/marked.umd.js')));
   }
   if (key === 'GET /events') {
-    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+    // x-accel-buffering: behind nginx (the home reverse proxy) events must not wait in its buffer.
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no' });
     clients.add(res); req.on('close', () => clients.delete(res));
     return res.write(`data: ${JSON.stringify(init())}\n\n`);
   }
