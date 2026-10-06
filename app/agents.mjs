@@ -140,10 +140,9 @@ export const AGENTS = {
       // Plain Codex: --ignore-user-config skips ~/.codex/config.toml (plugins, MCP servers, reasoning effort);
       // auth still comes from CODEX_HOME. Model and sandbox are passed every time (resume would not keep them).
       args: ['exec', '--json', '--skip-git-repo-check', '--ignore-user-config', ...(o.model ? ['-m', o.model] : []),
-        // exec mode: Codex's own OS sandbox confines writes to its workspace (verified in the LXC); network for installs.
-        ...(o.exec ? ['-c', 'sandbox_mode=workspace-write', '-c', 'sandbox_workspace_write.network_access=true',
-          ...(o.shared ? ['-c', `sandbox_workspace_write.writable_roots=${JSON.stringify([o.shared])}`] : [])]
-          : ['-c', 'sandbox_mode=read-only']), '-c', 'web_search="live"',
+        // exec mode: no Codex sandbox, the OS-confined agent user is the boundary as for the other CLIs (workspace-write
+        // keeps .git read-only even in writable roots, so Codex couldn't commit to the shared repo).
+        '-c', `sandbox_mode=${o.exec ? 'danger-full-access' : 'read-only'}`, '-c', 'web_search="live"',
         ...(sid ? ['resume', sid] : []), prompt],
     }),
     parse(ev, st) {

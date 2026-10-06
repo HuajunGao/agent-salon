@@ -229,7 +229,7 @@ logged in once (`claude auth login`); the desktop app's own login isn't usable b
   workspace/<member> (agent-owned, read/write/execute); chat.db is mode 600 (root only); the archive and memory are
   readable; /root, /etc/agent-chat.env and the app are out of reach — all verified as agent.
 - "允许执行代码" (setting `exec`, on by default, only effective with AGENT_USER): Claude gets Bash/Edit/Write,
-  Codex `workspace-write` + network (its own OS sandbox, verified: writes outside are "Read-only file system"), agy
+  Codex `danger-full-access` (its workspace-write sandbox kept `.git` read-only, so it could not commit to the shared repo `workspace/_shared`), agy
   drops plan mode for `--dangerously-skip-permissions`, OpenCode uses the build agent with `--auto`. Verified in a
   real discussion: all four wrote and ran benchmarks in their own workspaces and checked each other's numbers.
 - The app has no login: keep it on the LAN (or Tailscale / a reverse proxy with auth), never port-forward it.

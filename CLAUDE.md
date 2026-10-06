@@ -97,6 +97,6 @@ The moderator model is supplied by TYPESAFE_MODEL in the service environment.
 
 `AGENT_USER=agent` (in `/etc/agent-chat.env`, with `TYPESAFE_API_KEY`) makes the root service spawn every CLI as the
 unprivileged `agent` user, each in `workspace/<member>`; `chat.db` is mode 600, the archive and memory are readable.
-Only then does the `exec` setting take effect (Claude Bash/Edit/Write, Codex `workspace-write` + network, agy without
+Only then does the `exec` setting take effect (Claude Bash/Edit/Write, Codex `danger-full-access`, agy without
 plan mode, OpenCode build agent `--auto`). The CLI logins live in `/home/agent` (copied from root by
 `deploy/setup-agent-user.sh`); use `su - agent` to run them by hand. The app has no login: LAN only.
