@@ -1,9 +1,10 @@
 // agent-chat server: SQLite + SSE + scheduler + reading-pace publish queue. No npm dependencies.
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, chmodSync, chownSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync, chmodSync, chownSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { AGENTS, runTurn, listModels, runAs } from './agents.mjs';
 import { judge, novelty, classifyMode, stanceShift } from './moderator.mjs';
@@ -24,6 +25,14 @@ mkdirSync(UPLOADS, { recursive: true });
 // the database stays root-only, the archive and memory are readable. Without it (e.g. Windows) all share workspace/.
 const RUNAS = process.env.AGENT_USER ? runAs(process.env.AGENT_USER) : null;
 const wsOf = a => join(WORK, a);
+// The members' common project directory (a git repo; handles start with a letter, so no member owns "_shared").
+// Its public/ is served at /w/, so what they build can be opened in the browser.
+const SHARED = join(WORK, '_shared'), PUBLIC = join(SHARED, 'public');
+mkdirSync(PUBLIC, { recursive: true });
+if (RUNAS) {
+  for (const d of [SHARED, PUBLIC]) chownSync(d, RUNAS.uid, RUNAS.gid);
+  if (!existsSync(join(SHARED, '.git'))) spawnSync('git', ['init', '-q'], { cwd: SHARED, uid: RUNAS.uid, gid: RUNAS.gid });
+}
 const PORT = +process.env.PORT || 3517, HOST = process.env.HOST || '127.0.0.1'; // HOST=0.0.0.0 to serve the LAN
 const NAMES = [];
 
@@ -508,7 +517,11 @@ const execOn = () => !!RUNAS && S.exec;
 const toolRule = a => (execOn()
   ? `You have your own workspace, ${wsOf(a)} (your current directory): you may create files and run code there to check a
   claim, e.g. a small script, a quick benchmark, or installing a package locally. Keep it quick: a turn should finish within
-  a couple of minutes. Stay inside your workspace; the discussion files are read-only for you.`
+  a couple of minutes. Stay inside your workspace; the discussion files are read-only for you.
+  Projects the members build together (when the user asks for one) go in the shared git repo ${SHARED}: run
+  \`git log\` first to see what others did, and commit what you change with
+  \`git -c user.name=${a} -c user.email=${a}@agent-chat commit\`. Files in ${PUBLIC} are served at /w/ (e.g.
+  ${PUBLIC}/arena/index.html → /w/arena/index.html), so pages you put there can be opened by the user; link them as /w/....`
   : `The discussion is read-only: don't create, edit or delete files. ${SHELL_RULE[memberConfigs[a].harness] || SHELL_RULE.default}`);
 const SHELL_RULE = {
   codex: 'Your sandbox is read-only: read-only shell commands (cat, rg, ls) are fine for reading files.',
@@ -542,7 +555,7 @@ const STANCE_RULE = `\nEnd your message with one line: [STANCE n%] verdict: your
   + `option you pick (e.g. 选 Go). Keep your position unless an argument or fact actually convinces you; when it `
   + `changes, say what convinced you (#N).`;
 function turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, role }) {
-  const tools = execOn() ? `You may run code in your workspace ${wsOf(a)} to check claims; keep it quick.`
+  const tools = execOn() ? `You may run code in your workspace ${wsOf(a)} to check claims, or work in the shared repo ${SHARED}; keep it quick.`
     : memberConfigs[a].harness === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.';
   const roster = `\nCurrent participating members (${enabledOrder().length}): ${enabledOrder().map(describe).join(', ')}. `
     + 'This roster overrides earlier rosters. Use these exact @handles when addressing them.';
@@ -594,7 +607,7 @@ async function startTurn(a, retried = false) {
   const model = S.models[a];
   rt[a].abort = new AbortController();
   const res = await runTurn(memberConfigs[a].harness, prompt, s.cli_session_id, {
-    cwd: wsOf(a), dataDir: DATA, model, exec: execOn(), member: memberConfigs[a] && { ...memberConfigs[a], model },
+    cwd: wsOf(a), dataDir: DATA, shared: SHARED, model, exec: execOn(), member: memberConfigs[a] && { ...memberConfigs[a], model },
     onLive: log => { rt[a].live = log; sendStateSoon(); }, signal: rt[a].abort.signal,
   });
   rt[a].abort = null;
@@ -1101,6 +1114,18 @@ http.createServer((req, res) => {
   }
   // Attachments are served back with a sandbox policy (an uploaded HTML or SVG can't run in the app's origin);
   // only images, PDFs and plain text open in the browser, anything else downloads.
+  // /w/...: the members' shared public/ folder. Their pages run sandboxed (an opaque origin, so not as the app);
+  // CORS lets such a page fetch its own data files.
+  if (req.method === 'GET' && url.pathname.startsWith('/w/')) {
+    let p = resolve(PUBLIC, '.' + decodeURIComponent(url.pathname.slice(2)));
+    if (existsSync(p) && statSync(p).isDirectory()) p = join(p, 'index.html');
+    if (!p.startsWith(PUBLIC + sep) || !existsSync(p)) { res.writeHead(404); return res.end(); }
+    const type = { html: 'text/html', js: 'text/javascript', mjs: 'text/javascript', css: 'text/css', json: 'application/json',
+      svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', txt: 'text/plain', md: 'text/plain' }[p.split('.').pop().toLowerCase()];
+    res.writeHead(200, { 'content-type': type ? `${type}; charset=utf-8` : 'application/octet-stream', 'cache-control': 'no-store',
+      'content-security-policy': 'sandbox allow-scripts', 'access-control-allow-origin': '*', 'x-content-type-options': 'nosniff' });
+    return res.end(readFileSync(p));
+  }
   const fm = req.method === 'GET' && url.pathname.match(/^\/files\/(\d+)\/([^/]+)$/);
   if (fm) {
     const name = decodeURIComponent(fm[2]), p = join(UPLOADS, fm[1], name);

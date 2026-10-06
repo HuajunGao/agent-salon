@@ -118,7 +118,7 @@ export const AGENTS = {
       args: ['-p', prompt, '--output-format', 'stream-json', '--verbose',
         '--setting-sources', 'project', '--disable-slash-commands', '--strict-mcp-config',
         '--settings', glm ? glmSettingsFile() : '{"disableAllHooks":true}', '--add-dir', o.dataDir,
-        ...(model ? ['--model', model] : []),
+        ...(o.exec && o.shared ? ['--add-dir', o.shared] : []), ...(model ? ['--model', model] : []),
         // --tools limits what exists; --allowedTools pre-approves it (-p can't ask, so web tools were refused).
         // exec mode (only when the OS confines the agent user) adds editing and Bash.
         '--tools', ...CLAUDE_TOOLS(o.exec), '--allowedTools', ...CLAUDE_TOOLS(o.exec),
@@ -141,7 +141,8 @@ export const AGENTS = {
       // auth still comes from CODEX_HOME. Model and sandbox are passed every time (resume would not keep them).
       args: ['exec', '--json', '--skip-git-repo-check', '--ignore-user-config', ...(o.model ? ['-m', o.model] : []),
         // exec mode: Codex's own OS sandbox confines writes to its workspace (verified in the LXC); network for installs.
-        ...(o.exec ? ['-c', 'sandbox_mode=workspace-write', '-c', 'sandbox_workspace_write.network_access=true']
+        ...(o.exec ? ['-c', 'sandbox_mode=workspace-write', '-c', 'sandbox_workspace_write.network_access=true',
+          ...(o.shared ? ['-c', `sandbox_workspace_write.writable_roots=${JSON.stringify([o.shared])}`] : [])]
           : ['-c', 'sandbox_mode=read-only']), '-c', 'web_search="live"',
         ...(sid ? ['resume', sid] : []), prompt],
     }),
@@ -237,7 +238,7 @@ AGENTS.hermes = {
 
 // Run one turn. onLive(text) receives a readable live log; aborting `signal` ends it (error 'stopped').
 // Resolves {text, sid, error, ms}.
-export function runTurn(agent, prompt, sid, { cwd, dataDir, model, exec, member, onLive, signal }) {
+export function runTurn(agent, prompt, sid, { cwd, dataDir, shared, model, exec, member, onLive, signal }) {
   const a = AGENTS[agent];
   const t0 = Date.now();
   if (a.http) {
@@ -245,7 +246,7 @@ export function runTurn(agent, prompt, sid, { cwd, dataDir, model, exec, member,
     return a.http(prompt, sid, { model, signal }).catch(e => ({ sid, error: signal?.aborted ? 'stopped' : `${agent}: ${e.message}` }))
       .then(r => ({ text: (r.text || '').trim(), sid: r.sid ?? sid, error: r.error || (r.text?.trim() ? '' : 'no reply'), ms: Date.now() - t0 }));
   }
-  const { bin, args, env, keep } = a.cmd(prompt, sid, { dataDir, model, exec, member });
+  const { bin, args, env, keep } = a.cmd(prompt, sid, { dataDir, shared, model, exec, member });
   let log = '';
   const st = {
     sid, text: '', error: '', parts: [],

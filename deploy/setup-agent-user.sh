@@ -22,6 +22,9 @@ done
 chown -R "$U:$U" "$HOMEU"
 chmod 750 "$HOMEU"
 
+# git: the shared project repo (workspace/_shared).
+command -v git >/dev/null || apt-get install -y git
+
 # The server (root) creates and chowns workspace/<member> at start; the database is made root-only there too.
 mkdir -p /opt/agent-chat/workspace
 touch /etc/agent-chat.env && chmod 600 /etc/agent-chat.env
