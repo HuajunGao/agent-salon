@@ -10,7 +10,7 @@ import { AGENTS, runTurn, listModels, runAs } from './agents.mjs';
 import { judge, novelty, classifyMode, stanceShift } from './moderator.mjs';
 import { MODES, rulesOf, relayNext, debateSetup, debateScript, debateBrief, seatOf, PHASES, parseReply, applyNotes } from './modes.mjs';
 import { curate } from './memory.mjs';
-import { validateMember, memberMentions } from './members.mjs';
+import { validateMember, memberMentions, atToken } from './members.mjs';
 import { speechOn, loadCatalog, ttsModels, speakable, synth, transcribe, defaultVoice, FALLBACK_TTS } from './speech.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -159,10 +159,11 @@ function insertMsg(m) {
   return msg;
 }
 
-const who = s => (s === 'user' ? '用户 (user)' : `@${s}`);
 const defaultAlias = a => a;
 const aliasOf = a => memberConfigs[a].label || defaultAlias(a);
-const describe = a => `@${a} (${aliasOf(a)}, ${memberConfigs[a].harness} running ${modelOf(a)})`;
+const atOf = a => atToken(a, memberConfigs[a].label);
+const who = s => (s === 'user' ? '用户 (user)' : memberConfigs[s] ? `@${atOf(s)}` : `@${s}`);
+const describe = a => `@${atOf(a)} (${aliasOf(a)}, ${memberConfigs[a].harness} running ${modelOf(a)})`;
 // Members (and Jev) see each other's stated stance and confidence, as in ReConcile's round table.
 const withStance = m => { const st = m.stance && JSON.parse(m.stance);
   return st ? `${m.text}\n[STANCE ${st.c}%] ${st.t}` : m.text; };
@@ -252,7 +253,12 @@ async function classifyChat(c, msg) {
   pump();
 }
 
-const mentions = text => memberMentions(text, NAMES);
+const mentions = text => memberMentions(text, NAMES, Object.fromEntries(NAMES.map(n => [n, memberConfigs[n].label])));
+// An alias that would be @-called must not be another member's handle or @-name.
+function checkAlias(name, label) {
+  for (const at of new Set([name, atToken(name, label).toLowerCase()]))
+    if (NAMES.some(n => n !== name && (n === at || atOf(n).toLowerCase() === at))) throw new Error(`@${at} 已被其他成员使用`);
+}
 
 // Research mode: the discussion's opening question is answered independently: until the first reply is published,
 // everyone woken starts at once, so nobody answers after reading another's answer. Most of what multi-agent debate
@@ -298,7 +304,7 @@ function debateOnUser(m) {
     }
     const nd = { ...debateSetup(names), motion: m.id };
     st.debate = { ...nd, script: debateScript(nd) }; saveState(chatId, st);
-    const who = n => (n === 'user' ? '你' : `@${n}`);
+    const who = n => (n === 'user' ? '你' : `@${atOf(n)}`);
     logDecision('debate', null, { message_id: m.id, detail: { pro: nd.pro, con: nd.con, judge: nd.judge } });
     note(`🧭 辩论开始，辩题是 #${m.id}。抽签结果：正方 ${nd.pro.map(who).join('、')}；反方 ${nd.con.map(who).join('、')}；`
       + `评委 ${who(nd.judge)}。顺序：开篇立论、驳论、自由辩、结辩，最后由评委评判，之后自由讨论。你随时可以插话。`);
@@ -424,7 +430,7 @@ function pump() {
         if (jev.blindAt !== lastUserId(chatId)) { jev.blindAt = lastUserId(chatId); note('🧭 研究模式：先请大家各自独立作答（互相看不到），答完再互相讨论。'); }
       }
       logDecision('start', c.a, { score: c.s, detail: { ...c, blind, candidates: cands.map(x => [x.a, +x.s.toFixed(2)]) } });
-      if (c.why === 'Jev') note(`🧭 请 @${c.a} 发言（新意 ${Math.round(c.nov * 100)}%）`);
+      if (c.why === 'Jev') note(`🧭 请 @${atOf(c.a)} 发言（新意 ${Math.round(c.nov * 100)}%）`);
       startTurn(c.a);
     }
   }
@@ -566,7 +572,7 @@ function turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, r
   if (r.flow === 'relay') ask = `\n\n(Your turn in the relay. Reply in ${S.language}. ${tools})\n${r.prompt}`;
   else if (r.flow === 'debate' && d && !d.skipped && seatOf(d, a)) {
     const motion = q1('SELECT text FROM messages WHERE id=?', d.motion)?.text || '';
-    ask = `\n\n${debateBrief(d, a, phase || d.script[d.at]?.phase || 'free', motion, x => `@${x}`)}\n(Reply in ${S.language}. ${tools})`;
+    ask = `\n\n${debateBrief(d, a, phase || d.script[d.at]?.phase || 'free', motion, x => `@${atOf(x)}`)}\n(Reply in ${S.language}. ${tools})`;
   } else {
     ask = `\n\n(Your turn ${k} of at most ${S.turnCap} since the user's last message; ${n} new message(s).`
       + (k >= S.turnCap && !floor ? ' This is your last turn here: PASS unless something essential is missing.)' : ')');
@@ -786,7 +792,7 @@ async function checkConvergence() {
     rt[devil].hand = { r: 100, since: Date.now(), why: 'devil' };
     logDecision('devil', devil, { score: j.debatable, message_id: mod.msgId, detail: j });
     note(`🧭 大家很快就达成了一致（收敛度 ${pc(j.convergence)}，几乎没人反对），但这是见仁见智的问题。`
-      + `收尾前请 @${devil} 唱反调：站到对立面，给出最有力的反驳。`);
+      + `收尾前请 @${atOf(devil)} 唱反调：站到对立面，给出最有力的反驳。`);
     return pump();
   }
   wrapRound = round;
@@ -798,7 +804,7 @@ async function checkConvergence() {
   rt[writer].hand = { r: 100, since: Date.now(), why: 'summary' };
   logDecision('converged', writer, { score: j.convergence, message_id: mod.msgId, detail: j });
   note(`🧭 观点已收敛（收敛度 ${Math.round(j.convergence * 100)}%，重复度 ${j.stalling.toFixed(2)}）。`
-    + `请 @${writer} 总结，本轮到此结束；发新消息可继续讨论。`);
+    + `请 @${atOf(writer)} 总结，本轮到此结束；发新消息可继续讨论。`);
   pump();
 }
 
@@ -833,7 +839,7 @@ function state() {
     jev: { on: jevOn(), assessing: jev.assessing, judging: jev.judging, ms: jev.ms, down: S.scheduler === 'jev' && !jevOn() },
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
     members: memberOrder().map(n => ({
-      name: n, label: aliasOf(n), alias: memberConfigs[n].label || '', defaultAlias: defaultAlias(n), color: memberConfigs[n].color, ...rt[n], enabled: S.enabled[n], model: S.models[n],
+      name: n, label: aliasOf(n), at: atOf(n), alias: memberConfigs[n].label || '', defaultAlias: defaultAlias(n), color: memberConfigs[n].color, ...rt[n], enabled: S.enabled[n], model: S.models[n],
       configurable: memberConfigs[n].harness === 'opencode', harness: memberConfigs[n].harness,
       harnessLabel: AGENTS[memberConfigs[n].harness].label,
       config: { baseURL: memberConfigs[n].baseURL || '',
@@ -877,7 +883,9 @@ const routes = {
   },
   'POST /api/member/alias'({ name, label }) {
     if (!NAMES.includes(name)) throw new Error('成员不存在');
-    memberConfigs[name].label = String(label || '').trim().slice(0, 60);
+    label = String(label || '').trim().slice(0, 60);
+    checkAlias(name, label);
+    memberConfigs[name].label = label;
     run('UPDATE members SET config=? WHERE name=?', JSON.stringify(memberConfigs[name]), name);
     logDecision('member-alias', name); send(init());
   },
@@ -887,6 +895,7 @@ const routes = {
     if (memberConfigs[name] && memberConfigs[name].harness !== 'opencode') throw new Error('该标识已由其他运行工具的成员使用');
     if (rt[name]?.status === 'thinking' || ready.some(r => r.agent === name)) throw new Error('请等该成员完成本轮并发布后再修改配置');
     const m = validateMember(body, memberConfigs[name]);
+    checkAlias(name, m.label);
     run('INSERT OR REPLACE INTO members VALUES(?,?)', name, JSON.stringify(m));
     memberConfigs[name] = m;
     if (!NAMES.includes(name)) {

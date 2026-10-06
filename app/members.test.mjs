@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { memberMentions, providerConfig, validateMember } from './members.mjs';
+import { memberMentions, providerConfig, validateMember, atToken } from './members.mjs';
 import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +13,12 @@ test('mentions follow configured identities, never assume a harness or model nam
   assert.deepEqual(memberMentions('@GPT @glm @gpt @opencode @unknown @gpt_extra', ['gpt', 'glm']), ['gpt', 'glm']);
   assert.deepEqual(memberMentions('@opencode @researcher', ['opencode', 'researcher']), ['opencode', 'researcher']);
   assert.deepEqual(memberMentions('@glm', []), []);
+  // aliases count too, in text order; an alias is matched whole (CJK text may follow it)
+  assert.deepEqual(memberMentions('@小智你看 @GPT6 和 @claude', ['claude', 'codex', 'agy'], { codex: 'gpt6', agy: '小智' }), ['agy', 'codex', 'claude']);
+  assert.deepEqual(memberMentions('@gpt6x @gpt6-1', ['codex'], { codex: 'gpt6' }), []);
+  assert.equal(atToken('codex', 'gpt'), 'gpt');
+  assert.equal(atToken('codex', 'GPT 6'), 'codex');
+  assert.equal(atToken('codex', ''), 'codex');
 });
 test('member validation preserves, replaces and clears credentials', () => {
   const body = { name: 'gpt', model: 'openai/example', baseURL: 'https://example.com/v1' };
@@ -78,7 +84,7 @@ test('HTTP member lifecycle persists, keeps credentials private and routes @hand
     await post('/api/settings', { memory: false, autoStop: false, devil: false, circlePause: false });
     const body = { name: 'gpt', label: 'GPT', model: 'openai/test', apiKey: 'secret-test-key', baseURL: 'https://example.com/v1' };
     assert.equal((await post('/api/member/save', body)).status, 200);
-    assert.equal((await post('/api/member/save', { ...body, name: 'reviewer', model: 'proxy/other' })).status, 200);
+    assert.equal((await post('/api/member/save', { ...body, name: 'reviewer', label: 'Reviewer', model: 'proxy/other' })).status, 200);
     let s = await state();
     assert.equal(s.state.members.find(m => m.name === 'gpt').config.hasKey, true);
     assert.ok(!JSON.stringify(s).includes(body.apiKey));
@@ -98,7 +104,7 @@ test('HTTP member lifecycle persists, keeps credentials private and routes @hand
     assert.equal(turn.h, 'opencode');
     assert.equal(turn.model, 'openai/test');
     assert.ok(turn.p.includes('Current participating members (6):'));
-    assert.ok(turn.p.includes('@reviewer'));
+    assert.ok(turn.p.includes('@Reviewer'));
     assert.ok(!turn.p.includes('glm-5.3'));
     assert.equal((await post('/api/member/alias', { name: 'gpt', label: '小智' })).status, 200);
     s = await state();
@@ -108,6 +114,9 @@ test('HTTP member lifecycle persists, keeps credentials private and routes @hand
     assert.equal((await state()).state.members.find(m => m.name === 'gpt').label, 'gpt');
     assert.equal((await post('/api/member/alias', { name: 'claude', label: '审稿人' })).status, 200);
     assert.equal((await state()).state.members.find(m => m.name === 'claude').label, '审稿人');
+    assert.equal((await state()).state.members.find(m => m.name === 'claude').at, '审稿人');
+    assert.equal((await post('/api/member/alias', { name: 'gpt', label: '审稿人' })).status, 500); // claude's @-name
+    assert.equal((await post('/api/member/alias', { name: 'gpt', label: 'Claude' })).status, 500); // claude's handle
     await post('/api/pause', { paused: true });
     assert.equal((await post('/api/member/save', { ...body, apiKey: '', label: 'GPT edited' })).status, 200);
     assert.equal((await state()).state.members.find(m => m.name === 'gpt').sid, null);

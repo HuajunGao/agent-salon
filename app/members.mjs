@@ -35,7 +35,13 @@ export function providerConfig(member, v2) {
   } } };
 }
 
-export function memberMentions(text, names) {
-  return [...new Set([...text.matchAll(/@([a-z][a-z0-9_]*)\b/gi)]
-    .map(m => m[1].toLowerCase()).filter(n => names.includes(n)))];
+// What members are @-called by: the alias when it is one token, else the handle.
+export const atToken = (name, alias) => (alias && !/[\s@]/.test(alias) ? alias : name);
+
+// Members @-mentioned by handle or alias (case-insensitive), in the order they first appear.
+export function memberMentions(text, names, aliases = {}) {
+  const t = text.toLowerCase();
+  const pos = s => (s ? t.search(new RegExp(`@${s.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`)) : -1);
+  return names.map(n => [n, Math.min(...[pos(n), pos(aliases[n])].map(i => (i < 0 ? Infinity : i)))])
+    .filter(([, i]) => i < Infinity).sort((a, b) => a[1] - b[1]).map(([n]) => n);
 }

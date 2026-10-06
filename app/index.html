@@ -535,7 +535,7 @@
     <div class="dialog-head"><div><h2 id="member-title">邀请新成员</h2><p id="member-subtitle">给它一个名字，让新的视角加入讨论。</p></div><button type="button" class="icon" id="member-close" aria-label="关闭">✕</button></div>
     <div class="dialog-body">
       <div class="form-grid">
-        <label class="field">别名<input name="label" maxlength="60" placeholder="使用默认别名"><small id="alias-help">聊天中显示的名字，留空使用默认。</small></label>
+        <label class="field">别名<input name="label" maxlength="60" placeholder="使用默认别名"><small id="alias-help">聊天中显示和 @ 用的名字（含空格时 @ 仍用标识），留空使用默认。</small></label>
         <label class="field" data-connection>@ 标识<input name="name" required pattern="[a-z][a-z0-9_]{0,31}" placeholder="例如 gpt"><small>用 @ 标识点名，创建后保持不变。</small></label>
       </div>
       <div class="form-section" data-connection>
@@ -885,7 +885,7 @@ function renderMembers() {
     const open = !orderingMembers && openMem.has(m.name);
     return `<div class="mem ${m.enabled ? '' : 'off'} ${open ? 'open' : ''}">
       <div class="mrow" ${orderingMembers ? '' : `data-expand="${m.name}"`} title="${esc(orderingMembers ? '调整成员显示顺序' : m.hand ? `举手原因：${m.hand.why}${m.score != null ? `，得分 ${m.score}` : ''}` : '点击查看模型、会话和实时输出')}">
-        ${av(m.name)}<div class="midentity"><div class="mheadline"><button class="mname" data-member-alias="${m.name}" title="编辑别名 · @${esc(m.name)}">${esc(m.label)}</button><span class="mst ${cls}">${st}</span></div><span class="mmeta" title="${esc(m.harnessLabel || m.harness)} · ${esc(m.model || 'CLI 默认模型')}">${esc(m.harnessLabel || m.harness)} · ${esc(m.model || 'CLI 默认模型')}</span></div>
+        ${av(m.name)}<div class="midentity"><div class="mheadline"><button class="mname" data-member-alias="${m.name}" title="编辑别名 · @${esc(m.at)}">${esc(m.label)}</button><span class="mst ${cls}">${st}</span></div><span class="mmeta" title="${esc(m.harnessLabel || m.harness)} · ${esc(m.model || 'CLI 默认模型')}">${esc(m.harnessLabel || m.harness)} · ${esc(m.model || 'CLI 默认模型')}</span></div>
         <span class="mright">${right}</span>
         ${orderingMembers ? `<span class="member-move"><button data-move-member="${m.name}" data-step="-1" aria-label="上移 ${esc(m.label)}" ${i === 0 || savingMemberOrder ? 'disabled' : ''}>↑</button><button data-move-member="${m.name}" data-step="1" aria-label="下移 ${esc(m.label)}" ${i === S.members.length - 1 || savingMemberOrder ? 'disabled' : ''}>↓</button></span>` : ''}
       </div>
@@ -921,7 +921,7 @@ function renderState() {
   });
   // thinking timers tick without re-rendering the rows (keeps dropdowns and hover stable)
   document.querySelectorAll('[data-since]').forEach(s => (s.textContent = fmtSecs(now - +s.dataset.since)));
-  setHTML('#ats', S.members.filter(m => m.enabled).map(m => `<button class="chip" data-at="${m.name}" title="点名 @${m.name}"><span class="dot" style="--c:${color(m.name)}"></span>@${m.name}</button>`).join(''));
+  setHTML('#ats', S.members.filter(m => m.enabled).map(m => `<button class="chip" data-at="${esc(m.at)}" title="点名 @${esc(m.at)}"><span class="dot" style="--c:${color(m.name)}"></span>@${esc(m.at)}</button>`).join(''));
   const p = $('#pause');
   setHTML('#pause', S.paused
     ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l12-7.5Z"/></svg><span class="lbl">继续</span>'
@@ -1056,7 +1056,7 @@ function editMember(name, onlyAlias = false) {
   for (const key of ['name', 'label', 'model', 'color']) memberForm.elements[key].value = m?.[key] || (key === 'color' ? '#7c5cff' : '');
   memberForm.elements.label.value = m?.alias || '';
   memberForm.elements.label.placeholder = m?.defaultAlias || '默认使用 @ 标识';
-  $('#alias-help').textContent = m ? `默认：${m.defaultAlias}，留空恢复默认。` : '聊天中显示的名字，留空使用 @ 标识。';
+  $('#alias-help').textContent = m ? `默认：${m.defaultAlias}，留空恢复默认。不含空格时也用来 @。` : '聊天中显示和 @ 用的名字，留空使用标识。';
   memberForm.querySelectorAll('[data-connection]').forEach(el => { el.hidden = onlyAlias; });
   populateMemberModels(m?.model || '');
   syncMemberModel();
