@@ -68,8 +68,9 @@ Every reply ends with `[STANCE n%] position`: `parseReply` moves it into `messag
 (`withStance`), the UI shows a stance table, and Jev (`stanceShift`) judges whether a change was backed by a new argument.
 Moderator notes are `kind='moderator'` messages: shown in the UI,
 never sent to agents or Jev (`TALK` filter).
-Reply markers ([HAND], [NOTE], [STANCE], [JOB]) count anywhere in a reply except inside backticks: agents put them
-mid-line, several on one line, or before appended text (Claude's "Sources:"). Line-anchored parsing leaked them into the chat.
+Reply markers [HAND], [NOTE], [STANCE] count anywhere in a reply except inside backticks: agents put them mid-line,
+several on one line, or before appended text (Claude's "Sources:"); line-anchored parsing leaked them into the chat.
+[JOB] runs a command, so it only counts at the start of its own line (mid-sentence mentions were run as shell commands).
 
 Shared work (exec mode only): `WORK/_shared` is the members' git repo, its `public/` served at `/w/`; after every turn
 and job the server commits what changed there as that member (`commitShared`, files over 500 KB skipped). A turn's

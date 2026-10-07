@@ -116,9 +116,10 @@ export function debateBrief(d, name, phase, motion, handle) {
 // Agents don't keep to the layout: markers come mid-line ("…对上。[STANCE 94%] …"), several on one line
 // ("[HAND] [STANCE 70%] …"), or with more text after them (Claude appends "Sources:" after [HAND]). So a marker counts
 // anywhere except right after a backtick (`[HAND]` in code is talk about the protocol), and NOTE / STANCE / JOB take the
-// rest of their line.
+// rest of their line. Except [JOB], which runs a command: only at the start of its own line, since members talk about
+// "[JOB]" mid-sentence and the rest of such a sentence was run as a shell command.
 const HAND = /(?<!`)[*_]*\[HAND\][*_]*/gi;
-const JOB = /(?<!`)[*_]*\[JOB\][*_]*[ \t]*(.*)$/gim;
+const JOB = /^[ \t>*_-]*\[JOB\][*_]*[ \t]*(.*)$/gim;
 const STANCE = /(?<!`)[*_]*\[(?:STANCE|立场)\s*[:：]?\s*(\d{1,3})\s*%?\][ \t*_:：]*(.*)$/gim;
 const NOTE = /(?<!`)[*_]*\[NOTE\s+(add|edit|drop)(?:\s+N?(\d+))?\][ \t*_:：]*(.*)$/gim;
 export function parseReply(raw) {

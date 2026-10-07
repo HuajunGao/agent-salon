@@ -37,6 +37,12 @@ test('parseReply finds markers mid-line, several on a line, and before more text
   assert.equal(parseReply('PASS [HAND]').text, 'PASS');
   assert.deepEqual(parseReply('开跑。\n[JOB] `cd /x && python run.py --resume` [HAND]\n[STANCE 90%] 好').jobs, ['cd /x && python run.py --resume']);
   assert.equal(parseReply('[JOB] a\n[JOB] b\n[JOB] c').jobs.length, 2);
+  // [JOB] runs a command: mentioned mid-sentence (as members did on the server) it is text, not a job
+  const talk = parseReply('机制第一次真跑就失败了。用 [JOB] 全链路：只写一个文件就退出。\n[NOTE add] [JOB]机制首个探针结果为failed');
+  assert.deepEqual(talk.jobs, []);
+  assert.ok(talk.text.includes('[JOB] 全链路'));
+  assert.deepEqual(talk.notes, [{ op: 'add', text: '[JOB]机制首个探针结果为failed' }]);
+  assert.deepEqual(parseReply('好。\n- **[JOB]** `python run.py`').jobs, ['python run.py']);
 });
 
 // Real server + SQLite with a fake harness that records when each turn starts; no Jev key.
