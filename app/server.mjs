@@ -150,7 +150,7 @@ for (const a of NAMES) {
   if (RUNAS) chownSync(wsOf(a), RUNAS.uid, RUNAS.gid);
 }
 
-const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true, memory: true, exec: true, blind: true,
+const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true, memory: true, exec: true, blind: true, outsider: true,
   enabled: Object.fromEntries(NAMES.map(n => [n, true])), models: Object.fromEntries(NAMES.map(n => [n, memberConfigs[n].model])) };
 let S = { ...DEFAULTS, ...JSON.parse(q1(`SELECT value FROM settings WHERE key='s'`)?.value || '{}') };
 S.models = { ...DEFAULTS.models, ...S.models };
@@ -201,7 +201,7 @@ const withStance = m => { const st = m.stance && JSON.parse(m.stance);
   return st ? `${m.text}\n[STANCE ${st.c}%] ${st.t}` : m.text; };
 const attached = m => { const fs = m.files && JSON.parse(m.files);
   return fs?.length ? `\n(Attached: ${fs.map(f => `${join(UPLOADS, f.file)} (${f.name}, ${f.type || 'file'}, ${Math.ceil(f.size / 1024)} KB)`).join('; ')})` : ''; };
-const fmt = m => `#${m.id} ${who(m.sender)}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${withStance(m)}${attached(m)}`;
+const fmt = m => `#${m.id} ${who(m.sender)}${m.role === 'outsider' ? ' (outsider: a fresh session of this model that thought it through before reading the discussion)' : ''}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${withStance(m)}${attached(m)}`;
 const archiveFile = c => join(ARCHIVE, `${c}.md`);
 function writeTranscript(c) {
   const chat = q1('SELECT title, created_at FROM chats WHERE id=?', c);
@@ -244,6 +244,8 @@ const jev = { assessing: false, again: false, judging: false, ms: null, downAt: 
 
 // Only user and agent messages are the discussion; system/moderator notes are for the UI.
 const TALK = `kind IN ('user','agent')`;
+// What a member's chat session hasn't written itself: others' messages, and an outsider report sent under its name.
+const UNSEEN = `(sender<>? OR coalesce(role,'')='outsider')`;
 const lastTalkId = () => q1(`SELECT coalesce(max(id),0) m FROM messages WHERE chat_id=? AND ${TALK}`, chatId).m;
 const note = text => insertMsg({ chat_id: chatId, sender: 'moderator', kind: 'moderator', text });
 // A note about what comes next ("进入自由辩") waits until the replies already written are published, so it lands
@@ -311,6 +313,9 @@ function wake(m) {
   if (flow === 'debate') return debateOnUser(m);
   const at = mentions(m.text);
   const target = m.reply_to && q1('SELECT sender FROM messages WHERE id=?', m.reply_to)?.sender;
+  // Hands left from the previous round (an @ by a member) would keep their old reason and count as follow-ups that
+  // Jev may filter out, not as answers to the user. The user's floor stays.
+  for (const n of NAMES) if (rt[n].hand?.r < 100) rt[n].hand = null;
   if (at.length) for (const n of at) raise(n, 10, '@ by user');
   else for (const n of NAMES) raise(n, n === target ? 3 : 1, n === target ? `reply to #${m.reply_to}` : 'user message');
 }
@@ -417,7 +422,7 @@ function score(a) {
     freshness: +freshness.toFixed(2), cooldown, sinceUser };
 }
 const turnsSinceUser = a => q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=? AND id>?', chatId, a, lastUserId(chatId)).n;
-const hasUnseen = a => !!q1(`SELECT 1 FROM messages WHERE chat_id=? AND id>? AND sender<>? AND ${TALK} LIMIT 1`, chatId, sess(chatId, a).last_seen_id, a);
+const hasUnseen = a => !!q1(`SELECT 1 FROM messages WHERE chat_id=? AND id>? AND ${UNSEEN} AND ${TALK} LIMIT 1`, chatId, sess(chatId, a).last_seen_id, a);
 const inQueue = a => ready.some(r => r.chat === chatId && r.agent === a);
 
 function eligible(a) {
@@ -429,7 +434,8 @@ function eligible(a) {
   if (rules(chatId).flow !== 'free' && busy()) return false;
   // Floor from the user, a debate slot, and the round after a debate (whatever was said during it) aren't capped.
   // Neither is a member woken by its finished background job (it must hear the result, whatever the turn count).
-  if (h.r >= 100 || h.slot != null || h.why === 'after the debate' || h.why === 'job') return true;
+  // An outsider's report gets one answer from everyone too.
+  if (h.r >= 100 || h.slot != null || h.why === 'after the debate' || h.why === 'job' || h.why === 'outsider') return true;
   return turnsSinceUser(a) < S.turnCap && hasUnseen(a);
 }
 
@@ -445,7 +451,7 @@ function pump() {
       if (!blind && inflight() >= S.maxThinkers) break;
       // jev mode: follow-up hands wait for a fresh novelty judgment; the user's own wake-ups don't, and neither does
       // everyone's one turn after a debate (each says what they actually think, or passes).
-      const opening = c.why === 'user message' || c.why === 'after the debate' || c.why === 'job';
+      const opening = c.why === 'user message' || c.why === 'after the debate' || c.why === 'job' || c.why === 'outsider';
       const followUp = free && c.r < 10 && !opening;
       if (jevOn() && followUp && !novFresh(c.a)) {
         // a hand Jev won't judge (e.g. a member at the turn cap) is dropped, or it would ask Jev again every second
@@ -648,7 +654,7 @@ async function startTurn(a, retried = false) {
   Object.assign(rt[a], { status: 'thinking', started: Date.now(), live: '', hand: null, note: '', error: '', role });
   let msgs, prompt;
   if (s.cli_session_id) {
-    msgs = q(`SELECT * FROM messages WHERE chat_id=? AND id>? AND sender<>? AND ${TALK} ORDER BY id`, chat, s.last_seen_id, a);
+    msgs = q(`SELECT * FROM messages WHERE chat_id=? AND id>? AND ${UNSEEN} AND ${TALK} ORDER BY id`, chat, s.last_seen_id, a);
     prompt = `New messages since your last turn:\n\n`;
   } else {
     // New (or lost) session: seed with the recent history, trimmed to stay under the Windows command-line limit.
@@ -656,7 +662,7 @@ async function startTurn(a, retried = false) {
     while (msgs.map(fmt).join('').length > 16000) msgs.shift();
     prompt = intro(a, chat) + `Conversation so far:\n\n`;
   }
-  prompt += msgs.map(m => (m.sender === a ? `#${m.id} (you): ${m.text}` : fmt(m))).join('\n\n') || '(no new messages)';
+  prompt += msgs.map(m => (m.sender === a && m.role !== 'outsider' ? `#${m.id} (you): ${m.text}` : fmt(m))).join('\n\n') || '(no new messages)';
   const k = turnsSinceUser(a) + 1, n = msgs.filter(m => m.sender !== a).length;
   prompt += jobReport(a, chat);
   prompt += turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, role });
@@ -766,6 +772,7 @@ function publishOne(r) {
     for (const n of mentions(r.text)) if (n !== r.agent) raise(n, 2, `@ by ${r.agent}`);
     checkConvergence(); // after raising hands: someone just @mentioned hasn't had their say yet
     assess();           // jev mode: who has something new to add now?
+    maybeOutsider('watchdog');
   }
   return m;
 }
@@ -954,6 +961,85 @@ function jobReport(a, chat) {
     + (j.summary ? `\nThe task's summary:\n${j.summary.slice(0, 3000)}` : j.tail ? `, last lines:\n${j.tail}` : '')).join('');
 }
 
+// ---------- outsider: a fresh look from someone who hasn't read the discussion ----------
+// Groups anchor, and so does a moderator that reads everything: in discussion 28 the members spent days on a wall that
+// each of their own models, asked cold with only the problem and the source code, saw past in minutes. So one member,
+// rotating, gets a fresh read-only CLI session with only the user's own messages and the shared files; it thinks first,
+// then reads the archive and reports only what the group hasn't tried. Its report is a candidate, not a conclusion.
+// Triggered every OUTSIDER_EVERY members' messages (a dumb watchdog: whoever is stuck doesn't know it), when Jev sees
+// the discussion circling (not sooner than OUTSIDER_COOLDOWN messages after the last one), or by the user.
+const OUTSIDER_EVERY = 40, OUTSIDER_COOLDOWN = 15; // ponytail: message-count trigger, tune once outsider-end decisions show when reports helped
+const outsiders = new Set(); // chats with an outsider at work
+function maybeOutsider(why) {
+  const c = chatId;
+  if (!S.outsider || outsiders.has(c) || !rules(c).moderated || !lastUserId(c)) return false;
+  const n = q1(`SELECT count(*) n FROM messages WHERE chat_id=? AND kind='agent' AND id>?`, c, chatState(c).outsider?.at || lastUserId(c)).n; // never had one: count from the user's latest message
+  return n >= (why === 'watchdog' ? OUTSIDER_EVERY : OUTSIDER_COOLDOWN) && startOutsider(c, why);
+}
+function startOutsider(c, why) {
+  if (outsiders.has(c)) return false;
+  const st = chatState(c), by = st.outsider?.by || {};
+  // The member who has been the outsider least, then the one least involved lately.
+  const recent = q(`SELECT sender FROM messages WHERE chat_id=? AND kind='agent' ORDER BY id DESC LIMIT 40`, c).map(m => m.sender);
+  const a = NAMES.filter(n => S.enabled[n] && !AGENTS[memberConfigs[n].harness].http)
+    .map(n => [n, by[n] || 0, recent.filter(s => s === n).length, Math.random()])
+    .sort((x, y) => x[1] - y[1] || x[2] - y[2] || x[3] - y[3])[0]?.[0];
+  if (!a) return false;
+  st.outsider = { at: maxId(c), by: { ...by, [a]: (by[a] || 0) + 1 } };
+  saveState(c, st);
+  outsiders.add(c);
+  const cwd = join(WORK, '_outsider', `${c}-${st.outsider.at}`);
+  mkdirSync(cwd, { recursive: true });
+  if (RUNAS) chownSync(cwd, RUNAS.uid, RUNAS.gid);
+  logDecision('outsider-start', a, { message_id: st.outsider.at, detail: { why } });
+  insertMsg({ chat_id: c, sender: 'moderator', kind: 'moderator', text: `🧭 ${why === 'circling' ? '讨论在原地打转，' : ''}`
+    + `请 @${atOf(a)} 当局外人：用它的模型开一个新会话，只看你的提问和共享文件，先独立想，再读讨论记录，只带回没试过的方向。` });
+  runOutsider(a, c, cwd).catch(e => ({ error: e.message, ms: 0 })).then(r => {
+    outsiders.delete(c);
+    logDecision('outsider-end', a, { message_id: st.outsider.at, latency_ms: r.ms, detail: { why, error: r.error || null, chars: r.text?.length || 0 } });
+    const none = /^NOTHING NEW[.。]?$/i.test(r.text || '');
+    if (r.error || none || !r.text) return void insertMsg({ chat_id: c, sender: 'moderator', kind: 'moderator',
+      text: r.error ? `⚠ 局外人 @${atOf(a)} 出错：${r.error.slice(0, 120)}` : `🧭 局外人 @${atOf(a)} 没发现群里没试过的方向。` });
+    insertMsg({ chat_id: c, sender: a, kind: 'agent', text: r.text, based_on: st.outsider.at, latency_ms: r.ms,
+      model: S.models[a] || 'default', role: 'outsider', mode: chatMode(c).effective });
+    if (c !== chatId || wrapRound === lastUserId(c)) return;
+    if (jev.circlePaused) { jev.circlePaused = paused = false; run('UPDATE chats SET paused=0 WHERE id=?', c); }
+    for (const n of NAMES) raise(n, 1.5, 'outsider');
+    pump();
+  });
+  return true;
+}
+async function runOutsider(a, c, cwd) {
+  const asks = q(`SELECT * FROM messages WHERE chat_id=? AND kind='user' ORDER BY id DESC LIMIT 6`, c).reverse()
+    .map(m => `- ${m.text}${attached(m)}`).join('\n');
+  const opts = { cwd, dataDir: DATA, model: S.models[a], exec: false, member: { ...memberConfigs[a], model: S.models[a] },
+    onLive() {}, idleMs: 10 * 60e3, totalMs: 25 * 60e3 };
+  const t0 = Date.now(), lang = S.language;
+  const one = await runTurn(memberConfigs[a].harness, `You are an outside expert, called in fresh. A group of AI agents has
+been working on the user's problem for a while. You have not seen their discussion, on purpose: groups anchor on their
+first ideas, and a fresh look often finds what they missed.
+
+The user's own messages, the newest last (the problem the group works on now is usually in the latest ones):
+${asks}
+
+The group's shared files (code, tools, data) are in ${SHARED}; read source code and documentation there and anywhere
+else on disk as you need. Don't read the discussion archive (${ARCHIVE}) yet, nor notes, logs or result files where the
+group wrote down its conclusions: work from the problem and the sources. Don't create, edit or delete files. ${SHELL_RULE[memberConfigs[a].harness] || SHELL_RULE.default}
+
+Find the 3 to 5 most promising ways to get what the user is after now. Don't assume the obvious approach is right. For
+each: the concrete fact it rests on (file:line where it applies), how to do it, how to check it worked. Be brief.`, null, opts);
+  if (one.error || !one.sid) return { error: one.error || 'no session', ms: Date.now() - t0 };
+  const two = await runTurn(memberConfigs[a].harness, `Now read what the group has done: the discussion is archived in
+${archiveFile(c)} (long: search it for your ideas' keywords and read its last 100 messages). For each of your ideas, did
+the group already try or discuss it (cite #N)? Keep only the ideas that are new to them, or that they dropped for a
+reason you can show is wrong.
+
+Then write the message the group will read, in ${lang}, under 300 words (or 500 Chinese characters): each kept idea with
+the fact it rests on and how to check it. Present them as candidates to test, not conclusions. No [HAND], [NOTE],
+[STANCE], [JOB] or [TASK] markers. If nothing is new, answer exactly NOTHING NEW.`, one.sid, opts);
+  return { text: (two.text || '').trim(), error: two.error, ms: Date.now() - t0 };
+}
+
 // ---------- moderator: did a stance change, and why? ----------
 // Compared with the member's previous own stance in this discussion (devil's advocate turns don't count).
 async function checkShift(m) {
@@ -1018,6 +1104,7 @@ async function checkConvergence() {
     logDecision('circling', null, { score: j.circling, message_id: mod.msgId, detail: j });
     note(`🧭 讨论在原地打转（${pc(j.circling)}）：同样的论点在来回重复，没有新进展。已暂停，请你定方向：`
       + `补充信息或约束、@某人回答一个具体问题，或者点“继续”。`);
+    maybeOutsider('circling'); // its report resumes the discussion if the user hasn't yet
     return pump();
   }
   if (!stop) return pump();
@@ -1209,12 +1296,13 @@ const routes = {
     readUntil = speakingAt = 0;
     logDecision('stop', null, { detail: { cancelled, dropped: dropped.map(r => r.agent) } });
   },
+  'POST /api/outsider'() { if (!startOutsider(chatId, 'user')) throw new Error('局外人已经在想了，或者没有可用的成员'); },
   'POST /api/floor'({ agent }) { if (NAMES.includes(agent)) { raise(agent, 100, 'floor from user'); logDecision('floor', agent); } },
   'POST /api/lower'({ agent }) { if (NAMES.includes(agent)) rt[agent].hand = null; },
   'POST /api/settings'(body) {
     for (const k of ['language', 'scheduler']) if (typeof body[k] === 'string' && body[k]) S[k] = body[k];
     if (typeof body.userName === 'string') S.userName = body.userName.trim().slice(0, 20); // '' = 用户
-    for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind']) if (typeof body[k] === 'boolean') S[k] = body[k];
+    for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind', 'outsider']) if (typeof body[k] === 'boolean') S[k] = body[k];
     for (const k of ['turnCap', 'readSpeed', 'maxThinkers', 'convergeAt', 'noveltyMin']) if (+body[k] > 0) S[k] = +body[k];
     if (body.enabled) S.enabled = { ...S.enabled, ...body.enabled };
     // Read-aloud voice per member: a TTS model id from the gateway catalog, '' = default.

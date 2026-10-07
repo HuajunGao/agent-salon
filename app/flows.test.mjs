@@ -217,3 +217,24 @@ test('attachments: uploaded, sent with a message, their paths reach the members,
   assert.ok((await post('/api/send', { text: '', chat_id: id, files: [up2] })).ok);
   await until(async () => (await init()).messages.some(m => m.kind === 'user' && m.text === '' && m.files));
 });
+
+test('outsider: a fresh session sees only the user, thinks, then reads the archive; everyone answers its report', async t => {
+  const { post, init, until, turns } = await server(t);
+  const id = (await init()).state.chatId;
+  await post('/api/chat/mode', { id, mode: 'roundtable' });
+  await post('/api/send', { text: '怎么打赢 balanced？', chat_id: id });
+  await until(async () => (await init()).messages.filter(m => m.kind === 'agent').length >= 4); // turnCap 1: everyone has spoken
+  const before = turns().length;
+  assert.ok((await post('/api/outsider')).ok);
+  const s = await until(async () => { const x = await init(), o = x.messages.find(m => m.role === 'outsider');
+    return o && x.messages.filter(m => m.kind === 'agent' && m.id > o.id).length >= 4 && x; });
+  const [one, two] = turns().slice(before);
+  assert.ok(one.p.includes('outside expert') && one.p.includes('怎么打赢 balanced？') && !one.p.includes('发言。')); // no group talk
+  assert.ok(two.p.includes('Now read what the group has done') && two.h === one.h);
+  const o = s.messages.find(m => m.role === 'outsider');
+  assert.equal(o.sender, one.h);
+  assert.ok(turns().slice(before + 2).every(x => x.p.includes(`#${o.id}`) && x.p.includes('outsider:'))); // past the cap, the author too
+  assert.equal((await post('/api/outsider')).ok, true); // the rotation moves on
+  await until(async () => turns().length >= before + 8);
+  assert.notEqual(turns()[before + 6].h, one.h);
+});

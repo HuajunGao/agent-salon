@@ -529,6 +529,8 @@
       <label class="switch" title="每轮结束后，把你说过的长期有用的信息整理进“关于你”，新讨论里的成员都会先读到">跨讨论记住我 <input id="s-memory" type="checkbox"></label>
       <label class="switch" title="同样的论点来回重复、没有进展时暂停，等你定方向（每轮一次）">原地打转时暂停 <input id="s-circlePause" type="checkbox"></label>
       <label class="switch" title="研究模式下，讨论的第一个问题先由所有成员同时、各自独立回答（互相看不到），再进入讨论，避免被第一个回答带偏；之后的追问照常讨论">研究模式开场先独立作答 <input id="s-blind" type="checkbox"></label>
+      <label class="switch" title="每 40 条发言、或 Jev 判断讨论在原地打转时，轮流请一位成员用新会话当局外人：只看你的提问和共享文件，先独立想，再读讨论记录，只带回群里没试过的方向">卡住时请局外人 <input id="s-outsider" type="checkbox"></label>
+      <button type="button" id="outsider-now" title="现在就请一位成员当局外人（轮流），几分钟后带回群里没试过的方向">现在请局外人</button>
     </div>
   </details>
 </aside>
@@ -646,6 +648,7 @@ function renderMsg(m) {
   if (m.stale) hd.push(`<span class="tag warn" title="这条回复写于你的新消息之前">写于你的新消息之前</span>`);
   if (m.role === 'devil') hd.push(`<span class="tag devil" title="主持人请它站到对立面">唱反调</span>`);
   if (m.role === 'summary') hd.push(`<span class="tag summary">总结</span>`);
+  if (m.role === 'outsider') hd.push(`<span class="tag" title="这位成员的模型开了一个新会话：只看你的提问和共享文件，先独立想，再读讨论记录，只带回没试过的方向">局外人</span>`);
   if (m.seat) hd.unshift(`<span class="tag${m.role === 'verdict' ? ' summary' : ''}">${esc(m.seat)}${m.role === 'verdict' ? '评判' : ''}</span>`);
   const ops = m.note_ops && JSON.parse(m.note_ops);
   if (ops?.length) hd.push(`<span title="这条发言更新了本场讨论的笔记">笔记 ${ops.map(o => `${{ add: '+', edit: '~', drop: '−' }[o.op]}N${o.n}`).join(' ')}</span>`);
@@ -964,7 +967,7 @@ function renderState() {
   if (S.holding) info.push('你在输入，暂缓发布');
   else if (S.readLeft > 0 && S.queue.length) info.push(`阅读中，还剩 ${fmtSecs(S.readLeft)}`);
   $('#info').textContent = info.join('，');
-  for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind']) $('#s-' + k).checked = S.settings[k];
+  for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind', 'outsider']) $('#s-' + k).checked = S.settings[k];
   for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin']) {
     const el = $('#s-' + k);
     if (document.activeElement !== el) el.value = S.settings[k];
@@ -1140,7 +1143,8 @@ document.addEventListener('change', e => {
     post('/api/settings', { models: { [d.model]: value } });
   }
 });
-for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind']) $('#s-' + k).onchange = e => post('/api/settings', { [k]: e.target.checked });
+for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind', 'outsider']) $('#s-' + k).onchange = e => post('/api/settings', { [k]: e.target.checked });
+$('#outsider-now').onclick = async () => { const r = await post('/api/outsider'); if (!r.ok) alert((await r.json().catch(() => ({}))).error || '请求失败'); };
 for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin'])
   $('#s-' + k).addEventListener('change', e => post('/api/settings', { [k]: e.target.value }));
 

@@ -68,6 +68,14 @@ Every reply ends with `[STANCE n%] position`: `parseReply` moves it into `messag
 (`withStance`), the UI shows a stance table, and Jev (`stanceShift`) judges whether a change was backed by a new argument.
 Moderator notes are `kind='moderator'` messages: shown in the UI,
 never sent to agents or Jev (`TALK` filter).
+
+Outsider (setting `outsider`, research/roundtable): groups anchor, and so does Jev, which reads everything (discussion 28:
+days stuck on a wall that each member's own model, asked cold, saw past in minutes). Every 40 members' messages, when
+Jev sees circling (≥15 since the last), or on the user's button, one member (rotating: least outsider runs, then least
+active lately) gets a fresh read-only session with only the user's messages and the shared files. Phase 1 thinks
+without the archive; phase 2 (same session) reads the archive and keeps only untried ideas. The report is posted under
+that member with `role='outsider'` (its own chat session sees it too, `UNSEEN`), and everyone answers it once, past the
+turn cap and Jev's filter. Don't feed it the notes: they hold the group's conclusions.
 Reply markers [HAND], [NOTE], [STANCE] count anywhere in a reply except inside backticks: agents put them mid-line,
 several on one line, or before appended text (Claude's "Sources:"); line-anchored parsing leaked them into the chat.
 [JOB] and [TASK] start real work, so they only count at the start of their own line (mid-sentence mentions of [JOB]
