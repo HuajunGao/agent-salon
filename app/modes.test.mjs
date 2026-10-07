@@ -15,7 +15,7 @@ test('discussion modes: Auto fallback, user override reaches the turn prompt, pe
   for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
     copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
   const turnFile = join(root, 'turn.json');
-  writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
+  writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs, spawnJob } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
     import {writeFileSync} from 'node:fs';
     export async function listModels(){return {}};
     export async function runTurn(h,p,s,o){writeFileSync(${JSON.stringify(turnFile)},JSON.stringify({p}));return {text:'我的观点。', sid:'s1', ms:1}};`);

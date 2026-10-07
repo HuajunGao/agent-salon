@@ -1,12 +1,12 @@
 // agent-chat server: SQLite + SSE + scheduler + reading-pace publish queue. No npm dependencies.
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync, chmodSync, chownSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, rmSync, existsSync, statSync, chmodSync, chownSync, openSync, closeSync, fchownSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { AGENTS, runTurn, listModels, runAs } from './agents.mjs';
+import { AGENTS, runTurn, listModels, runAs, spawnJob } from './agents.mjs';
 import { judge, novelty, classifyMode, stanceShift } from './moderator.mjs';
 import { MODES, rulesOf, relayNext, debateSetup, debateScript, debateBrief, seatOf, PHASES, parseReply, applyNotes } from './modes.mjs';
 import { curate } from './memory.mjs';
@@ -31,11 +31,31 @@ const RUNAS = process.env.AGENT_USER ? runAs(process.env.AGENT_USER) : null;
 const wsOf = a => join(WORK, a);
 // The members' common project directory (a git repo; handles start with a letter, so no member owns "_shared").
 // Its public/ is served at /w/, so what they build can be opened in the browser.
-const SHARED = join(WORK, '_shared'), PUBLIC = join(SHARED, 'public');
-mkdirSync(PUBLIC, { recursive: true });
+// Background jobs' logs live next to it (not in the repo): workspace/_jobs/J<id>.log.
+const SHARED = join(WORK, '_shared'), PUBLIC = join(SHARED, 'public'), JOBS = join(WORK, '_jobs');
+const jobLog = id => join(JOBS, `J${id}.log`);
+mkdirSync(PUBLIC, { recursive: true }); mkdirSync(JOBS, { recursive: true });
+// The shared Python environment and caches stay out of the repo the server commits.
+const IGNORE = join(SHARED, '.gitignore');
+const ignored = existsSync(IGNORE) ? readFileSync(IGNORE, 'utf8').split('\n') : [];
+const missing = ['.venv/', '__pycache__/', '*.pyc'].filter(l => !ignored.includes(l));
+if (missing.length) appendFileSync(IGNORE, (ignored.length && ignored.at(-1) !== '' ? '\n' : '') + missing.join('\n') + '\n');
 if (RUNAS) {
-  for (const d of [SHARED, PUBLIC]) chownSync(d, RUNAS.uid, RUNAS.gid);
+  for (const d of [SHARED, PUBLIC, JOBS, IGNORE]) chownSync(d, RUNAS.uid, RUNAS.gid);
   if (!existsSync(join(SHARED, '.git'))) spawnSync('git', ['init', '-q'], { cwd: SHARED, uid: RUNAS.uid, gid: RUNAS.gid });
+}
+// After a member's turn or job, whatever changed in the shared repo is committed with that member as the author,
+// so the history says who changed what. Big files (replays, data dumps) stay uncommitted.
+const COMMIT_MAX = 500e3; // ponytail: size cut instead of per-project ignore rules; the members can add .gitignore lines
+function commitShared(a, message) {
+  if (!RUNAS) return;
+  const git = (...args) => spawnSync('git', ['-c', `user.name=${a}`, '-c', `user.email=${a}@agent-chat`, ...args],
+    { cwd: SHARED, uid: RUNAS.uid, gid: RUNAS.gid, env: { HOME: RUNAS.home, PATH: process.env.PATH }, encoding: 'utf8' });
+  git('add', '-A');
+  const big = git('diff', '--cached', '--name-only', '--diff-filter=AM', '-z').stdout.split('\0')
+    .filter(f => f && statSync(join(SHARED, f), { throwIfNoEntry: false })?.size > COMMIT_MAX);
+  for (let i = 0; i < big.length; i += 100) git('reset', '-q', '--', ...big.slice(i, i + 100));
+  git('commit', '-q', '-m', message);
 }
 const PORT = +process.env.PORT || 3517, HOST = process.env.HOST || '127.0.0.1'; // HOST=0.0.0.0 to serve the LAN
 const NAMES = [];
@@ -53,7 +73,10 @@ CREATE TABLE IF NOT EXISTS agent_sessions(chat_id INTEGER, agent TEXT, cli_sessi
 -- Every scheduler decision, for comparing scheduler modes later.
 CREATE TABLE IF NOT EXISTS decisions(id INTEGER PRIMARY KEY, chat_id INTEGER, at TEXT DEFAULT CURRENT_TIMESTAMP, mode TEXT,
   event TEXT, agent TEXT, score REAL, detail TEXT, based_on INTEGER, message_id INTEGER, latency_ms INTEGER);
-CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);`);
+CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
+-- Members' background jobs ([JOB] lines); status: running / done / failed / stopped / timeout / interrupted.
+CREATE TABLE IF NOT EXISTS jobs(id INTEGER PRIMARY KEY, chat_id INTEGER, agent TEXT, cmd TEXT, msg_id INTEGER, status TEXT,
+  code INTEGER, started_at TEXT DEFAULT CURRENT_TIMESTAMP, ended_at TEXT);`);
 db.exec(`CREATE TABLE IF NOT EXISTS members(name TEXT PRIMARY KEY, config TEXT NOT NULL);`);
 // role: 'devil' | 'summary' for moderator-requested turns; mode: the discussion mode an agent message was written in;
 // stance: JSON {t: position, c: confidence 0-100, changed?, evidence?: Jev's view of a change} from the reply's [STANCE] line.
@@ -400,7 +423,8 @@ function eligible(a) {
   // Relay and debate turns follow one another: the next starts once the previous reply is published.
   if (rules(chatId).flow !== 'free' && busy()) return false;
   // Floor from the user, a debate slot, and the round after a debate (whatever was said during it) aren't capped.
-  if (h.r >= 100 || h.slot != null || h.why === 'after the debate') return true;
+  // Neither is a member woken by its finished background job (it must hear the result, whatever the turn count).
+  if (h.r >= 100 || h.slot != null || h.why === 'after the debate' || h.why === 'job') return true;
   return turnsSinceUser(a) < S.turnCap && hasUnseen(a);
 }
 
@@ -416,7 +440,7 @@ function pump() {
       if (!blind && inflight() >= S.maxThinkers) break;
       // jev mode: follow-up hands wait for a fresh novelty judgment; the user's own wake-ups don't, and neither does
       // everyone's one turn after a debate (each says what they actually think, or passes).
-      const opening = c.why === 'user message' || c.why === 'after the debate';
+      const opening = c.why === 'user message' || c.why === 'after the debate' || c.why === 'job';
       const followUp = free && c.r < 10 && !opening;
       if (jevOn() && followUp && !novFresh(c.a)) {
         // a hand Jev won't judge (e.g. a member at the turn cap) is dropped, or it would ask Jev again every second
@@ -524,14 +548,25 @@ async function maybeCurate(force = false) {
 // and headless agy ends its turn with no reply when a command is denied.
 // Executing code is only offered when the OS confines the agents (AGENT_USER) and the setting is on.
 const execOn = () => !!RUNAS && S.exec;
+// The address the user opens the app at (from the browser's Host header), so members can give full links to /w/ pages.
+let webHost = q1(`SELECT value FROM settings WHERE key='host'`)?.value || '';
+const wURL = () => (webHost ? `http://${webHost}/w/` : '/w/');
 const toolRule = a => (execOn()
   ? `You have your own workspace, ${wsOf(a)} (your current directory): you may create files and run code there to check a
   claim, e.g. a small script, a quick benchmark, or installing a package locally. Keep it quick: a turn should finish within
   a couple of minutes. Stay inside your workspace; the discussion files are read-only for you.
   Projects the members build together (when the user asks for one) go in the shared git repo ${SHARED}: run
-  \`git log\` first to see what others did, and commit what you change with
-  \`git -c user.name=${a} -c user.email=${a}@agent-chat commit\`. Files in ${PUBLIC} are served at /w/ (e.g.
-  ${PUBLIC}/arena/index.html → /w/arena/index.html), so pages you put there can be opened by the user; link them as /w/....`
+  \`git log\` and \`git status\` first to see what others did. After each of your turns the server commits what changed
+  there with you as the author (files over 500 KB stay uncommitted); commit yourself when a clearer message helps. For a
+  big change that could collide with others' work, use a branch or \`git worktree add\` in your own workspace and merge back.
+  Python: use the shared environment ${SHARED}/.venv (create it with \`uv venv\` if it is missing, install with
+  \`uv pip install\`, record dependencies in requirements.txt), not a private one. Files in ${PUBLIC} are served at
+  ${wURL()} (e.g. ${PUBLIC}/arena/index.html → ${wURL()}arena/index.html): give the user those links, and don't start
+  web servers of your own.
+  Processes you start end with your turn. For anything longer (a tournament, a long build or benchmark), put a line
+  \`[JOB] <shell command>\` in your reply: the server runs it in the background as you (cwd: your workspace), logs to
+  ${JOBS}/J<id>.log, tells the chat, and wakes you with the result when it ends. A server restart stops running jobs,
+  so make long ones resumable (save results as you go, skip finished work). At most ${JOB_MAX} jobs run at once.`
   : `The discussion is read-only: don't create, edit or delete files. ${SHELL_RULE[memberConfigs[a].harness] || SHELL_RULE.default}`);
 const SHELL_RULE = {
   codex: 'Your sandbox is read-only: read-only shell commands (cat, rg, ls) are fine for reading files.',
@@ -611,6 +646,7 @@ async function startTurn(a, retried = false) {
   }
   prompt += msgs.map(m => (m.sender === a ? `#${m.id} (you): ${m.text}` : fmt(m))).join('\n\n') || '(no new messages)';
   const k = turnsSinceUser(a) + 1, n = msgs.filter(m => m.sender !== a).length;
+  prompt += jobReport(a, chat);
   prompt += turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, role });
   sendState();
 
@@ -621,6 +657,7 @@ async function startTurn(a, retried = false) {
     onLive: log => { rt[a].live = log; sendStateSoon(); }, signal: rt[a].abort.signal,
   });
   rt[a].abort = null;
+  if (execOn()) commitShared(a, `${a}: turn after #${basedOn}`);
   if (!q1('SELECT 1 FROM chats WHERE id=?', chat)) { rt[a].status = 'idle'; return pump(); } // discussion deleted meanwhile
   // Stopped by the user: nothing is posted, the session isn't advanced (the messages count as unseen next time),
   // and the flow doesn't move on, so a debate slot or the relay baton is played again when the discussion resumes.
@@ -645,13 +682,13 @@ async function startTurn(a, retried = false) {
     logDecision('error', a, { based_on: basedOn, latency_ms: res.ms, detail: { error: res.error } });
     insertMsg({ chat_id: chat, sender: 'system', kind: 'system', text: `⚠ ${memberConfigs[a].label} 出错: ${res.error}`, based_on: basedOn, latency_ms: res.ms });
   } else {
-    const reply = parseReply(res.text), { hand, stance, notes } = reply;
-    text = reply.text;
-    if (/^PASS[.。!！]?$/i.test(text) && !summary) {
+    const reply = parseReply(res.text), { hand, stance, notes } = reply, jobs = execOn() ? reply.jobs : [];
+    text = reply.text || (jobs.length ? '（启动后台任务）' : '');
+    if (/^PASS[.。!！]?$/i.test(text) && !summary && !jobs.length) {
       rt[a].note = 'PASS'; text = '';
       logDecision('pass', a, { based_on: basedOn, latency_ms: res.ms });
     } else {
-      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, stance, notes, seat, slot, model: model || 'default', role, done: Date.now() });
+      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, stance, notes, jobs, seat, slot, model: model || 'default', role, done: Date.now() });
       // A browser is reading aloud: synthesize while the reply waits in the queue, so it plays without delay.
       if (speechOn() && Date.now() - ttsActiveAt < 120e3) synth(spoken(a, text), voiceOf(a)).catch(() => {});
       logDecision('ready', a, { based_on: basedOn, latency_ms: res.ms, detail: { hand, chars: text.length } });
@@ -701,6 +738,7 @@ function publishOne(r) {
     for (const x of st.notes) if (changed.some(o => o.n === x.n && o.op !== 'drop')) x.msg = m.id;
     saveState(r.chat, st);
   }
+  for (const cmd of r.jobs || []) startJob(r.agent, r.chat, cmd, m.id);
   if (r.stance && r.role !== 'devil' && r.role !== 'summary') checkShift(m);
   if (r.role === 'verdict') finishDebate(r.chat);
   run('UPDATE agent_sessions SET turns=turns+1 WHERE chat_id=? AND agent=?', r.chat, r.agent);
@@ -717,6 +755,69 @@ function publishOne(r) {
     assess();           // jev mode: who has something new to add now?
   }
   return m;
+}
+
+// ---------- background jobs ----------
+// A member's [JOB] line runs as its own process (setsid), so it outlives the turn; when it ends the chat hears about
+// it and the member is woken with the result. A server restart stops running jobs (systemd kills the service's
+// cgroup): they are reported as interrupted at the next start.
+const JOB_MAX = 3, JOB_MS = 3 * 3600e3; // ponytail: global caps, per-member limits if one member hogs the slots
+const procs = new Map(); // job id -> child process
+const jobNote = (chat, text) => insertMsg({ chat_id: chat, sender: 'moderator', kind: 'moderator', text });
+const dur = ms => (ms < 60e3 ? `${Math.round(ms / 1000)} 秒` : `${Math.floor(ms / 60e3)} 分 ${Math.round(ms % 60e3 / 1000)} 秒`);
+for (const j of q(`SELECT * FROM jobs WHERE status='running'`)) {
+  run(`UPDATE jobs SET status='interrupted', ended_at=CURRENT_TIMESTAMP WHERE id=?`, j.id);
+  if (q1('SELECT 1 FROM chats WHERE id=?', j.chat_id)) jobNote(j.chat_id, `⚠ 后台任务 J${j.id}（@${memberConfigs[j.agent] ? atOf(j.agent) : j.agent}）因服务器重启中断：\`${j.cmd}\``);
+}
+function startJob(a, chat, cmd, msgId) {
+  if (procs.size >= JOB_MAX) return jobDone(a, chat, { cmd, status: 'rejected', why: `已有 ${JOB_MAX} 个后台任务在跑` });
+  const id = Number(run(`INSERT INTO jobs(chat_id, agent, cmd, msg_id, status) VALUES(?,?,?,?,'running')`, chat, a, cmd, msgId).lastInsertRowid);
+  const fd = openSync(jobLog(id), 'w');
+  if (RUNAS) fchownSync(fd, RUNAS.uid, RUNAS.gid);
+  const p = spawnJob(cmd, { cwd: wsOf(a), out: fd }), t0 = Date.now();
+  closeSync(fd);
+  procs.set(id, p);
+  const timer = setTimeout(() => killJob(id, 'timeout'), JOB_MS);
+  let ended = false;
+  const end = (code, error) => {
+    if (ended) return; ended = true;
+    clearTimeout(timer); procs.delete(id);
+    const status = p.why || (code === 0 ? 'done' : 'failed');
+    run('UPDATE jobs SET status=?, code=?, ended_at=CURRENT_TIMESTAMP WHERE id=?', status, code ?? null, id);
+    logDecision('job-end', a, { message_id: msgId, latency_ms: Date.now() - t0, detail: { job: id, status, code, error } });
+    commitShared(a, `${a}: job J${id} ${status}: ${cmd}`.slice(0, 200));
+    jobDone(a, chat, { id, cmd, status, code, ms: Date.now() - t0, why: error });
+  };
+  p.on('error', e => end(null, e.message));
+  p.on('exit', code => end(code));
+  logDecision('job-start', a, { message_id: msgId, detail: { job: id, cmd } });
+  jobNote(chat, `▶ @${atOf(a)} 启动后台任务 J${id}：\`${cmd}\``);
+  sendState();
+}
+function killJob(id, why) {
+  const p = procs.get(id);
+  if (!p) return;
+  p.why = why;
+  try { process.kill(-p.pid, 'SIGTERM'); } catch {}
+  setTimeout(() => { try { process.kill(-p.pid, 'SIGKILL'); } catch {} }, 5000);
+}
+// Tells the chat and wakes the member, whose next turn gets the result and the end of the log.
+const JOB_TEXT = { done: '完成', failed: '失败', stopped: '已被停止', timeout: '超时被停止', rejected: '没有启动' };
+function jobDone(a, chat, j) {
+  const tail = j.id ? readFileSync(jobLog(j.id), 'utf8').slice(-1500) : '';
+  jobNote(chat, `${j.status === 'done' ? '✅' : '⚠'} 后台任务${j.id ? ` J${j.id}` : ''}（@${atOf(a)}）${JOB_TEXT[j.status]}`
+    + `${j.code ? `，退出码 ${j.code}` : ''}${j.ms != null ? `，用时 ${dur(j.ms)}` : ''}${j.why ? `：${j.why}` : ''}。`);
+  (rt[a].jobs ??= []).push({ ...j, chat, tail });
+  if (chat === chatId && j.status !== 'stopped') raise(a, 3, 'job');
+  pump();
+}
+// The finished jobs a member hasn't heard about yet, for its next turn in that discussion.
+function jobReport(a, chat) {
+  const mine = (rt[a].jobs || []).filter(j => j.chat === chat);
+  rt[a].jobs = (rt[a].jobs || []).filter(j => j.chat !== chat);
+  return mine.map(j => `\n\nYour background job${j.id ? ` J${j.id}` : ''} \`${j.cmd}\`: ${j.status}${j.code != null ? ` (exit code ${j.code})` : ''}`
+    + `${j.ms != null ? ` after ${dur(j.ms)}` : ''}${j.why ? ` (${j.why})` : ''}.`
+    + (j.id ? ` Log: ${jobLog(j.id)}${j.tail ? `, last lines:\n${j.tail}` : ''}` : '')).join('');
 }
 
 // ---------- moderator: did a stance change, and why? ----------
@@ -840,6 +941,8 @@ function state() {
       phase: d.script[d.at]?.phase || null, step: Math.min(d.at + 1, d.script.length), steps: d.script.length } : null)(chatState(chatId)),
     stances: stances(),
     memory: { text: readMemory(), curating: memo.curating, at: memo.at, error: memo.error },
+    // running jobs (any discussion) and this discussion's recent ones
+    jobs: q(`SELECT id, chat_id, agent, cmd, status, code, started_at, ended_at FROM jobs WHERE status='running' OR chat_id=? ORDER BY id DESC LIMIT 8`, chatId),
     jev: { on: jevOn(), assessing: jev.assessing, judging: jev.judging, ms: jev.ms, down: S.scheduler === 'jev' && !jevOn() },
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
     members: memberOrder().map(n => ({
@@ -954,6 +1057,7 @@ const routes = {
   // Stop ends the round at once, leaving the server idle: thinking turns are cancelled, written replies not yet
   // published are dropped, read-aloud stops. The discussion keeps its place (debate slot, relay baton, notes): the
   // user's next message carries on from there.
+  'POST /api/job/stop'({ id }) { killJob(+id, 'stopped'); },
   'POST /api/stop'() {
     const cancelled = NAMES.filter(n => rt[n].status === 'thinking');
     for (const n of NAMES) { rt[n].hand = null; rt[n].abort?.abort(); }
@@ -1067,6 +1171,9 @@ const init = () => ({ type: 'init', messages: q('SELECT * FROM messages WHERE ch
 
 http.createServer((req, res) => {
   const key = `${req.method} ${req.url.split('?')[0]}`;
+  if (key === 'GET /' && req.headers.host && req.headers.host !== webHost && /^[\w.:\[\]-]+$/.test(req.headers.host)) {
+    webHost = req.headers.host; run(`INSERT OR REPLACE INTO settings VALUES('host', ?)`, webHost);
+  }
   if (key === 'GET /' || /^GET \/s\/[\w-]+$/.test(key)) { // /s/<code>: the same page, showing one discussion read-only
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(readFileSync(join(ROOT, 'app/index.html')));

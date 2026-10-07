@@ -32,6 +32,11 @@ const userEnv = (env, keep) => (env = agentEnv(env, keep), RUNAS ? { ...env, HOM
   PATH: [join(RUNAS.home, '.local/bin'), join(RUNAS.home, '.opencode/bin'), env.PATH].join(delimiter) } : env);
 const asUser = () => (RUNAS ? { uid: RUNAS.uid, gid: RUNAS.gid } : {});
 
+// A member's background job: a bash command run as the agent user in its own session (detached = setsid), so it
+// outlives the turn that started it and the CLI's cleanup. Output goes to the open file descriptor `out`.
+export const spawnJob = (cmd, { cwd, out }) => spawn('/bin/bash', ['-c', cmd], { cwd, env: { ...userEnv(process.env), PWD: cwd },
+  ...asUser(), stdio: ['ignore', out, out], detached: true });
+
 // All matches for `name` on PATH (Windows: also name.exe / name.cmd).
 const where = name => (userEnv(process.env).PATH || '').split(delimiter).filter(Boolean)
   .flatMap(d => (WIN ? ['.exe', '.cmd', ''] : ['']).map(ext => join(d, name + ext))).filter(existsSync);

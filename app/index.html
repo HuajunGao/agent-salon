@@ -502,6 +502,7 @@
   <div class="righttop"><button class="icon" data-toggle-room title="收起" aria-label="收起房间状态面板"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></svg></button></div>
   <section id="moderator"></section>
   <section id="notes"></section>
+  <section id="jobs"></section>
   <section id="memory"></section>
   <section><div class="sect member-heading"><button class="memtoggle" data-fold="members" aria-expanded="true" title="展开或收起"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 5 7 7-7 7"/></svg>成员</button> <span class="member-tools"><button id="order-members">调整顺序</button><button id="add-member">＋ 新成员</button></span></div><div id="member-order-hint" hidden>用上下箭头调整显示顺序，自动保存。</div><div id="members"></div></section>
   <details class="settings">
@@ -807,6 +808,23 @@ function renderNotes() {
       + `<button data-note-drop="${x.n}" title="删除" aria-label="删除 N${x.n}">${ICON.del}</button></span></li>`).join('')}</ul>`
       : `<div class="memempty">成员发言时会把需要前后一致的内容记在这里（${esc(title)}），之后每一轮都会参考。你也可以自己添加或修改。</div>`));
 }
+// ---------- background jobs ([JOB] lines) ----------
+// Shown only when there are any: running ones (stoppable) and this discussion's recent ones. Minutes, not seconds,
+// so the list doesn't re-render every tick under the stop button.
+const JOB_STATUS = { done: '完成', failed: '失败', stopped: '已停止', timeout: '超时', interrupted: '重启中断' };
+function renderJobs() {
+  const jobs = S.jobs || [];
+  const mins = j => Math.max(0, Math.floor((Date.now() - clockSkew - Date.parse(j.started_at.replace(' ', 'T') + 'Z')) / 60e3));
+  setHTML('#jobs', !jobs.length ? '' : `<div class="sect memhead">${foldButton('jobs', `后台任务 <span class="count">${jobs.filter(j => j.status === 'running').length || ''}</span>`)}</div>`
+    + (folded.has('jobs') ? '' : `<ul class="notelist">${jobs.map(j => `<li><span class="nn">J${j.id}</span>`
+      + `<span class="nt"><span style="color:${color(j.agent)}">${esc(label(j.agent))}</span> <code title="${esc(j.cmd)}">${esc(j.cmd.length > 60 ? j.cmd.slice(0, 60) + '…' : j.cmd)}</code></span>`
+      + `<span class="nm">${j.status === 'running' ? `${mins(j)} 分钟<button data-job-stop="${j.id}" title="停止" aria-label="停止 J${j.id}">${ICON.del}</button>`
+        : `${JOB_STATUS[j.status] || j.status}${j.code ? ` (${j.code})` : ''}`}</span></li>`).join('')}</ul>`));
+}
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-job-stop]');
+  if (t && confirm(`停止后台任务 J${t.dataset.jobStop}？`)) post('/api/job/stop', { id: +t.dataset.jobStop });
+});
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-note-add],[data-note-edit],[data-note-drop]');
   if (!t) return;
@@ -910,7 +928,7 @@ function renderMembers() {
 function renderState() {
   const now = Date.now() - clockSkew;
   if (!messages.length) setHTML('#msgs', emptyState());
-  renderHistory(); renderModerator(); renderNotes(); renderMemory(); renderMode(); renderTts(); renderThinking();
+  renderHistory(); renderModerator(); renderNotes(); renderJobs(); renderMemory(); renderMode(); renderTts(); renderThinking();
   $('#members').hidden = folded.has('members');
   $('[data-fold=members]').setAttribute('aria-expanded', !folded.has('members'));
   $('#s-exec').disabled = !S.sandboxed; $('#execrow').style.opacity = S.sandboxed ? '' : '.45';

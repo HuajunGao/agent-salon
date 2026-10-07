@@ -63,7 +63,7 @@ async function server(t, slowFirst = 0) {
     copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
   const log = join(root, 'turns.jsonl');
   // Story turns: the first one passes the baton to @opencode; every turn adds a note. The judge gives a verdict.
-  writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
+  writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs, spawnJob } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
     import {appendFileSync} from 'node:fs';
     let story = 0;
     export async function listModels(){return {}};

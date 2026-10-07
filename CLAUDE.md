@@ -68,6 +68,14 @@ Every reply ends with `[STANCE n%] position`: `parseReply` moves it into `messag
 (`withStance`), the UI shows a stance table, and Jev (`stanceShift`) judges whether a change was backed by a new argument.
 Moderator notes are `kind='moderator'` messages: shown in the UI,
 never sent to agents or Jev (`TALK` filter).
+Reply markers ([HAND], [NOTE], [STANCE], [JOB]) count anywhere in a reply except inside backticks: agents put them
+mid-line, several on one line, or before appended text (Claude's "Sources:"). Line-anchored parsing leaked them into the chat.
+
+Shared work (exec mode only): `WORK/_shared` is the members' git repo, its `public/` served at `/w/`; after every turn
+and job the server commits what changed there as that member (`commitShared`, files over 500 KB skipped). A turn's
+processes die with the CLI, so long work goes in a `[JOB] <command>` line: `startJob` runs it as the agent user in its
+own session, logs to `WORK/_jobs/J<id>.log`, posts start/end notes, and wakes the member (hand `why: 'job'`, uncapped)
+with the result in its next prompt (`jobReport`). Jobs are in the `jobs` table; a restart marks running ones interrupted.
 
 Agents' context: a new CLI session gets `intro()` (rules, members, archive location, the user memory) plus recent
 history; resumed sessions get only unseen messages plus a per-turn footer. Discussions are archived as

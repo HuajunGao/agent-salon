@@ -47,7 +47,7 @@ test('HTTP member lifecycle persists, keeps credentials private and routes @hand
   for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
     copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
   // Exercise the actual server and SQLite with a deterministic harness, without calling paid models.
-  writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
+  writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs, spawnJob } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
     import {writeFileSync} from 'node:fs';
     export async function listModels(){return {opencode:[]}};
     export async function runTurn(h,p,s,o){writeFileSync(${JSON.stringify(join(root,'turn.json'))},JSON.stringify({h,p,model:o.model}));return {text:'PASS', sid:s || o.member.name+'-session', ms:1}};`);

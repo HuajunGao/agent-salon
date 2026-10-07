@@ -111,32 +111,40 @@ export function debateBrief(d, name, phase, motion, handle) {
 // ---------- the reply protocol ----------
 // A reply may end with note lines, then "[STANCE 70%] verdict: position" (confidence 0-100), then [HAND]:
 //   [NOTE add] text      [NOTE edit N3] text      [NOTE drop N3]
-// Returns {text, hand, stance: {t, c, l?} | null, notes: [{op, n?, text?}]}; those lines are removed from the text.
-const STANCE = /^[ \t>*_]*\[(?:STANCE|立场)\s*[:：]?\s*(\d{1,3})\s*%?\][ \t*_:：]*(.*)$/im;
-const NOTE = /^[ \t>*_-]*\[NOTE\s+(add|edit|drop)(?:\s+N?(\d+))?\][ \t*_:：]*(.*)$/gim;
+// and "[JOB] shell command" lines (background jobs, at most 2 per reply).
+// Returns {text, hand, stance: {t, c, l?} | null, notes: [{op, n?, text?}], jobs: [cmd]}; those markers are removed from the text.
+// Agents don't keep to the layout: markers come mid-line ("…对上。[STANCE 94%] …"), several on one line
+// ("[HAND] [STANCE 70%] …"), or with more text after them (Claude appends "Sources:" after [HAND]). So a marker counts
+// anywhere except right after a backtick (`[HAND]` in code is talk about the protocol), and NOTE / STANCE / JOB take the
+// rest of their line.
+const HAND = /(?<!`)[*_]*\[HAND\][*_]*/gi;
+const JOB = /(?<!`)[*_]*\[JOB\][*_]*[ \t]*(.*)$/gim;
+const STANCE = /(?<!`)[*_]*\[(?:STANCE|立场)\s*[:：]?\s*(\d{1,3})\s*%?\][ \t*_:：]*(.*)$/gim;
+const NOTE = /(?<!`)[*_]*\[NOTE\s+(add|edit|drop)(?:\s+N?(\d+))?\][ \t*_:：]*(.*)$/gim;
 export function parseReply(raw) {
-  const notes = [];
-  const tail = /\[HAND\]\s*$/.test(raw.trim()); // [HAND] goes last, but may come before the note/stance lines too
-  let text = raw.replace(NOTE, (_, op, n, t) => {
-    t = t.replace(/\[HAND\]/g, '').trim();
+  const notes = [], jobs = [];
+  const hand = raw.search(HAND) >= 0;
+  let text = raw.replace(HAND, '').replace(JOB, (_, cmd) => {
+    cmd = cmd.trim().replace(/^`+|`+$/g, '').trim();
+    if (cmd && jobs.length < 2) jobs.push(cmd);
+    return '';
+  }).replace(NOTE, (_, op, n, t) => {
+    t = t.trim();
     op = op.toLowerCase();
     if (op === 'add' ? t : n && (op === 'drop' || t)) notes.push({ op, ...(n && { n: +n }), ...(op !== 'drop' && { text: t.slice(0, 300) }) });
     return '';
   });
   let stance = null;
-  const m = text.match(STANCE);
-  if (m) {
-    text = text.replace(m[0], '');
-    const t = m[2].replace(/\[HAND\]/g, '').replace(/^[\s*_]+|[\s*_]+$/g, '');
-    // The position may start with a short verdict label ("条件支持：…"), kept as l.
-    const lt = t.match(/^([^：:，,。]{1,8})[：:]\s*(.+)$/);
-    if (t) stance = { t: (lt ? lt[2] : t).slice(0, 300), c: Math.min(100, +m[1]), ...(lt && { l: lt[1].trim() }) };
-  }
-  text = text.trim();
-  const hand = tail || /\[HAND\]\s*$/.test(text);
+  text = text.replace(STANCE, (_, c, t) => {
+    t = t.replace(/^[\s*_]+|[\s*_]+$/g, '');
+    // The position may start with a short verdict label ("条件支持：…"), kept as l; a copied "verdict:" placeholder isn't one.
+    const lt = t.match(/^([^：:，,。]{1,8})[：:]\s*(.+)$/), label = lt && !/^verdict$/i.test(lt[1].trim()) && lt[1].trim();
+    if (t && !stance) stance = { t: (lt ? lt[2] : t).slice(0, 300), c: Math.min(100, +c), ...(label && { l: label }) };
+    return '';
+  });
   // Agents sometimes write a reply and then a stray "PASS" on its own last line: drop it (a bare PASS stays a pass).
-  text = text.replace(/\s*\[HAND\]\s*$/, '').trim().replace(/\n\s*PASS[.。!！]?$/i, '').trim();
-  return { text, hand, stance, notes };
+  text = text.replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim().replace(/\n\s*PASS[.。!！]?$/i, '').trim();
+  return { text, hand, stance, notes, jobs };
 }
 
 // Applies note ops to a list [{n, text, ...}]: returns the ops that changed something, with the numbers they got.
