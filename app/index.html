@@ -458,6 +458,7 @@
   <div class="lefttop">
     <button class="icon" data-toggle-hist title="收起讨论列表（Ctrl+Shift+S）" aria-label="收起讨论列表"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
     <button class="newbtn" id="newChat"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>新讨论</button>
+    <a class="icon" id="who" href="/who" hidden style="width:auto;padding:0 8px;font-size:13px;text-decoration:none" title="切换用户" aria-label="切换用户"></a>
   </div>
   <div class="histrow"><input id="search" placeholder="搜索讨论" type="search" aria-label="搜索标题和消息">
     <select id="histGroup" class="modesel" aria-label="讨论列表分组"><option value="time">按时间</option><option value="kind">按类型</option></select></div>
@@ -957,6 +958,7 @@ es.onmessage = e => {
     return renderShared();
   }
   if (ev.type === 'init') {
+    if (ev.state.profile) Object.assign($('#who'), { hidden: false, textContent: ev.state.profile });
     if (ev.modelLists && Object.keys(ev.modelLists).length) modelLists = ev.modelLists;
     delete lastHTML['#members']; S = ev.state; clockSkew = Date.now() - S.now; messages = ev.messages; renderState(); renderAll();
   }

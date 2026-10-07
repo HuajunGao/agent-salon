@@ -21,7 +21,7 @@ raw HTML in messages is escaped and only http(s)/mailto links are kept). Node â‰
   (a second call with the returned `sid` checks session resume). `moderator.mjs` `judge`/`novelty` and `memory.mjs`
   `curate` can be exercised the same way; Jev needs `TYPESAFE_API_KEY`.
 - Deploy committed HEAD to the home server (Proxmox LXC, root@server.lan) and restart: `bash deploy/push.sh`
-- Server logs: `ssh root@server.lan journalctl -u agent-chat -f`
+- Server logs: `ssh root@server.lan journalctl -u agent-chat@alice -f` (or `@bob`)
 
 Testing against the live app posts real messages: create your own discussion first and confirm it is the current one
 (the current discussion is server-wide, shared by every browser window); turn the `memory` setting off during tests and
@@ -100,3 +100,8 @@ unprivileged `agent` user, each in `workspace/<member>`; `chat.db` is mode 600, 
 Only then does the `exec` setting take effect (Claude Bash/Edit/Write, Codex `danger-full-access`, agy without
 plan mode, OpenCode build agent `--auto`). The CLI logins live in `/home/agent` (copied from root by
 `deploy/setup-agent-user.sh`); use `su - agent` to run them by hand. The app has no login: LAN only.
+
+One instance per person (systemd template `agent-chat@<name>`, settings in `/etc/agent-chat-<name>.env`): alice on
+3517 with the default `data/` and `workspace/`, bob on 3518 with `DATA_DIR=data-bob`, `WORK_DIR=workspace-bob`, so
+discussions, memory and workspaces never mix (both run as `agent`: separated by paths, not permissions). `/who` is the
+entry page (`PROFILES` in `/etc/agent-chat.env`). agy needs each WORK_DIR in its trustedWorkspaces.

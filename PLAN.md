@@ -212,7 +212,7 @@ logged in once (`claude auth login`); the desktop app's own login isn't usable b
 - Ubuntu 24.04 unprivileged LXC `agent-chat` at server.lan (8 cores, 8 GB, 10 GB disk; 2 GB was too small:
   CLI self-updates download ~200 MB each). Runs as root (dedicated container; CLIs were installed under /root).
 - Node 24 from the official tarball in /opt/node (Ubuntu's node is too old for `node:sqlite`); app in /opt/agent-chat,
-  systemd unit `agent-chat` (deploy/agent-chat.service: HOST=0.0.0.0, PATH incl. ~/.local/bin and ~/.opencode/bin,
+  systemd unit `agent-chat@<name>` (deploy/agent-chat@.service: HOST=0.0.0.0, PATH incl. ~/.local/bin and ~/.opencode/bin,
   secrets in /etc/agent-chat.env, mode 600). Update with `deploy/push.sh` (git archive HEAD → restart).
 - Logins (done once by the user over SSH): `claude auth login` (not setup-token: the adapter strips CLAUDE_CODE_*
   env vars), `codex login --device-auth`, `opencode auth login` (Z.AI Coding Plan key), `agy` (Google sign-in).
@@ -233,6 +233,11 @@ logged in once (`claude auth login`); the desktop app's own login isn't usable b
   drops plan mode for `--dangerously-skip-permissions`, OpenCode uses the build agent with `--auto`. Verified in a
   real discussion: all four wrote and ran benchmarks in their own workspaces and checked each other's numbers.
 - The app has no login: keep it on the LAN (or Tailscale / a reverse proxy with auth), never port-forward it.
+- **Family (2026-10-07): one instance per person** rather than users inside one server, because the scheduler and the
+  current discussion are global (two people chatting at once would fight over them). `agent-chat@alice` (3517, data/,
+  workspace/) and `agent-chat@bob` (3518, data-bob/, workspace-bob/; its chat.db started as a copy of Alice's with
+  discussions, sessions, decisions and memoryAt removed, so members and settings carried over). `/who` lists
+  `PROFILES` to pick from; the UI shows the profile top left, linking back. Same CLI logins and quota for both.
 
 ## Discussion modes (2026-10-03, experiment)
 

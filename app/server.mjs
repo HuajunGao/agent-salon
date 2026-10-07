@@ -14,7 +14,11 @@ import { validateMember, memberMentions, atToken } from './members.mjs';
 import { speechOn, loadCatalog, ttsModels, speakable, synth, transcribe, defaultVoice, FALLBACK_TTS } from './speech.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const DATA = join(ROOT, 'data'), WORK = join(ROOT, 'workspace');
+// One instance per person (PROFILE): each has its own DATA_DIR and WORK_DIR, so discussions, memory and workspaces
+// never mix. PROFILES ("Alice=:3517,Bob=:3518", a port on the same host or a full URL) lists them all for /who.
+const DATA = resolve(process.env.DATA_DIR || join(ROOT, 'data')), WORK = resolve(process.env.WORK_DIR || join(ROOT, 'workspace'));
+const PROFILE = process.env.PROFILE || '';
+const PROFILES = (process.env.PROFILES || '').split(',').filter(Boolean).map(p => p.split('=').map(x => x.trim()));
 // Every discussion is archived as data/discussions/<id>.md plus an index, so agents can look up earlier ones.
 const ARCHIVE = join(DATA, 'discussions'), MEMORY = join(DATA, 'memory.md');
 mkdirSync(ARCHIVE, { recursive: true }); mkdirSync(WORK, { recursive: true });
@@ -824,7 +828,7 @@ const viewState = c => ({ type: 'state', now: Date.now(), chatId: c, title: q1('
 function state() {
   const now = Date.now();
   return {
-    type: 'state', now, chatId, paused, mod, wrapped: !!wrapRound && wrapRound === lastUserId(chatId), settings: S, readLeft: Math.max(0, readUntil - now),
+    type: 'state', now, profile: PROFILE, chatId, paused, mod, wrapped: !!wrapRound && wrapRound === lastUserId(chatId), settings: S, readLeft: Math.max(0, readUntil - now),
     holding: now - typingAt < 15e3, speaking: now - speakingAt < 20e3,
     speech: { on: speechOn(), models: ttsModels(), defaults: Object.fromEntries(NAMES.map(n => [n, defaultVoice(NAMES.indexOf(n))])) },
     chats: listChats(),
@@ -1066,6 +1070,18 @@ http.createServer((req, res) => {
   if (key === 'GET /' || /^GET \/s\/[\w-]+$/.test(key)) { // /s/<code>: the same page, showing one discussion read-only
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(readFileSync(join(ROOT, 'app/index.html')));
+  }
+  if (key === 'GET /who') { // the entry page: pick whose chat to open (no login, LAN only)
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>agent-chat</title><style>body{font:16px system-ui,sans-serif;display:grid;place-content:center;gap:16px;min-height:90vh;margin:0}
+a{display:block;padding:18px 48px;border:1px solid #ccc;border-radius:12px;text-align:center;font-size:20px;color:inherit;text-decoration:none}
+a:hover{background:#f3f3f3}</style><h2 style="text-align:center;font-weight:500">你是谁？</h2>
+<script>for (const [name, at] of ${JSON.stringify(PROFILES.length ? PROFILES : [[PROFILE || 'agent-chat', '']]).replace(/</g, '\\u003c')}) {
+  const a = document.createElement('a'); a.textContent = name;
+  a.href = at.startsWith(':') ? location.protocol + '//' + location.hostname + at + '/' : at || '/';
+  document.body.append(a);
+}</script>`);
   }
   if (key === 'GET /vendor/marked.umd.js') {
     res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'max-age=86400' });

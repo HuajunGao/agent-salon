@@ -1,5 +1,5 @@
 [Unit]
-Description=agent-chat (agent group chat)
+Description=agent-chat for %i (agent group chat)
 After=network-online.target
 Wants=network-online.target
 
@@ -7,12 +7,13 @@ Wants=network-online.target
 WorkingDirectory=/opt/agent-chat
 ExecStart=/usr/local/bin/node app/server.mjs
 Environment=HOST=0.0.0.0
-Environment=PORT=3517
 Environment=HOME=/root
 # The CLIs install into the user's home, which a service's default PATH doesn't include.
 Environment=PATH=/root/.local/bin:/root/.opencode/bin:/usr/local/bin:/usr/bin:/bin
 # Secrets (TYPESAFE_API_KEY, optionally CLAUDE_CODE_OAUTH_TOKEN); chmod 600.
 EnvironmentFile=-/etc/agent-chat.env
+# One instance per person: PORT, PROFILE and, except the first, DATA_DIR and WORK_DIR (e.g. agent-chat-bob.env).
+EnvironmentFile=/etc/agent-chat-%i.env
 Restart=on-failure
 RestartSec=3
 
