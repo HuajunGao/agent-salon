@@ -111,23 +111,30 @@ export function debateBrief(d, name, phase, motion, handle) {
 // ---------- the reply protocol ----------
 // A reply may end with note lines, then "[STANCE 70%] verdict: position" (confidence 0-100), then [HAND]:
 //   [NOTE add] text      [NOTE edit N3] text      [NOTE drop N3]
-// and "[JOB] shell command" lines (background jobs, at most 2 per reply).
-// Returns {text, hand, stance: {t, c, l?} | null, notes: [{op, n?, text?}], jobs: [cmd]}; those markers are removed from the text.
+// and "[JOB] shell command" lines (background jobs, at most 2 per reply), "[TASK] what to do" / "[TASK shared] what to do"
+// (a background coding session in the member's workspace / a worktree of the shared repo, at most 1 per reply).
+// Returns {text, hand, stance: {t, c, l?} | null, notes: [{op, n?, text?}], jobs: [cmd], tasks: [{desc, shared}]};
+// those markers are removed from the text.
 // Agents don't keep to the layout: markers come mid-line ("…对上。[STANCE 94%] …"), several on one line
 // ("[HAND] [STANCE 70%] …"), or with more text after them (Claude appends "Sources:" after [HAND]). So a marker counts
 // anywhere except right after a backtick (`[HAND]` in code is talk about the protocol), and NOTE / STANCE / JOB take the
-// rest of their line. Except [JOB], which runs a command: only at the start of its own line, since members talk about
-// "[JOB]" mid-sentence and the rest of such a sentence was run as a shell command.
+// rest of their line. Except [JOB] and [TASK], which start real work: only at the start of their own line, since members
+// talk about "[JOB]" mid-sentence and the rest of such a sentence was run as a shell command.
 const HAND = /(?<!`)[*_]*\[HAND\][*_]*/gi;
 const JOB = /^[ \t>*_-]*\[JOB\][*_]*[ \t]*(.*)$/gim;
+const TASK = /^[ \t>*_-]*\[TASK(\s+shared)?\][*_]*[ \t:：]*(.*)$/gim;
 const STANCE = /(?<!`)[*_]*\[(?:STANCE|立场)\s*[:：]?\s*(\d{1,3})\s*%?\][ \t*_:：]*(.*)$/gim;
 const NOTE = /(?<!`)[*_]*\[NOTE\s+(add|edit|drop)(?:\s+N?(\d+))?\][ \t*_:：]*(.*)$/gim;
 export function parseReply(raw) {
-  const notes = [], jobs = [];
+  const notes = [], jobs = [], tasks = [];
   const hand = raw.search(HAND) >= 0;
   let text = raw.replace(HAND, '').replace(JOB, (_, cmd) => {
     cmd = cmd.trim().replace(/^`+|`+$/g, '').trim();
     if (cmd && jobs.length < 2) jobs.push(cmd);
+    return '';
+  }).replace(TASK, (_, shared, desc) => {
+    desc = desc.trim();
+    if (desc && !tasks.length) tasks.push({ desc: desc.slice(0, 2000), shared: !!shared });
     return '';
   }).replace(NOTE, (_, op, n, t) => {
     t = t.trim();
@@ -145,7 +152,7 @@ export function parseReply(raw) {
   });
   // Agents sometimes write a reply and then a stray "PASS" on its own last line: drop it (a bare PASS stays a pass).
   text = text.replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim().replace(/\n\s*PASS[.。!！]?$/i, '').trim();
-  return { text, hand, stance, notes, jobs };
+  return { text, hand, stance, notes, jobs, tasks };
 }
 
 // Applies note ops to a list [{n, text, ...}]: returns the ops that changed something, with the numbers they got.

@@ -241,8 +241,8 @@ AGENTS.hermes = {
 };
 
 // Run one turn. onLive(text) receives a readable live log; aborting `signal` ends it (error 'stopped').
-// Resolves {text, sid, error, ms}.
-export function runTurn(agent, prompt, sid, { cwd, dataDir, shared, model, exec, member, onLive, signal }) {
+// Resolves {text, sid, error, ms}. idleMs / totalMs: longer limits for background tasks.
+export function runTurn(agent, prompt, sid, { cwd, dataDir, shared, model, exec, member, onLive, signal, idleMs = IDLE_MS, totalMs = TOTAL_MS }) {
   const a = AGENTS[agent];
   const t0 = Date.now();
   if (a.http) {
@@ -267,10 +267,10 @@ export function runTurn(agent, prompt, sid, { cwd, dataDir, shared, model, exec,
       else try { process.kill(-p.pid, 'SIGKILL'); } catch {}
     };
     if (signal?.aborted) kill('stopped'); else signal?.addEventListener('abort', () => kill('stopped'), { once: true });
-    let idle = setTimeout(() => kill('idle timeout'), IDLE_MS);
-    const total = setTimeout(() => kill('total timeout'), TOTAL_MS);
+    let idle = setTimeout(() => kill('idle timeout'), idleMs);
+    const total = setTimeout(() => kill('total timeout'), totalMs);
     const onData = d => {
-      clearTimeout(idle); idle = setTimeout(() => kill('idle timeout'), IDLE_MS);
+      clearTimeout(idle); idle = setTimeout(() => kill('idle timeout'), idleMs);
       const s = d.toString('utf8');
       raw = (raw + s).slice(-20000);
       buf += s;

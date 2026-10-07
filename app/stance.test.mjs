@@ -11,11 +11,11 @@ import { parseReply } from './modes.mjs';
 
 test('parseReply takes the stance line and [HAND] off the reply', () => {
   assert.deepEqual(parseReply('用真实库更可靠，见 #3。\n[STANCE 70%] 集成测试用真实测试库'),
-    { text: '用真实库更可靠，见 #3。', hand: false, stance: { t: '集成测试用真实测试库', c: 70 }, notes: [], jobs: [] });
+    { text: '用真实库更可靠，见 #3。', hand: false, stance: { t: '集成测试用真实测试库', c: 70 }, notes: [], jobs: [], tasks: [] });
   assert.deepEqual(parseReply('同意。\n**[立场：85%]** 拆分要等团队变大 [HAND]'),
-    { text: '同意。', hand: true, stance: { t: '拆分要等团队变大', c: 85 }, notes: [], jobs: [] });
-  assert.deepEqual(parseReply('观点。\n[STANCE 60%] 先上单体\n[HAND]'), { text: '观点。', hand: true, stance: { t: '先上单体', c: 60 }, notes: [], jobs: [] });
-  assert.deepEqual(parseReply('没有立场行 [HAND]'), { text: '没有立场行', hand: true, stance: null, notes: [], jobs: [] });
+    { text: '同意。', hand: true, stance: { t: '拆分要等团队变大', c: 85 }, notes: [], jobs: [], tasks: [] });
+  assert.deepEqual(parseReply('观点。\n[STANCE 60%] 先上单体\n[HAND]'), { text: '观点。', hand: true, stance: { t: '先上单体', c: 60 }, notes: [], jobs: [], tasks: [] });
+  assert.deepEqual(parseReply('没有立场行 [HAND]'), { text: '没有立场行', hand: true, stance: null, notes: [], jobs: [], tasks: [] });
   assert.equal(parseReply('PASS').text, 'PASS');
   assert.equal(parseReply('[STANCE 250%] x').stance.c, 100);
   assert.deepEqual(parseReply('好。\n[STANCE 75%] 条件支持：小额、核实过再捐').stance, { t: '小额、核实过再捐', c: 75, l: '条件支持' });
@@ -25,15 +25,15 @@ test('parseReply takes the stance line and [HAND] off the reply', () => {
 // Markers that leaked into the chat on the server, as the members wrote them.
 test('parseReply finds markers mid-line, several on a line, and before more text', () => {
   assert.deepEqual(parseReply('谁接手都能对上。[STANCE 94%] verdict: 材料封箱，分叉交由双方对拍'),
-    { text: '谁接手都能对上。', hand: false, stance: { t: '材料封箱，分叉交由双方对拍', c: 94 }, notes: [], jobs: [] });
+    { text: '谁接手都能对上。', hand: false, stance: { t: '材料封箱，分叉交由双方对拍', c: 94 }, notes: [], jobs: [], tasks: [] });
   assert.deepEqual(parseReply('可以先排。 [HAND] [STANCE 80%] verdict: 先做一次短期独旅'),
-    { text: '可以先排。', hand: true, stance: { t: '先做一次短期独旅', c: 80 }, notes: [], jobs: [] });
+    { text: '可以先排。', hand: true, stance: { t: '先做一次短期独旅', c: 80 }, notes: [], jobs: [], tasks: [] });
   assert.deepEqual(parseReply('出错谁负责。\n\n\n\n[HAND]\n\n\nSources:\n- [newsGP](https://x.example)'),
-    { text: '出错谁负责。\n\nSources:\n- [newsGP](https://x.example)', hand: true, stance: null, notes: [], jobs: [] });
+    { text: '出错谁负责。\n\nSources:\n- [newsGP](https://x.example)', hand: true, stance: null, notes: [], jobs: [], tasks: [] });
   assert.deepEqual(parseReply('坑都在工程侧。[NOTE add] 需 --legacy-peer-deps\n[STANCE 90%] 能落地').notes, [{ op: 'add', text: '需 --legacy-peer-deps' }]);
   // talk about the protocol, in code, isn't a marker
   assert.deepEqual(parseReply('已有 `[NOTE]` 机制，结尾写 `[HAND]` 即可。'),
-    { text: '已有 `[NOTE]` 机制，结尾写 `[HAND]` 即可。', hand: false, stance: null, notes: [], jobs: [] });
+    { text: '已有 `[NOTE]` 机制，结尾写 `[HAND]` 即可。', hand: false, stance: null, notes: [], jobs: [], tasks: [] });
   assert.equal(parseReply('PASS [HAND]').text, 'PASS');
   assert.deepEqual(parseReply('开跑。\n[JOB] `cd /x && python run.py --resume` [HAND]\n[STANCE 90%] 好').jobs, ['cd /x && python run.py --resume']);
   assert.equal(parseReply('[JOB] a\n[JOB] b\n[JOB] c').jobs.length, 2);
@@ -43,6 +43,11 @@ test('parseReply finds markers mid-line, several on a line, and before more text
   assert.ok(talk.text.includes('[JOB] 全链路'));
   assert.deepEqual(talk.notes, [{ op: 'add', text: '[JOB]机制首个探针结果为failed' }]);
   assert.deepEqual(parseReply('好。\n- **[JOB]** `python run.py`').jobs, ['python run.py']);
+  // [TASK] / [TASK shared]: one per reply, only on a line of its own
+  const t = parseReply('我去改主控。\n[TASK shared] 主控加断点续跑，跑通 10 局自测\n[TASK] 第二个不算\n[STANCE 80%] 改');
+  assert.deepEqual(t.tasks, [{ desc: '主控加断点续跑，跑通 10 局自测', shared: true }]);
+  assert.equal(t.text, '我去改主控。');
+  assert.deepEqual(parseReply('长活用 [TASK] 更好。\n- [TASK]：在我工作区写个基准').tasks, [{ desc: '在我工作区写个基准', shared: false }]);
 });
 
 // Real server + SQLite with a fake harness that records when each turn starts; no Jev key.

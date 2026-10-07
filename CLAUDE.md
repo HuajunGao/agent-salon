@@ -70,13 +70,23 @@ Moderator notes are `kind='moderator'` messages: shown in the UI,
 never sent to agents or Jev (`TALK` filter).
 Reply markers [HAND], [NOTE], [STANCE] count anywhere in a reply except inside backticks: agents put them mid-line,
 several on one line, or before appended text (Claude's "Sources:"); line-anchored parsing leaked them into the chat.
-[JOB] runs a command, so it only counts at the start of its own line (mid-sentence mentions were run as shell commands).
+[JOB] and [TASK] start real work, so they only count at the start of their own line (mid-sentence mentions of [JOB]
+were run as shell commands). If markers keep multiplying, the next step is our own MCP server (actions as tool calls).
 
-Shared work (exec mode only): `WORK/_shared` is the members' git repo, its `public/` served at `/w/`; after every turn
-and job the server commits what changed there as that member (`commitShared`, files over 500 KB skipped). A turn's
-processes die with the CLI, so long work goes in a `[JOB] <command>` line: `startJob` runs it as the agent user in its
-own session, logs to `WORK/_jobs/J<id>.log`, posts start/end notes, and wakes the member (hand `why: 'job'`, uncapped)
-with the result in its next prompt (`jobReport`). Jobs are in the `jobs` table; a restart marks running ones interrupted.
+Shared work (exec mode only): `WORK/_shared` is the members' git repo, its `public/` served at `/w/`; after every turn,
+job and task the server commits what changed there as that member (`commitShared`, files over 500 KB skipped). Members
+exist only during their turns (the prompt says so: they used to announce work "running in the background" that wasn't).
+A turn's processes die with the CLI, so long work goes in a line of its own:
+- `[JOB] <command>`: `startJob` runs it as the agent user in its own session, logging to `WORK/_jobs/J<id>.log`.
+- `[TASK] <what to do>`: `startTask` runs the member's own harness and model as a fresh background session (60 min, no
+  chat) in its workspace; `[TASK shared]` in a git worktree `WORK/_tasks/T<id>` on branch `task/T<id>`. At the end the
+  worktree is committed and removed; a done task is merged (`--no-ff`) and its branch deleted, a conflict is aborted and
+  the branch kept for the member. `cleanupTasks` (start + daily) prunes worktrees, deletes merged task branches and
+  unmerged ones older than 7 days. One task per member, 3 in all.
+Both post start/end notes and wake the member (hand `why: 'job'`, uncapped, past Jev's filter) with the result in its
+next prompt (`jobReport`: log tail / task summary and merge outcome). Rows in the `jobs` table (`kind` job|task); a
+restart marks running ones interrupted (worktree committed to its branch) and still tells and wakes the member. Jev
+doesn't wrap up a round while one of the discussion's jobs or tasks runs.
 
 Agents' context: a new CLI session gets `intro()` (rules, members, archive location, the user memory) plus recent
 history; resumed sessions get only unseen messages plus a per-turn footer. Discussions are archived as

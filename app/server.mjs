@@ -31,31 +31,33 @@ const RUNAS = process.env.AGENT_USER ? runAs(process.env.AGENT_USER) : null;
 const wsOf = a => join(WORK, a);
 // The members' common project directory (a git repo; handles start with a letter, so no member owns "_shared").
 // Its public/ is served at /w/, so what they build can be opened in the browser.
-// Background jobs' logs live next to it (not in the repo): workspace/_jobs/J<id>.log.
-const SHARED = join(WORK, '_shared'), PUBLIC = join(SHARED, 'public'), JOBS = join(WORK, '_jobs');
-const jobLog = id => join(JOBS, `J${id}.log`);
-mkdirSync(PUBLIC, { recursive: true }); mkdirSync(JOBS, { recursive: true });
+// Background jobs' and tasks' logs live next to it (not in the repo): workspace/_jobs/J<id>.log / T<id>.log;
+// [TASK shared] worktrees in workspace/_tasks/T<id> (branch task/T<id>), removed when the task ends.
+const SHARED = join(WORK, '_shared'), PUBLIC = join(SHARED, 'public'), JOBS = join(WORK, '_jobs'), TASKS = join(WORK, '_tasks');
+const jobLog = (id, kind = 'job') => join(JOBS, `${kind === 'task' ? 'T' : 'J'}${id}.log`);
+mkdirSync(PUBLIC, { recursive: true }); mkdirSync(JOBS, { recursive: true }); mkdirSync(TASKS, { recursive: true });
 // The shared Python environment and caches stay out of the repo the server commits.
 const IGNORE = join(SHARED, '.gitignore');
 const ignored = existsSync(IGNORE) ? readFileSync(IGNORE, 'utf8').split('\n') : [];
 const missing = ['.venv/', '__pycache__/', '*.pyc'].filter(l => !ignored.includes(l));
 if (missing.length) appendFileSync(IGNORE, (ignored.length && ignored.at(-1) !== '' ? '\n' : '') + missing.join('\n') + '\n');
 if (RUNAS) {
-  for (const d of [SHARED, PUBLIC, JOBS, IGNORE]) chownSync(d, RUNAS.uid, RUNAS.gid);
+  for (const d of [SHARED, PUBLIC, JOBS, TASKS, IGNORE]) chownSync(d, RUNAS.uid, RUNAS.gid);
   if (!existsSync(join(SHARED, '.git'))) spawnSync('git', ['init', '-q'], { cwd: SHARED, uid: RUNAS.uid, gid: RUNAS.gid });
 }
-// After a member's turn or job, whatever changed in the shared repo is committed with that member as the author,
-// so the history says who changed what. Big files (replays, data dumps) stay uncommitted.
+// git as the agent user, committing as member `a`.
+const git = (a, cwd, ...args) => spawnSync('git', ['-c', `user.name=${a}`, '-c', `user.email=${a}@agent-chat`, ...args],
+  { cwd, uid: RUNAS.uid, gid: RUNAS.gid, env: { HOME: RUNAS.home, PATH: process.env.PATH }, encoding: 'utf8' });
+// After a member's turn, job or task, whatever changed in the shared repo (or a task's worktree) is committed with that
+// member as the author, so the history says who changed what. Big files (replays, data dumps) stay uncommitted.
 const COMMIT_MAX = 500e3; // ponytail: size cut instead of per-project ignore rules; the members can add .gitignore lines
-function commitShared(a, message) {
+function commitShared(a, message, dir = SHARED) {
   if (!RUNAS) return;
-  const git = (...args) => spawnSync('git', ['-c', `user.name=${a}`, '-c', `user.email=${a}@agent-chat`, ...args],
-    { cwd: SHARED, uid: RUNAS.uid, gid: RUNAS.gid, env: { HOME: RUNAS.home, PATH: process.env.PATH }, encoding: 'utf8' });
-  git('add', '-A');
-  const big = git('diff', '--cached', '--name-only', '--diff-filter=AM', '-z').stdout.split('\0')
-    .filter(f => f && statSync(join(SHARED, f), { throwIfNoEntry: false })?.size > COMMIT_MAX);
-  for (let i = 0; i < big.length; i += 100) git('reset', '-q', '--', ...big.slice(i, i + 100));
-  git('commit', '-q', '-m', message);
+  git(a, dir, 'add', '-A');
+  const big = git(a, dir, 'diff', '--cached', '--name-only', '--diff-filter=AM', '-z').stdout.split('\0')
+    .filter(f => f && statSync(join(dir, f), { throwIfNoEntry: false })?.size > COMMIT_MAX);
+  for (let i = 0; i < big.length; i += 100) git(a, dir, 'reset', '-q', '--', ...big.slice(i, i + 100));
+  git(a, dir, 'commit', '-q', '-m', message);
 }
 const PORT = +process.env.PORT || 3517, HOST = process.env.HOST || '127.0.0.1'; // HOST=0.0.0.0 to serve the LAN
 const NAMES = [];
@@ -74,9 +76,12 @@ CREATE TABLE IF NOT EXISTS agent_sessions(chat_id INTEGER, agent TEXT, cli_sessi
 CREATE TABLE IF NOT EXISTS decisions(id INTEGER PRIMARY KEY, chat_id INTEGER, at TEXT DEFAULT CURRENT_TIMESTAMP, mode TEXT,
   event TEXT, agent TEXT, score REAL, detail TEXT, based_on INTEGER, message_id INTEGER, latency_ms INTEGER);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
--- Members' background jobs ([JOB] lines); status: running / done / failed / stopped / timeout / interrupted.
+-- Members' background jobs ([JOB]: kind 'job', cmd = the command) and tasks ([TASK]: kind 'task', cmd = what to do,
+-- branch = task/T<id> for [TASK shared]); status: running / done / failed / stopped / timeout / interrupted.
 CREATE TABLE IF NOT EXISTS jobs(id INTEGER PRIMARY KEY, chat_id INTEGER, agent TEXT, cmd TEXT, msg_id INTEGER, status TEXT,
   code INTEGER, started_at TEXT DEFAULT CURRENT_TIMESTAMP, ended_at TEXT);`);
+for (const [col, def] of [['kind', "TEXT DEFAULT 'job'"], ['branch', 'TEXT']])
+  if (!db.prepare('PRAGMA table_info(jobs)').all().some(c => c.name === col)) db.exec(`ALTER TABLE jobs ADD COLUMN ${col} ${def}`);
 db.exec(`CREATE TABLE IF NOT EXISTS members(name TEXT PRIMARY KEY, config TEXT NOT NULL);`);
 // role: 'devil' | 'summary' for moderator-requested turns; mode: the discussion mode an agent message was written in;
 // stance: JSON {t: position, c: confidence 0-100, changed?, evidence?: Jev's view of a change} from the reply's [STANCE] line.
@@ -563,10 +568,17 @@ const toolRule = a => (execOn()
   \`uv pip install\`, record dependencies in requirements.txt), not a private one. Files in ${PUBLIC} are served at
   ${wURL()} (e.g. ${PUBLIC}/arena/index.html → ${wURL()}arena/index.html): give the user those links, and don't start
   web servers of your own.
-  Processes you start end with your turn. For anything longer (a tournament, a long build or benchmark), put a line
-  \`[JOB] <shell command>\` in your reply: the server runs it in the background as you (cwd: your workspace), logs to
-  ${JOBS}/J<id>.log, tells the chat, and wakes you with the result when it ends. A server restart stops running jobs,
-  so make long ones resumable (save results as you go, skip finished work). At most ${JOB_MAX} jobs run at once.`
+  You exist only during your turns: once your reply is sent, nothing of yours runs until you are woken again, and
+  processes you started end with the turn. So never say you will now go and do something ("我这就去跑…") unless you
+  started it as a job or task below: do it in this turn and report the result, or say it waits for your next turn.
+  For anything longer, put one of these on a line of its own in your reply (the line is taken out of your message):
+  \`[JOB] <shell command>\` runs a command in the background as you (cwd: your workspace; a tournament, a long build or
+  benchmark), logging to ${JOBS}/J<id>.log. \`[TASK] <what to do>\` starts a background coding session of your own (your
+  CLI and model, up to ${TASK_MS / 60e3} minutes, no chat) in your workspace; \`[TASK shared] <what to do>\` does it in a
+  git worktree of the shared repo and merges it back when done, so several members can work on the shared code at once.
+  Describe the task fully: it sees only the description and the last messages. Meanwhile you keep chatting. When a job
+  or task ends the chat is told and you are woken with its result (a task's summary, a job's log tail). At most one task
+  of yours at a time; a server restart stops what is running, so make long jobs resumable (save results as you go).`
   : `The discussion is read-only: don't create, edit or delete files. ${SHELL_RULE[memberConfigs[a].harness] || SHELL_RULE.default}`);
 const SHELL_RULE = {
   codex: 'Your sandbox is read-only: read-only shell commands (cat, rg, ls) are fine for reading files.',
@@ -682,13 +694,13 @@ async function startTurn(a, retried = false) {
     logDecision('error', a, { based_on: basedOn, latency_ms: res.ms, detail: { error: res.error } });
     insertMsg({ chat_id: chat, sender: 'system', kind: 'system', text: `⚠ ${memberConfigs[a].label} 出错: ${res.error}`, based_on: basedOn, latency_ms: res.ms });
   } else {
-    const reply = parseReply(res.text), { hand, stance, notes } = reply, jobs = execOn() ? reply.jobs : [];
-    text = reply.text || (jobs.length ? '（启动后台任务）' : '');
-    if (/^PASS[.。!！]?$/i.test(text) && !summary && !jobs.length) {
+    const reply = parseReply(res.text), { hand, stance, notes } = reply, jobs = execOn() ? reply.jobs : [], todo = execOn() ? reply.tasks : [];
+    text = reply.text || (jobs.length || todo.length ? '（启动后台任务）' : '');
+    if (/^PASS[.。!！]?$/i.test(text) && !summary && !jobs.length && !todo.length) {
       rt[a].note = 'PASS'; text = '';
       logDecision('pass', a, { based_on: basedOn, latency_ms: res.ms });
     } else {
-      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, stance, notes, jobs, seat, slot, model: model || 'default', role, done: Date.now() });
+      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, stance, notes, jobs, todo, seat, slot, model: model || 'default', role, done: Date.now() });
       // A browser is reading aloud: synthesize while the reply waits in the queue, so it plays without delay.
       if (speechOn() && Date.now() - ttsActiveAt < 120e3) synth(spoken(a, text), voiceOf(a)).catch(() => {});
       logDecision('ready', a, { based_on: basedOn, latency_ms: res.ms, detail: { hand, chars: text.length } });
@@ -739,6 +751,7 @@ function publishOne(r) {
     saveState(r.chat, st);
   }
   for (const cmd of r.jobs || []) startJob(r.agent, r.chat, cmd, m.id);
+  for (const t of r.todo || []) startTask(r.agent, r.chat, t, m.id);
   if (r.stance && r.role !== 'devil' && r.role !== 'summary') checkShift(m);
   if (r.role === 'verdict') finishDebate(r.chat);
   run('UPDATE agent_sessions SET turns=turns+1 WHERE chat_id=? AND agent=?', r.chat, r.agent);
@@ -757,20 +770,61 @@ function publishOne(r) {
   return m;
 }
 
-// ---------- background jobs ----------
-// A member's [JOB] line runs as its own process (setsid), so it outlives the turn; when it ends the chat hears about
-// it and the member is woken with the result. A server restart stops running jobs (systemd kills the service's
-// cgroup): they are reported as interrupted at the next start.
+// ---------- background jobs and tasks ----------
+// A member's [JOB] line runs a command as its own process (setsid), so it outlives the turn. A [TASK] line starts a
+// background coding session: the member's own CLI and model, a fresh session, no chat pacing and longer limits, in
+// the member's workspace or, for [TASK shared], in a git worktree of the shared repo (branch task/T<id>) that is
+// merged back when it ends. Either way the chat hears about the end and the member is woken with the result.
+// A server restart stops what is running (systemd kills the service's cgroup): reported as interrupted at the next start.
 const JOB_MAX = 3, JOB_MS = 3 * 3600e3; // ponytail: global caps, per-member limits if one member hogs the slots
+const TASK_MAX = 3, TASK_MS = 60 * 60e3, TASK_IDLE_MS = 15 * 60e3; // tasks: also one per member at a time
 const procs = new Map(); // job id -> child process
+const tasks = new Map(); // task id -> {agent, abort, live, why}
+const tag = (id, kind) => `${kind === 'task' ? 'T' : 'J'}${id}`;
 const jobNote = (chat, text) => insertMsg({ chat_id: chat, sender: 'moderator', kind: 'moderator', text });
 const dur = ms => (ms < 60e3 ? `${Math.round(ms / 1000)} 秒` : `${Math.floor(ms / 60e3)} 分 ${Math.round(ms % 60e3 / 1000)} 秒`);
-for (const j of q(`SELECT * FROM jobs WHERE status='running'`)) {
-  run(`UPDATE jobs SET status='interrupted', ended_at=CURRENT_TIMESTAMP WHERE id=?`, j.id);
-  if (q1('SELECT 1 FROM chats WHERE id=?', j.chat_id)) jobNote(j.chat_id, `⚠ 后台任务 J${j.id}（@${memberConfigs[j.agent] ? atOf(j.agent) : j.agent}）因服务器重启中断：\`${j.cmd}\``);
+const memberAt = a => (memberConfigs[a] ? atOf(a) : a);
+const running = chat => !!q1(`SELECT 1 FROM jobs WHERE status='running' AND chat_id=?`, chat);
+
+// Worktree cleanup. A task's worktree is removed as soon as the task ends (its changes are committed to its branch
+// first); the branch is deleted once merged. Unmerged branches (conflict, failed or stopped task) stay for the member
+// to merge by hand, and are deleted after a week. At start, worktrees of interrupted tasks are committed and removed.
+const BRANCH_DAYS = 7;
+function dropWorktree(a, id, dir, status) {
+  commitShared(a, `${a}: task T${id} (${status})`, dir);
+  git(a, SHARED, 'worktree', 'remove', '--force', dir);
 }
+function cleanupTasks() {
+  if (!RUNAS) return;
+  git('server', SHARED, 'worktree', 'prune');
+  for (const b of git('server', SHARED, 'branch', '--merged', 'HEAD', '--list', 'task/*', '--format=%(refname:short)').stdout.split('\n').filter(Boolean))
+    if (!q1(`SELECT 1 FROM jobs WHERE status='running' AND branch=?`, b)) git('server', SHARED, 'branch', '-d', b);
+  const old = Date.now() / 1000 - BRANCH_DAYS * 86400;
+  for (const line of git('server', SHARED, 'for-each-ref', '--format=%(refname:short) %(committerdate:unix)', 'refs/heads/task/').stdout.split('\n').filter(Boolean)) {
+    const [b, at] = line.split(' ');
+    if (+at < old && !q1(`SELECT 1 FROM jobs WHERE status='running' AND branch=?`, b)) {
+      git('server', SHARED, 'branch', '-D', b); logDecision('task-branch-expired', null, { detail: { branch: b } });
+    }
+  }
+}
+// Run once the whole module is initialized: the notes go out through send(), defined further down (calling it here
+// crashed the start whenever a job had been running).
+setImmediate(() => { for (const j of q(`SELECT * FROM jobs WHERE status='running'`)) {
+  run(`UPDATE jobs SET status='interrupted', ended_at=CURRENT_TIMESTAMP WHERE id=?`, j.id);
+  if (j.branch && RUNAS && existsSync(join(TASKS, `T${j.id}`))) dropWorktree(j.agent, j.id, join(TASKS, `T${j.id}`), 'interrupted');
+  if (!q1('SELECT 1 FROM chats WHERE id=?', j.chat_id)) continue;
+  jobNote(j.chat_id, `⚠ 后台任务 ${tag(j.id, j.kind)}（@${memberAt(j.agent)}）因服务器重启中断`
+    + `${j.branch ? `，改动保留在分支 ${j.branch}` : ''}：\`${j.cmd}\``);
+  // The member hears about it too (moderator notes never reach the members), and in the current discussion is woken.
+  if (!rt[j.agent]) continue;
+  (rt[j.agent].jobs ??= []).push({ kind: j.kind, id: j.id, cmd: j.cmd, chat: j.chat_id, status: 'interrupted', why: 'the server restarted',
+    ...(j.branch && { branch: j.branch, merge: 'kept' }) });
+  if (j.chat_id === chatId) raise(j.agent, 3, 'job');
+} cleanupTasks(); });
+setInterval(cleanupTasks, 86400e3);
+
 function startJob(a, chat, cmd, msgId) {
-  if (procs.size >= JOB_MAX) return jobDone(a, chat, { cmd, status: 'rejected', why: `已有 ${JOB_MAX} 个后台任务在跑` });
+  if (procs.size >= JOB_MAX) return jobDone(a, chat, { kind: 'job', cmd, status: 'rejected', why: `已有 ${JOB_MAX} 个后台任务在跑` });
   const id = Number(run(`INSERT INTO jobs(chat_id, agent, cmd, msg_id, status) VALUES(?,?,?,?,'running')`, chat, a, cmd, msgId).lastInsertRowid);
   const fd = openSync(jobLog(id), 'w');
   if (RUNAS) fchownSync(fd, RUNAS.uid, RUNAS.gid);
@@ -786,7 +840,7 @@ function startJob(a, chat, cmd, msgId) {
     run('UPDATE jobs SET status=?, code=?, ended_at=CURRENT_TIMESTAMP WHERE id=?', status, code ?? null, id);
     logDecision('job-end', a, { message_id: msgId, latency_ms: Date.now() - t0, detail: { job: id, status, code, error } });
     commitShared(a, `${a}: job J${id} ${status}: ${cmd}`.slice(0, 200));
-    jobDone(a, chat, { id, cmd, status, code, ms: Date.now() - t0, why: error });
+    jobDone(a, chat, { kind: 'job', id, cmd, status, code, ms: Date.now() - t0, why: error, tail: readFileSync(jobLog(id), 'utf8').slice(-1500) });
   };
   p.on('error', e => end(null, e.message));
   p.on('exit', code => end(code));
@@ -794,30 +848,110 @@ function startJob(a, chat, cmd, msgId) {
   jobNote(chat, `▶ @${atOf(a)} 启动后台任务 J${id}：\`${cmd}\``);
   sendState();
 }
+
+function startTask(a, chat, { desc, shared }, msgId) {
+  const harness = memberConfigs[a].harness;
+  const reject = why => jobDone(a, chat, { kind: 'task', cmd: desc, status: 'rejected', why });
+  if (AGENTS[harness].http) return reject('这位成员不能操作文件');
+  if ([...tasks.values()].some(t => t.agent === a)) return reject('你已有一个后台写代码任务在跑');
+  if (tasks.size >= TASK_MAX) return reject(`已有 ${TASK_MAX} 个后台写代码任务在跑`);
+  const id = Number(run(`INSERT INTO jobs(chat_id, agent, cmd, msg_id, status, kind) VALUES(?,?,?,?,'running','task')`, chat, a, desc, msgId).lastInsertRowid);
+  const branch = shared ? `task/T${id}` : null, cwd = shared ? join(TASKS, `T${id}`) : wsOf(a);
+  if (shared) {
+    // The worktree starts from the shared repo as it is now (committed first; a fresh repo gets an empty first commit).
+    commitShared(a, `${a}: before task T${id}`);
+    if (git(a, SHARED, 'rev-parse', '--verify', '-q', 'HEAD').status) git(a, SHARED, 'commit', '-q', '--allow-empty', '-m', 'start');
+    const w = git(a, SHARED, 'worktree', 'add', '-q', '-b', branch, cwd, 'HEAD');
+    if (w.status) {
+      run(`UPDATE jobs SET status='failed', ended_at=CURRENT_TIMESTAMP WHERE id=?`, id);
+      return jobDone(a, chat, { kind: 'task', id, cmd: desc, status: 'failed', why: `建 worktree 失败：${w.stderr.trim().slice(0, 200)}` });
+    }
+    run('UPDATE jobs SET branch=? WHERE id=?', branch, id);
+  }
+  const model = S.models[a], t = { agent: a, abort: new AbortController(), live: '' }, t0 = Date.now();
+  tasks.set(id, t);
+  logDecision('task-start', a, { message_id: msgId, detail: { task: id, shared, desc } });
+  jobNote(chat, `▶ @${atOf(a)} 启动后台写代码任务 T${id}（${shared ? `共享仓分支 ${branch}` : '自己的工作区'}）：${desc}`);
+  sendState();
+  runTurn(harness, taskPrompt(a, chat, id, desc, cwd, branch, msgId), null, {
+    cwd, dataDir: DATA, shared: SHARED, model, exec: true, member: { ...memberConfigs[a], model },
+    onLive: log => { t.live = log; sendStateSoon(); }, signal: t.abort.signal, idleMs: TASK_IDLE_MS, totalMs: TASK_MS,
+  }).then(res => {
+    tasks.delete(id);
+    const status = res.error === 'stopped' ? 'stopped' : /timeout/.test(res.error || '') ? 'timeout' : res.error ? 'failed' : 'done';
+    writeFileSync(jobLog(id, 'task'), `${t.live}\n\n--- ${status}${res.error ? `: ${res.error}` : ''} ---\n${res.text || ''}\n`);
+    let merge = null;
+    if (shared) {
+      dropWorktree(a, id, cwd, status);
+      if (status === 'done') {
+        commitShared(a, `${a}: before merging task T${id}`);
+        const m = git(a, SHARED, 'merge', '-q', '--no-ff', '-m', `${a}: merge task T${id}: ${desc}`.slice(0, 200), branch);
+        if (m.status) { git(a, SHARED, 'merge', '--abort'); merge = 'conflict'; }
+        else { git(a, SHARED, 'branch', '-q', '-d', branch); merge = 'merged'; }
+      } else merge = 'kept';
+    } else commitShared(a, `${a}: task T${id} ${status}`.slice(0, 200));
+    run('UPDATE jobs SET status=?, ended_at=CURRENT_TIMESTAMP WHERE id=?', status, id);
+    logDecision('task-end', a, { message_id: msgId, latency_ms: res.ms, detail: { task: id, status, error: res.error || null, merge } });
+    jobDone(a, chat, { kind: 'task', id, cmd: desc, status, ms: Date.now() - t0, why: res.error && status === 'failed' ? res.error : '',
+      summary: res.text, branch, merge });
+  });
+}
+function taskPrompt(a, chat, id, desc, cwd, branch, msgId) {
+  const title = q1('SELECT title FROM chats WHERE id=?', chat)?.title || '';
+  const recent = q(`SELECT * FROM messages WHERE chat_id=? AND ${TALK} ORDER BY id DESC LIMIT 12`, chat).reverse().map(fmt).join('\n\n');
+  return `You are ${describe(a)}, a member of a group chat on the user's machine. In the discussion "${title}" you started
+a background task for yourself (#${msgId}, task T${id}):
+
+${desc}
+
+Do it now, on your own: this is not a chat turn, nobody answers questions during it, and the chat goes on without you.
+Work in ${cwd}${branch ? `, a git worktree of the shared repo ${SHARED} on branch ${branch}. When you finish, the server
+commits your changes and merges the branch into the shared repo; don't merge or push yourself, and keep the changes to
+what the task needs so the merge stays clean. Pages you put in public/ appear under ${wURL()} after the merge.` : ` (your own workspace).`}
+Python: use ${SHARED}/.venv. You have up to ${TASK_MS / 60e3} minutes; long commands are fine. Test what you build.
+When you are done, reply in ${S.language} with a short summary: what you changed (files), how you verified it, and what
+is left or uncertain. The summary goes back to you in the chat.
+
+Recent messages in the discussion, for context:
+
+${recent}`;
+}
+
 function killJob(id, why) {
+  const t = tasks.get(id);
+  if (t) return t.abort.abort();
   const p = procs.get(id);
   if (!p) return;
   p.why = why;
   try { process.kill(-p.pid, 'SIGTERM'); } catch {}
   setTimeout(() => { try { process.kill(-p.pid, 'SIGKILL'); } catch {} }, 5000);
 }
-// Tells the chat and wakes the member, whose next turn gets the result and the end of the log.
+// Tells the chat and wakes the member, whose next turn gets the result (a job's log tail, a task's summary).
 const JOB_TEXT = { done: '完成', failed: '失败', stopped: '已被停止', timeout: '超时被停止', rejected: '没有启动' };
+const MERGE_TEXT = { merged: '，改动已合并到共享仓', conflict: '，合并有冲突，改动保留在分支 BRANCH', kept: '，改动保留在分支 BRANCH' };
 function jobDone(a, chat, j) {
-  const tail = j.id ? readFileSync(jobLog(j.id), 'utf8').slice(-1500) : '';
-  jobNote(chat, `${j.status === 'done' ? '✅' : '⚠'} 后台任务${j.id ? ` J${j.id}` : ''}（@${atOf(a)}）${JOB_TEXT[j.status]}`
-    + `${j.code ? `，退出码 ${j.code}` : ''}${j.ms != null ? `，用时 ${dur(j.ms)}` : ''}${j.why ? `：${j.why}` : ''}。`);
-  (rt[a].jobs ??= []).push({ ...j, chat, tail });
+  jobNote(chat, `${j.status === 'done' && j.merge !== 'conflict' ? '✅' : '⚠'} 后台${j.kind === 'task' ? '写代码' : ''}任务`
+    + `${j.id ? ` ${tag(j.id, j.kind)}` : ''}（@${atOf(a)}）${JOB_TEXT[j.status]}`
+    + `${j.code ? `，退出码 ${j.code}` : ''}${j.ms != null ? `，用时 ${dur(j.ms)}` : ''}${j.merge ? MERGE_TEXT[j.merge].replace('BRANCH', j.branch) : ''}`
+    + `${j.why ? `：${j.why}` : ''}。`);
+  (rt[a].jobs ??= []).push({ ...j, chat });
   if (chat === chatId && j.status !== 'stopped') raise(a, 3, 'job');
   pump();
 }
-// The finished jobs a member hasn't heard about yet, for its next turn in that discussion.
+// The finished jobs and tasks a member hasn't heard about yet, for its next turn in that discussion.
+const MERGE_INFO = {
+  merged: 'Its changes were merged into the shared repo.',
+  conflict: `Merging it into the shared repo conflicted, so nothing was merged: the changes are on branch BRANCH. Merge it in ${SHARED} (git merge BRANCH), resolve the conflicts and commit, or start another task to do that.`,
+  kept: `Nothing was merged: the changes so far are on branch BRANCH in ${SHARED} (merge or delete it).`,
+};
 function jobReport(a, chat) {
   const mine = (rt[a].jobs || []).filter(j => j.chat === chat);
   rt[a].jobs = (rt[a].jobs || []).filter(j => j.chat !== chat);
-  return mine.map(j => `\n\nYour background job${j.id ? ` J${j.id}` : ''} \`${j.cmd}\`: ${j.status}${j.code != null ? ` (exit code ${j.code})` : ''}`
-    + `${j.ms != null ? ` after ${dur(j.ms)}` : ''}${j.why ? ` (${j.why})` : ''}.`
-    + (j.id ? ` Log: ${jobLog(j.id)}${j.tail ? `, last lines:\n${j.tail}` : ''}` : '')).join('');
+  return mine.map(j => `\n\nYour background ${j.kind}${j.id ? ` ${tag(j.id, j.kind)}` : ''} \`${j.cmd}\`: ${j.status}`
+    + `${j.code != null ? ` (exit code ${j.code})` : ''}${j.ms != null ? ` after ${dur(j.ms)}` : ''}${j.why ? ` (${j.why})` : ''}.`
+    + (j.merge ? ` ${MERGE_INFO[j.merge].replaceAll('BRANCH', j.branch)}` : '')
+    + (j.id && existsSync(jobLog(j.id, j.kind)) ? ` Log: ${jobLog(j.id, j.kind)}` : '')
+    + (j.summary ? `\nThe task's summary:\n${j.summary.slice(0, 3000)}` : j.tail ? `, last lines:\n${j.tail}` : '')).join('');
 }
 
 // ---------- moderator: did a stance change, and why? ----------
@@ -848,7 +982,8 @@ function stances() {
 
 // ---------- moderator: stop when views have converged ----------
 async function checkConvergence() {
-  if (!rules(chatId).moderated) return;
+  // Not while a member's background job or task is still running: its result may change the conclusion.
+  if (!rules(chatId).moderated || running(chatId)) return;
   const round = lastUserId(chatId);
   const msgs = q(`SELECT id, sender, kind, text, role, stance FROM messages WHERE chat_id=? AND id>=? AND ${TALK} ORDER BY id`, chatId, round)
     .map(m => ({ ...m, text: withStance(m) }));
@@ -942,7 +1077,8 @@ function state() {
     stances: stances(),
     memory: { text: readMemory(), curating: memo.curating, at: memo.at, error: memo.error },
     // running jobs (any discussion) and this discussion's recent ones
-    jobs: q(`SELECT id, chat_id, agent, cmd, status, code, started_at, ended_at FROM jobs WHERE status='running' OR chat_id=? ORDER BY id DESC LIMIT 8`, chatId),
+    jobs: q(`SELECT id, chat_id, agent, cmd, status, code, kind, branch, started_at, ended_at FROM jobs WHERE status='running' OR chat_id=? ORDER BY id DESC LIMIT 8`, chatId)
+      .map(j => (tasks.has(j.id) ? { ...j, live: tasks.get(j.id).live.slice(-3000) } : j)),
     jev: { on: jevOn(), assessing: jev.assessing, judging: jev.judging, ms: jev.ms, down: S.scheduler === 'jev' && !jevOn() },
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
     members: memberOrder().map(n => ({
