@@ -983,6 +983,7 @@ const REF_MS = 2 * 3600e3, RESUME_MIN_MS = 3 * 60e3; // ponytail: one referee ti
 const referees = () => (existsSync(REFEREES) ? readdirSync(REFEREES).filter(d => existsSync(join(REFEREES, d, 'referee.py'))) : []);
 const own = f => RUNAS && chownSync(f, RUNAS.uid, RUNAS.gid);
 const pct = x => `${Math.round(x * 100)}%`;
+const localISO = t => new Date(t - new Date(t).getTimezoneOffset() * 60e3).toISOString(); // the server's local time
 // The open window: its discussion's chats.state.arena plus the chat id (restored at start, so a restart resumes it).
 let arena = null, probing = null, ranking = null; // probing: the member being measured; ranking: the referee process
 for (const c of q(`SELECT id, state FROM chats WHERE state LIKE '%"arena"%'`)) {
@@ -1002,7 +1003,7 @@ function startArena(chat, { goal, minutes, every, referee }) {
   if (!referees().includes(referee)) throw new Error(`没有这个裁判：${REFEREES}/<名字>/referee.py`);
   const who = NAMES.filter(a => S.enabled[a] && !AGENTS[memberConfigs[a].harness].http && ![...tasks.values()].some(t => t.agent === a));
   if (!who.length) throw new Error('没有能参加的成员（要启用、能操作文件、且没有后台任务在跑）');
-  const now = Date.now(), id = `W${new Date(now + 8 * 3600e3).toISOString().slice(2, 16).replace(/\D/g, '')}`; // Beijing time
+  const now = Date.now(), id = `W${localISO(now).slice(2, 16).replace(/\D/g, '')}`;
   const A = { chat, id, goal, minutes, every, referee, from: now, until: now + minutes * 60e3, lastProbe: now, phase: 'work',
     dir: join(ARENA, id, 'referee'), out: join(PUBLIC, 'arena', id), members: Object.fromEntries(who.map(a => [a, {}])) };
   // the frozen copy stays the server's (read-only for the members); outputs and entries are theirs
@@ -1017,8 +1018,8 @@ function startArena(chat, { goal, minutes, every, referee }) {
 }
 
 function arenaPrompt(A, a, resumed) {
-  const left = Math.round((A.until - Date.now()) / 60e3), until = new Date(A.until + 8 * 3600e3).toISOString().slice(11, 16);
-  if (resumed) return `The training window is still open: ${left} minutes left (until ${until} Beijing time). Your session
+  const left = Math.round((A.until - Date.now()) / 60e3), until = localISO(A.until).slice(11, 16);
+  if (resumed) return `The training window is still open: ${left} minutes left (until ${until}). Your session
 was interrupted; carry on from where you were, same goal and rules. Keep a working version in ${entryOf(A, a)}.`;
   return `You are ${describe(a)}, a member of a group chat on the user's machine. The user opened a timed training window:
 for ${A.minutes} minutes every member works alone, in their own workspace, on the same goal. This is not a chat turn:
@@ -1035,7 +1036,7 @@ The referee is ${A.dir} (read-only; read referee.py for the rules and how games 
 \`${PY} ${join(A.dir, 'referee.py')} probe <your bot> <an output directory of yours>\`. Python: ${PY}.
 Earlier code and results in the shared repo ${SHARED} are resources, not the answer: start from them, rewrite from scratch
 or search the web, whichever you judge best. Work in ${wsOf(a)}.
-You have until ${until} Beijing time (${left} minutes); if your session ends early the server resumes it, so keep notes of
+You have until ${until} (${left} minutes); if your session ends early the server resumes it, so keep notes of
 what you tried in your workspace. At the end, reply in ${S.language} with a short summary: the routes you considered and
 which you took, what you measured, and what is in your entry.`;
 }
