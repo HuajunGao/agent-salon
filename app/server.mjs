@@ -1,11 +1,11 @@
 // agent-chat server: SQLite + SSE + scheduler + reading-pace publish queue. No npm dependencies.
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, rmSync, existsSync, statSync, chmodSync, chownSync, openSync, closeSync, fchownSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, rmSync, existsSync, statSync, chmodSync, chownSync, openSync, closeSync, fchownSync, cpSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { join, resolve, sep } from 'node:path';
+import { join, resolve, sep, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { AGENTS, runTurn, listModels, runAs, spawnJob } from './agents.mjs';
 import { judge, novelty, classifyMode, stanceShift } from './moderator.mjs';
 import { MODES, rulesOf, relayNext, debateSetup, debateScript, debateBrief, seatOf, PHASES, parseReply, applyNotes } from './modes.mjs';
@@ -784,7 +784,7 @@ function publishOne(r) {
 // merged back when it ends. Either way the chat hears about the end and the member is woken with the result.
 // A server restart stops what is running (systemd kills the service's cgroup): reported as interrupted at the next start.
 const JOB_MAX = 3, JOB_MS = 3 * 3600e3; // ponytail: global caps, per-member limits if one member hogs the slots
-const TASK_MAX = 3, TASK_MS = 60 * 60e3, TASK_IDLE_MS = 15 * 60e3; // tasks: also one per member at a time
+const TASK_MS = 60 * 60e3, TASK_IDLE_MS = 15 * 60e3; // tasks: one per member at a time, so as many as there are members
 const procs = new Map(); // job id -> child process
 const tasks = new Map(); // task id -> {agent, abort, live, why}
 const tag = (id, kind) => `${kind === 'task' ? 'T' : 'J'}${id}`;
@@ -818,6 +818,7 @@ function cleanupTasks() {
 // crashed the start whenever a job had been running).
 setImmediate(() => { for (const j of q(`SELECT * FROM jobs WHERE status='running'`)) {
   run(`UPDATE jobs SET status='interrupted', ended_at=CURRENT_TIMESTAMP WHERE id=?`, j.id);
+  if (arena && Object.values(arena.members).some(m => m.job === j.id)) continue; // the training window resumes it
   if (j.branch && RUNAS && existsSync(join(TASKS, `T${j.id}`))) dropWorktree(j.agent, j.id, join(TASKS, `T${j.id}`), 'interrupted');
   if (!q1('SELECT 1 FROM chats WHERE id=?', j.chat_id)) continue;
   jobNote(j.chat_id, `⚠ 后台任务 ${tag(j.id, j.kind)}（@${memberAt(j.agent)}）因服务器重启中断`
@@ -856,12 +857,13 @@ function startJob(a, chat, cmd, msgId) {
   sendState();
 }
 
-function startTask(a, chat, { desc, shared }, msgId) {
+// o (training window sessions): prompt and sid replace the task prompt and a fresh session, totalMs the time limit,
+// onSid(sid) / onEnd(status, res) replace the chat notes and the member's wake-up. Returns the task id, null if rejected.
+function startTask(a, chat, { desc, shared }, msgId, o = {}) {
   const harness = memberConfigs[a].harness;
-  const reject = why => jobDone(a, chat, { kind: 'task', cmd: desc, status: 'rejected', why });
+  const reject = why => (o.onEnd ? null : jobDone(a, chat, { kind: 'task', cmd: desc, status: 'rejected', why }));
   if (AGENTS[harness].http) return reject('这位成员不能操作文件');
   if ([...tasks.values()].some(t => t.agent === a)) return reject('你已有一个后台写代码任务在跑');
-  if (tasks.size >= TASK_MAX) return reject(`已有 ${TASK_MAX} 个后台写代码任务在跑`);
   const id = Number(run(`INSERT INTO jobs(chat_id, agent, cmd, msg_id, status, kind) VALUES(?,?,?,?,'running','task')`, chat, a, desc, msgId).lastInsertRowid);
   const branch = shared ? `task/T${id}` : null, cwd = shared ? join(TASKS, `T${id}`) : wsOf(a);
   if (shared) {
@@ -878,11 +880,11 @@ function startTask(a, chat, { desc, shared }, msgId) {
   const model = S.models[a], t = { agent: a, abort: new AbortController(), live: '' }, t0 = Date.now();
   tasks.set(id, t);
   logDecision('task-start', a, { message_id: msgId, detail: { task: id, shared, desc } });
-  jobNote(chat, `▶ @${atOf(a)} 启动后台写代码任务 T${id}（${shared ? `共享仓分支 ${branch}` : '自己的工作区'}）：${desc}`);
+  if (!o.onEnd) jobNote(chat, `▶ @${atOf(a)} 启动后台写代码任务 T${id}（${shared ? `共享仓分支 ${branch}` : '自己的工作区'}）：${desc}`);
   sendState();
-  runTurn(harness, taskPrompt(a, chat, id, desc, cwd, branch, msgId), null, {
-    cwd, dataDir: DATA, shared: SHARED, model, exec: true, member: { ...memberConfigs[a], model },
-    onLive: log => { t.live = log; sendStateSoon(); }, signal: t.abort.signal, idleMs: TASK_IDLE_MS, totalMs: TASK_MS,
+  runTurn(harness, o.prompt || taskPrompt(a, chat, id, desc, cwd, branch, msgId), o.sid || null, {
+    cwd, dataDir: DATA, shared: SHARED, model, exec: true, member: { ...memberConfigs[a], model }, onSid: o.onSid,
+    onLive: log => { t.live = log; sendStateSoon(); }, signal: t.abort.signal, idleMs: TASK_IDLE_MS, totalMs: o.totalMs || TASK_MS,
   }).then(res => {
     tasks.delete(id);
     const status = res.error === 'stopped' ? 'stopped' : /timeout/.test(res.error || '') ? 'timeout' : res.error ? 'failed' : 'done';
@@ -899,9 +901,11 @@ function startTask(a, chat, { desc, shared }, msgId) {
     } else commitShared(a, `${a}: task T${id} ${status}`.slice(0, 200));
     run('UPDATE jobs SET status=?, ended_at=CURRENT_TIMESTAMP WHERE id=?', status, id);
     logDecision('task-end', a, { message_id: msgId, latency_ms: res.ms, detail: { task: id, status, error: res.error || null, merge } });
+    if (o.onEnd) return (o.onEnd(status, res), sendState());
     jobDone(a, chat, { kind: 'task', id, cmd: desc, status, ms: Date.now() - t0, why: res.error && status === 'failed' ? res.error : '',
       summary: res.text, branch, merge });
   });
+  return id;
 }
 function taskPrompt(a, chat, id, desc, cwd, branch, msgId) {
   const title = q1('SELECT title FROM chats WHERE id=?', chat)?.title || '';
@@ -954,11 +958,204 @@ const MERGE_INFO = {
 function jobReport(a, chat) {
   const mine = (rt[a].jobs || []).filter(j => j.chat === chat);
   rt[a].jobs = (rt[a].jobs || []).filter(j => j.chat !== chat);
-  return mine.map(j => `\n\nYour background ${j.kind}${j.id ? ` ${tag(j.id, j.kind)}` : ''} \`${j.cmd}\`: ${j.status}`
+  return mine.map(j => j.kind === 'arena' ? `\n\n${j.summary}` : `\n\nYour background ${j.kind}${j.id ? ` ${tag(j.id, j.kind)}` : ''} \`${j.cmd}\`: ${j.status}`
     + `${j.code != null ? ` (exit code ${j.code})` : ''}${j.ms != null ? ` after ${dur(j.ms)}` : ''}${j.why ? ` (${j.why})` : ''}.`
     + (j.merge ? ` ${MERGE_INFO[j.merge].replaceAll('BRANCH', j.branch)}` : '')
     + (j.id && existsSync(jobLog(j.id, j.kind)) ? ` Log: ${jobLog(j.id, j.kind)}` : '')
     + (j.summary ? `\nThe task's summary:\n${j.summary.slice(0, 3000)}` : j.tail ? `, last lines:\n${j.tail}` : '')).join('');
+}
+
+// ---------- training window: every member works alone on the same goal, a frozen referee keeps score ----------
+// In chat a turn ends the moment a reply is posted, so members rarely do long work; alone they build better bots (kore:
+// independent bots beat the group-built ones). The user opens a window: goal, minutes, a referee from
+// _shared/referees/<name>/referee.py. Each enabled member gets a background task session (its own CLI and model, in its
+// own workspace, no chat) with the user's goal verbatim, writing one entry file. The referee directory is copied to
+// _arena/<id>/referee, owned by the server (root), so nobody can move the goalposts during the window. Every `every`
+// minutes the server probes each changed entry with it and posts the win rate (system-measured, not self-reported);
+// at time-up (or the user's button) the sessions are stopped and the referee's round robin gives the standings.
+// A session that ends early, or dies with a restart, is resumed from its CLI session id while time is left.
+// Referee contract: `referee.py probe <bot> <outdir>` / `referee.py rank <outdir> name=<bot> ...`, last stdout line
+// JSON {rate, games, replay?} / {standings: [{name, rate, games}], replays?: [...]}, replay files in outdir.
+const ARENA = join(WORK, '_arena'), REFEREES = join(SHARED, 'referees');
+const PY = process.env.ARENA_PYTHON || (existsSync(join(SHARED, '.venv/bin/python')) ? join(SHARED, '.venv/bin/python')
+  : process.platform === 'win32' ? 'python' : 'python3');
+const REF_MS = 2 * 3600e3, RESUME_MIN_MS = 3 * 60e3; // ponytail: one referee timeout for probe and rank
+const referees = () => (existsSync(REFEREES) ? readdirSync(REFEREES).filter(d => existsSync(join(REFEREES, d, 'referee.py'))) : []);
+const own = f => RUNAS && chownSync(f, RUNAS.uid, RUNAS.gid);
+const pct = x => `${Math.round(x * 100)}%`;
+// The open window: its discussion's chats.state.arena plus the chat id (restored at start, so a restart resumes it).
+let arena = null, probing = null, ranking = null; // probing: the member being measured; ranking: the referee process
+for (const c of q(`SELECT id, state FROM chats WHERE state LIKE '%"arena"%'`)) {
+  const x = JSON.parse(c.state).arena;
+  if (x && x.phase !== 'done') arena = { ...x, chat: c.id };
+}
+const saveArena = (A = arena) => { const st = chatState(A.chat); st.arena = (({ chat, ...x }) => x)(A); saveState(A.chat, st); };
+const entryOf = (A, a) => join(wsOf(a), `arena_${A.id}`, 'bot.py');
+const arenaURL = (A, f = '') => `${wURL()}arena/${A.id}/${f}`;
+
+function startArena(chat, { goal, minutes, every, referee }) {
+  goal = String(goal || '').trim(); minutes = +minutes; every = +every || 10;
+  if (arena) throw new Error('已有一个训练窗口在进行');
+  if (!S.exec) throw new Error('先在讨论设置里打开“允许执行代码”');
+  if (!goal) throw new Error('写一下训练目标');
+  if (!(minutes > 0 && minutes <= 600 && every > 0)) throw new Error('时长要在 0–600 分钟之间');
+  if (!referees().includes(referee)) throw new Error(`没有这个裁判：${REFEREES}/<名字>/referee.py`);
+  const who = NAMES.filter(a => S.enabled[a] && !AGENTS[memberConfigs[a].harness].http && ![...tasks.values()].some(t => t.agent === a));
+  if (!who.length) throw new Error('没有能参加的成员（要启用、能操作文件、且没有后台任务在跑）');
+  const now = Date.now(), id = `W${new Date(now + 8 * 3600e3).toISOString().slice(2, 16).replace(/\D/g, '')}`; // Beijing time
+  const A = { chat, id, goal, minutes, every, referee, from: now, until: now + minutes * 60e3, lastProbe: now, phase: 'work',
+    dir: join(ARENA, id, 'referee'), out: join(PUBLIC, 'arena', id), members: Object.fromEntries(who.map(a => [a, {}])) };
+  // the frozen copy stays the server's (read-only for the members); outputs and entries are theirs
+  cpSync(join(REFEREES, referee), A.dir, { recursive: true, filter: f => !f.includes('__pycache__') });
+  mkdirSync(A.out, { recursive: true }); own(dirname(A.out)); own(A.out);
+  for (const a of who) { mkdirSync(dirname(entryOf(A, a)), { recursive: true }); own(dirname(entryOf(A, a))); }
+  arena = A; saveArena();
+  logDecision('arena-start', null, { detail: { id, goal, minutes, every, referee, members: who } });
+  jobNote(chat, `🏁 训练窗口 ${id} 开始：${who.map(a => `@${atOf(a)}`).join(' ')} 各自独立做 ${minutes} 分钟，`
+    + `裁判 ${referee}（已冻结）。每 ${every} 分钟自动评测一次有改动的 bot，到点跑循环赛。\n\n目标：${goal}`);
+  arenaTick();
+}
+
+function arenaPrompt(A, a, resumed) {
+  const left = Math.round((A.until - Date.now()) / 60e3), until = new Date(A.until + 8 * 3600e3).toISOString().slice(11, 16);
+  if (resumed) return `The training window is still open: ${left} minutes left (until ${until} Beijing time). Your session
+was interrupted; carry on from where you were, same goal and rules. Keep a working version in ${entryOf(A, a)}.`;
+  return `You are ${describe(a)}, a member of a group chat on the user's machine. The user opened a timed training window:
+for ${A.minutes} minutes every member works alone, in their own workspace, on the same goal. This is not a chat turn:
+nobody answers questions, and you don't see the chat.
+
+The user's goal, verbatim:
+
+${A.goal}
+
+Your entry is the single file ${entryOf(A, a)}: keep a working version there at all times, the server copies whatever
+is there. Every ${A.every} minutes it measures a changed entry with the frozen referee and posts the result to the chat; at
+the end it runs a round robin of all members' entries with the same referee and posts the standings.
+The referee is ${A.dir} (read-only; read referee.py for the rules and how games are scored). You can run it yourself:
+\`${PY} ${join(A.dir, 'referee.py')} probe <your bot> <an output directory of yours>\`. Python: ${PY}.
+Earlier code and results in the shared repo ${SHARED} are resources, not the answer: start from them, rewrite from scratch
+or search the web, whichever you judge best. Work in ${wsOf(a)}.
+You have until ${until} Beijing time (${left} minutes); if your session ends early the server resumes it, so keep notes of
+what you tried in your workspace. At the end, reply in ${S.language} with a short summary: the routes you considered and
+which you took, what you measured, and what is in your entry.`;
+}
+
+function arenaTick() {
+  const A = arena;
+  if (!A) return;
+  if (A.phase === 'work') {
+    if (Date.now() >= A.until) return endWork('time');
+    for (const [a, m] of Object.entries(A.members)) if (!m.out && !tasks.has(m.job) && memberConfigs[a]) arenaWork(A, a);
+    if (!probing && Date.now() - A.lastProbe >= A.every * 60e3) probeAll(A);
+  } else if (A.phase === 'ranking' && !ranking && !Object.values(A.members).some(m => tasks.has(m.job))) rankArena(A);
+}
+setInterval(arenaTick, 1000);
+
+function arenaWork(A, a) {
+  const m = A.members[a], left = A.until - Date.now();
+  if (m.sessions && left < RESUME_MIN_MS) return; // not worth resuming
+  const id = startTask(a, A.chat, { desc: `训练窗口 ${A.id}：${A.goal}` }, null, {
+    prompt: arenaPrompt(A, a, !!m.sid), sid: m.sid, totalMs: left,
+    onSid: sid => { m.sid = sid; saveArena(A); },
+    onEnd: (status, res) => {
+      m.job = null;
+      if (res.text) m.summary = res.text.slice(-3000);
+      // three quick failures in a row and the member is out of this window (the second one tries a fresh session)
+      m.fails = res.error && status !== 'stopped' && res.ms < 120e3 ? (m.fails || 0) + 1 : 0;
+      if (m.fails === 2) m.sid = null;
+      if (m.fails >= 3) { m.out = true; jobNote(A.chat, `⚠ @${atOf(a)} 的训练会话连续失败，退出本轮：${res.error}`); }
+      saveArena(A);
+      logDecision('arena-session', a, { latency_ms: res.ms, detail: { id: A.id, status, error: res.error || null, fails: m.fails } });
+    },
+  });
+  if (id) { m.job = id; m.sessions = (m.sessions || 0) + 1; saveArena(A); }
+}
+
+// Runs the frozen referee as the agent user (the bots are the members' code). Resolves its last JSON line, or {error}.
+function runReferee(A, args) {
+  const lf = join(ARENA, A.id, `${args[0]}-${Date.now()}.log`), fd = openSync(lf, 'w');
+  const p = spawnJob([PY, join(A.dir, 'referee.py'), ...args], { cwd: A.out, out: fd });
+  closeSync(fd);
+  const kill = () => { try { process.kill(process.platform === 'win32' ? p.pid : -p.pid, 'SIGKILL'); } catch {} };
+  const timer = setTimeout(kill, REF_MS);
+  return new Promise(res => {
+    const end = err => {
+      clearTimeout(timer);
+      const log = readFileSync(lf, 'utf8'), line = log.trim().split('\n').reverse().find(l => l.trim().startsWith('{'));
+      try { if (!err && line) return res(JSON.parse(line)); } catch {}
+      res({ error: (err || log.trim().split('\n').slice(-5).join('\n') || 'no output').slice(-800) });
+    };
+    p.on('error', e => end(e.message));
+    p.on('exit', (code, sig) => end(sig ? `killed (${sig})` : ''));
+    if (args[0] === 'rank') ranking = { kill };
+  });
+}
+
+// Measures every entry that changed since its last probe, one at a time, and posts the change.
+async function probeAll(A) {
+  A.lastProbe = Date.now(); saveArena(A);
+  for (const a of Object.keys(A.members)) {
+    if (arena !== A || A.phase !== 'work') break;
+    const f = entryOf(A, a), m = A.members[a];
+    if (!existsSync(f)) continue;
+    const src = readFileSync(f), hash = createHash('sha1').update(src).digest('hex').slice(0, 10);
+    if (hash === m.hash) continue;
+    const n = (m.probes || 0) + 1, bot = join(A.out, `${a}-${n}.py`);
+    writeFileSync(bot, src); own(bot);
+    probing = a; sendState();
+    const r = await runReferee(A, ['probe', bot, A.out]);
+    probing = null;
+    Object.assign(m, { hash, probes: n });
+    logDecision('arena-probe', a, { detail: { id: A.id, n, hash, rate: r.rate ?? null, games: r.games ?? null, error: r.error || null } });
+    if (r.error || typeof r.rate !== 'number') jobNote(A.chat, `⚠ @${atOf(a)} 的第 ${n} 版 bot 评测失败：\n\`\`\`\n${r.error || JSON.stringify(r)}\n\`\`\``);
+    else {
+      const was = m.rate; m.rate = r.rate;
+      jobNote(A.chat, `${was == null ? '📊' : r.rate > was ? '📈' : r.rate < was ? '📉' : '➖'} @${atOf(a)} 第 ${n} 版：`
+        + `${was == null ? '' : `${pct(was)} → `}**${pct(r.rate)}**（${r.games} 局对基线）`
+        + `${r.replay ? ` · [回放](${arenaURL(A, r.replay)})` : ''} · [代码](${arenaURL(A, `${a}-${n}.py`)})`);
+    }
+    saveArena(A); sendState();
+  }
+  if (probing === null) sendState();
+}
+
+function endWork(why) {
+  const A = arena;
+  A.phase = 'ranking'; A.ended = Date.now(); saveArena(A);
+  for (const m of Object.values(A.members)) if (tasks.has(m.job)) killJob(m.job, 'stopped');
+  logDecision('arena-end-work', null, { detail: { id: A.id, why } });
+  jobNote(A.chat, `⏱ 训练窗口 ${A.id}${why === 'user' ? '被你提前结束' : '到点了'}：所有人停手，开始循环赛。`);
+  sendState();
+}
+
+async function rankArena(A) {
+  const names = Object.keys(A.members).filter(a => existsSync(entryOf(A, a)));
+  for (const a of names) { const f = join(A.out, `${a}-final.py`); writeFileSync(f, readFileSync(entryOf(A, a))); own(f); }
+  ranking = true;
+  const r = names.length < 2 ? { error: `只有 ${names.length} 份参赛 bot，不够打循环赛` }
+    : await runReferee(A, ['rank', A.out, ...names.map(a => `${a}=${join(A.out, `${a}-final.py`)}`)]);
+  ranking = null;
+  const ok = Array.isArray(r.standings);
+  A.phase = 'done'; A.result = ok ? { standings: r.standings, replays: r.replays || [] } : { error: r.error || JSON.stringify(r) };
+  saveArena(A);
+  if (arena === A) arena = null;
+  logDecision('arena-rank', null, { detail: { id: A.id, ...A.result } });
+  const who = n => (memberConfigs[n] ? `@${atOf(n)}` : n);
+  const table = ok ? `| 名次 | 成员 | 胜率 | 局数 |\n|---|---|---|---|\n`
+    + r.standings.map((s, i) => `| ${i + 1} | ${who(s.name)} | ${pct(s.rate)} | ${s.games} |`).join('\n')
+    + (A.result.replays.length ? `\n\n回放：${A.result.replays.map(f => `[${f.replace(/\.html$/, '')}](${arenaURL(A, f)})`).join(' · ')}` : '') : '';
+  jobNote(A.chat, ok ? `🏆 训练窗口 ${A.id} 循环赛结果（裁判 ${A.referee}）：\n\n${table}` : `⚠ 训练窗口 ${A.id} 的循环赛没有结果：${A.result.error}`);
+  // The meeting: everyone is woken with the standings and its own session's last summary.
+  const plain = ok ? r.standings.map((s, i) => `${i + 1}. ${s.name} ${pct(s.rate)} (${s.games} games)`).join('\n') : `no result: ${A.result.error}`;
+  for (const [a, m] of Object.entries(A.members)) {
+    if (!rt[a]) continue;
+    (rt[a].jobs ??= []).push({ kind: 'arena', chat: A.chat, summary: `The training window ${A.id} ("${A.goal}") is over. `
+      + `Round robin with the frozen referee:\n${plain}\nEntries and replays: ${A.out} (${arenaURL(A)}). Your entry: ${entryOf(A, a)}.`
+      + (m.summary ? `\nYour window session's last summary:\n${m.summary}` : '')
+      + `\nTell the others what you tried and what you measured, and what the next round should try.` });
+    if (A.chat === chatId) raise(a, 3, 'job');
+  }
+  pump(); sendState();
 }
 
 // ---------- outsider: a fresh look from someone who hasn't read the discussion ----------
@@ -1162,6 +1359,10 @@ function state() {
     debate: (({ debate: d }) => d && !d.skipped ? { pro: d.pro, con: d.con, judge: d.judge, done: d.done, motion: d.motion,
       phase: d.script[d.at]?.phase || null, step: Math.min(d.at + 1, d.script.length), steps: d.script.length } : null)(chatState(chatId)),
     stances: stances(),
+    arena: arena && { id: arena.id, chat: arena.chat, goal: arena.goal, until: arena.until, phase: arena.phase, referee: arena.referee,
+      url: arenaURL(arena), probing, members: Object.entries(arena.members).map(([a, m]) => ({ name: a, rate: m.rate ?? null,
+        probes: m.probes || 0, working: tasks.has(m.job), out: !!m.out })) },
+    referees: S.exec ? referees() : [],
     memory: { text: readMemory(), curating: memo.curating, at: memo.at, error: memo.error },
     // running jobs (any discussion) and this discussion's recent ones
     jobs: q(`SELECT id, chat_id, agent, cmd, status, code, kind, branch, started_at, ended_at FROM jobs WHERE status='running' OR chat_id=? ORDER BY id DESC LIMIT 8`, chatId)
@@ -1296,6 +1497,8 @@ const routes = {
     readUntil = speakingAt = 0;
     logDecision('stop', null, { detail: { cancelled, dropped: dropped.map(r => r.agent) } });
   },
+  'POST /api/arena/start'(body) { startArena(chatId, body); },
+  'POST /api/arena/stop'() { if (arena?.phase === 'work') endWork('user'); else ranking?.kill?.(); },
   'POST /api/outsider'() { if (!startOutsider(chatId, 'user')) throw new Error('局外人已经在想了，或者没有可用的成员'); },
   'POST /api/floor'({ agent }) { if (NAMES.includes(agent)) { raise(agent, 100, 'floor from user'); logDecision('floor', agent); } },
   'POST /api/lower'({ agent }) { if (NAMES.includes(agent)) rt[agent].hand = null; },

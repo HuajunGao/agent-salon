@@ -34,8 +34,9 @@ const asUser = () => (RUNAS ? { uid: RUNAS.uid, gid: RUNAS.gid } : {});
 
 // A member's background job: a bash command run as the agent user in its own session (detached = setsid), so it
 // outlives the turn that started it and the CLI's cleanup. Output goes to the open file descriptor `out`.
-export const spawnJob = (cmd, { cwd, out }) => spawn('/bin/bash', ['-c', cmd], { cwd, env: { ...userEnv(process.env), PWD: cwd },
-  ...asUser(), stdio: ['ignore', out, out], detached: true });
+// cmd: a shell line, or [bin, ...args] run directly (the arena's referee; also on Windows).
+export const spawnJob = (cmd, { cwd, out }) => spawn(...(Array.isArray(cmd) ? [cmd[0], cmd.slice(1)] : ['/bin/bash', ['-c', cmd]]),
+  { cwd, env: { ...userEnv(process.env), PWD: cwd }, ...asUser(), stdio: ['ignore', out, out], detached: !WIN, windowsHide: true });
 
 // All matches for `name` on PATH (Windows: also name.exe / name.cmd).
 const where = name => (userEnv(process.env).PATH || '').split(delimiter).filter(Boolean)
@@ -241,8 +242,9 @@ AGENTS.hermes = {
 };
 
 // Run one turn. onLive(text) receives a readable live log; aborting `signal` ends it (error 'stopped').
-// Resolves {text, sid, error, ms}. idleMs / totalMs: longer limits for background tasks.
-export function runTurn(agent, prompt, sid, { cwd, dataDir, shared, model, exec, member, onLive, signal, idleMs = IDLE_MS, totalMs = TOTAL_MS }) {
+// Resolves {text, sid, error, ms}. idleMs / totalMs: longer limits for background tasks. onSid(sid): the CLI session id
+// as soon as it is known (a training window resumes it after a restart).
+export function runTurn(agent, prompt, sid, { cwd, dataDir, shared, model, exec, member, onLive, onSid, signal, idleMs = IDLE_MS, totalMs = TOTAL_MS }) {
   const a = AGENTS[agent];
   const t0 = Date.now();
   if (a.http) {
@@ -279,6 +281,7 @@ export function runTurn(agent, prompt, sid, { cwd, dataDir, shared, model, exec,
         if (!l.trim().startsWith('{')) continue;
         try { a.parse(JSON.parse(l), st); } catch {}
       }
+      if (st.sid && st.sid !== sid) onSid?.(sid = st.sid);
     };
     p.stdout.on('data', onData);
     p.stderr.on('data', onData);

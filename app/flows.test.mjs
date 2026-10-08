@@ -64,11 +64,20 @@ async function server(t, slowFirst = 0) {
   const log = join(root, 'turns.jsonl');
   // Story turns: the first one passes the baton to @opencode; every turn adds a note. The judge gives a verdict.
   writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs, spawnJob } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
-    import {appendFileSync} from 'node:fs';
+    import {appendFileSync, writeFileSync} from 'node:fs';
     let story = 0;
     export async function listModels(){return {}};
     let calls = 0;
-    export async function runTurn(h,p,s,o){appendFileSync(${JSON.stringify(log)},JSON.stringify({h,at:Date.now(),p})+'\\n');
+    export async function runTurn(h,p,s,o){appendFileSync(${JSON.stringify(log)},JSON.stringify({h,at:Date.now(),p,s})+'\\n');
+      const entry = p.match(/(\\S+bot\\.py)/)?.[1];
+      if (entry && p.includes('training window')) { // a window session: v1 and end early; resumed: v2 and work till stopped
+        o.onSid?.('s-'+h);
+        if (!s) return (writeFileSync(entry, 'v1 '+h), {text: h+' 试了 v1', sid:'s-'+h, ms:150});
+        await new Promise(r => { setTimeout(r, 3000); o.signal.addEventListener('abort', r); }); // after the first probe
+        if (!o.signal.aborted) writeFileSync(entry, 'v2 '+h);
+        if (!o.signal.aborted) await new Promise(r => o.signal.addEventListener('abort', r));
+        return {error:'stopped', ms:1};
+      }
       const ms = calls++ < ${slowFirst} ? 5000 : 150; // the first turns can be slow (to stop them)
       await new Promise(r=>{ const t=setTimeout(r,ms); o.signal?.addEventListener('abort',()=>{ clearTimeout(t); r(); }); });
       if (o.signal?.aborted) return {error:'stopped', ms:1};
@@ -78,9 +87,13 @@ async function server(t, slowFirst = 0) {
   const srv = net.createServer(); srv.listen(0, '127.0.0.1'); await once(srv, 'listening');
   const port = srv.address().port; await new Promise(r => srv.close(r));
   const url = `http://127.0.0.1:${port}`;
-  const child = spawn(process.execPath, [join(app, 'server.mjs')], { windowsHide: true, stdio: 'ignore',
+  const start = () => spawn(process.execPath, [join(app, 'server.mjs')], { windowsHide: true, stdio: 'ignore',
     env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', AGENT_USER: '', TYPESAFE_API_KEY: '', HERMES_BASE_URL: '' } });
-  t.after(async () => { if (child.exitCode === null) { const e = once(child, 'exit'); child.kill(); await e; } rmSync(root, { recursive: true, force: true }); });
+  let child = start();
+  const stop = async () => { if (child.exitCode === null) { const e = once(child, 'exit'); child.kill(); await e; } };
+  const up = async () => { for (let i = 0; i < 200; i++) { try { if ((await fetch(url)).ok) return; } catch {} await new Promise(r => setTimeout(r, 30)); } };
+  const restart = async () => { await stop(); child = start(); await up(); };
+  t.after(async () => { await stop(); rmSync(root, { recursive: true, force: true }); });
   const post = (route, body = {}) => fetch(url + route, { method: 'POST', body: JSON.stringify(body) });
   const init = async () => {
     const c = new AbortController(), r = await fetch(url + '/events', { signal: c.signal });
@@ -91,10 +104,10 @@ async function server(t, slowFirst = 0) {
   // Polls f, skipping each reply's reading time ("next"), so the flow runs at test speed.
   const until = async f => { for (let i = 0; i < 600; i++) { await post('/api/next'); const v = await f(); if (v) return v; await new Promise(r => setTimeout(r, 30)); } };
   const turns = () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse) : []);
-  for (let i = 0; i < 200; i++) { try { if ((await fetch(url)).ok) break; } catch {} await new Promise(r => setTimeout(r, 30)); }
+  await up();
   await post('/api/settings', { memory: false, autoStop: false, devil: false, circlePause: false, scheduler: 'algorithm',
     readSpeed: 100000, maxThinkers: 4, turnCap: 1 });
-  return { post, init, until, turns, url };
+  return { post, init, until, turns, url, root, restart };
 }
 
 test('story mode: one member at a time, an @mention takes the baton, notes kept by the members', async t => {
@@ -237,4 +250,43 @@ test('outsider: a fresh session sees only the user, thinks, then reads the archi
   assert.equal((await post('/api/outsider')).ok, true); // the rotation moves on
   await until(async () => turns().length >= before + 8);
   assert.notEqual(turns()[before + 6].h, one.h);
+});
+
+test('training window: sessions resumed, the frozen referee probes changed entries, a round robin wakes everyone', async t => {
+  const { post, init, until, turns, root, restart } = await server(t);
+  const ref = join(root, 'workspace', '_shared', 'referees', 'fake'); mkdirSync(ref, { recursive: true });
+  writeFileSync(join(ref, 'referee.py'), `import sys, json
+if sys.argv[1] == 'probe':
+    print('noise'); print(json.dumps({'rate': 0.5 if open(sys.argv[2]).read().startswith('v2') else 0.25, 'games': 4}))
+else:
+    names = [a.split('=')[0] for a in sys.argv[3:]]
+    print(json.dumps({'standings': [{'name': n, 'rate': 1 - i / 4, 'games': 6} for i, n in enumerate(names)], 'replays': ['a_vs_b.html']}))
+`);
+  await post('/api/settings', { exec: false });
+  assert.equal((await post('/api/arena/start', { goal: '写个 bot', minutes: 10, every: 0.02, referee: 'fake' })).status, 500); // exec off
+  await post('/api/settings', { exec: true });
+  assert.deepEqual((await init()).state.referees, ['fake']);
+  assert.ok((await post('/api/arena/start', { goal: '写个最强的 bot', minutes: 10, every: 0.02, referee: 'fake' })).ok);
+  const notes = async () => (await init()).messages.filter(m => m.kind === 'moderator').map(m => m.text);
+  assert.ok(await until(async () => (await notes()).filter(x => x.includes('📈') && x.includes('25% → **50%**')).length >= 4)); // everyone
+  const tt = turns();
+  for (const h of ['claude', 'codex', 'agy', 'opencode']) {
+    const mine = tt.filter(x => x.h === h);
+    assert.ok(mine[0].p.includes('写个最强的 bot') && !mine[0].s && !mine[0].p.includes('发言。')); // goal verbatim, no chat
+    assert.ok(mine[1].p.includes('still open') && mine[1].s === 's-' + h);                     // resumed, same session
+  }
+  assert.ok((await init()).state.arena.members.every(m => m.working && m.rate === 0.5));
+  assert.ok((await notes()).some(x => x.includes('📊') && x.includes('25%')));
+  // a restart: the window and its CLI sessions carry on, no "interrupted" notes
+  await restart();
+  assert.ok(await until(async () => turns().length >= 12));
+  assert.ok(turns().slice(8).every(x => x.p.includes('still open') && x.s === 's-' + x.h));
+  assert.ok((await notes()).every(x => !x.includes('中断')));
+  await post('/api/arena/stop');
+  const s = await until(async () => { const x = await init(); return x.messages.some(m => m.text.includes('🏆')) && turns().length >= 16 && x; });
+  assert.equal(s.state.arena, null);
+  assert.ok(s.messages.find(m => m.text.includes('🏆')).text.includes('| 1 |'));
+  const meeting = turns().slice(12);
+  assert.ok(meeting.every(x => x.p.includes('is over') && x.p.includes('试了 v1')));
+  assert.ok(!(await post('/api/arena/start', { goal: 'x', minutes: 10, referee: 'nope' })).ok);
 });

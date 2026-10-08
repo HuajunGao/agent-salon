@@ -90,11 +90,22 @@ A turn's processes die with the CLI, so long work goes in a line of its own:
   chat) in its workspace; `[TASK shared]` in a git worktree `WORK/_tasks/T<id>` on branch `task/T<id>`. At the end the
   worktree is committed and removed; a done task is merged (`--no-ff`) and its branch deleted, a conflict is aborted and
   the branch kept for the member. `cleanupTasks` (start + daily) prunes worktrees, deletes merged task branches and
-  unmerged ones older than 7 days. One task per member, 3 in all.
+  unmerged ones older than 7 days. One task per member (so as many as there are members).
 Both post start/end notes and wake the member (hand `why: 'job'`, uncapped, past Jev's filter) with the result in its
 next prompt (`jobReport`: log tail / task summary and merge outcome). Rows in the `jobs` table (`kind` job|task); a
 restart marks running ones interrupted (worktree committed to its branch) and still tells and wakes the member. Jev
 doesn't wrap up a round while one of the discussion's jobs or tasks runs.
+
+Training window (exec only; the "训练窗口" panel): the user gives a goal, minutes and a referee
+(`WORK/_shared/referees/<name>/referee.py`; `referees/kore/` in this repo is the reference). Every enabled file-capable
+member gets a task session (startTask with `o.onEnd`: no chat notes, no wake-up) with the goal verbatim and no chat,
+writing one entry `workspace/<member>/arena_<id>/bot.py`. The referee is copied to `WORK/_arena/<id>/referee` (root-owned,
+so frozen); every `every` minutes the server probes changed entries with it and posts the win rate (system-measured);
+at time-up or the user's button the sessions stop, `referee.py rank` gives the standings, and everyone is woken with
+them (the meeting). Sessions that end early or die with a restart resume their CLI session (`onSid`) while ≥ 3 min are
+left; three quick failures drop a member. State in `chats.state.arena`; `arena-*` decisions. Referee contract:
+`probe <bot> <outdir>` / `rank <outdir> name=<bot> ...`, last stdout line JSON `{rate, games, replay?}` /
+`{standings: [{name, rate, games}], replays?}`, replays written to outdir (served under `/w/arena/<id>/`).
 
 Agents' context: a new CLI session gets `intro()` (rules, members, archive location, the user memory) plus recent
 history; resumed sessions get only unseen messages plus a per-turn footer. Discussions are archived as

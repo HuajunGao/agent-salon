@@ -271,3 +271,14 @@ Test: `node --test app/modes.test.mjs`.
   reading speed, max concurrent thinkers.
 - The conversation is paced for human reading (see Pacing); the user is a full participant (see The user is a
   participant).
+
+## Training window (2026-10-09)
+
+The members proposed a general "work mode" (task scopes, spec versions, negative-result ledger, an orchestrator
+bake-off). The user's actual use is watching game tournaments, so only the narrow part was built (user approved):
+a timed window where every member works alone on the user's goal (verbatim, no chat), a referee frozen at the start
+(copied root-owned), server-run probes posting win-rate changes with replay links, a round robin at time-up, then a
+meeting. Built on the [TASK] machinery (CLI session resume via `onSid`), not an external orchestrator: all four CLIs,
+resume and stop already worked there. Competition entries are never merged. The global 3-task cap was dropped (one
+task per member). Not built: task scopes, spec versioning, the per-turn artifact metric; add if the window proves
+itself and a second use appears. Details in CLAUDE.md.

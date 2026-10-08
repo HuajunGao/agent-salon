@@ -279,6 +279,10 @@
   .memlist li::before { content:""; position:absolute; left:2px; top:11px; width:4px; height:4px; border-radius:50%; background:var(--ink-3); }
   .memlist li .src { color:var(--ink-3); font-size:var(--t-xs); }
   .memempty { font-size:var(--t-xs); color:var(--ink-3); padding:0 var(--s1); line-height:1.5; }
+  .arenaform { display:grid; gap:var(--s2); padding:0 var(--s1); font-size:var(--t-sm); color:var(--ink-2); }
+  .arenaform textarea { width:100%; box-sizing:border-box; font:inherit; resize:vertical; }
+  .arenaform label { display:flex; justify-content:space-between; gap:var(--s2); align-items:center; }
+  .arenaform input { width:70px; }
   .username { display:flex; align-items:center; justify-content:space-between; gap:var(--s3); height:30px; padding:0 var(--s1);
     margin-bottom:var(--s1); font-size:var(--t-sm); color:var(--ink-2); }
   .username input { width:110px; height:24px; padding:0 6px; border:none; border-radius:var(--r-sm); background:var(--surface);
@@ -503,6 +507,7 @@
   <section id="moderator"></section>
   <section id="notes"></section>
   <section id="jobs"></section>
+  <section id="arena"></section>
   <section id="memory"></section>
   <section><div class="sect member-heading"><button class="memtoggle" data-fold="members" aria-expanded="true" title="展开或收起"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 5 7 7-7 7"/></svg>成员</button> <span class="member-tools"><button id="order-members">调整顺序</button><button id="add-member">＋ 新成员</button></span></div><div id="member-order-hint" hidden>用上下箭头调整显示顺序，自动保存。</div><div id="members"></div></section>
   <details class="settings">
@@ -838,6 +843,36 @@ document.addEventListener('click', e => {
   const t = e.target.closest('[data-job-stop]');
   if (t && confirm(`停止后台任务 ${t.dataset.tag}？`)) post('/api/job/stop', { id: +t.dataset.jobStop });
 });
+// ---------- training window ----------
+// Open: time left, each member's last measured win rate (the server's probes, not the members' word), stop button.
+// Otherwise, when there are referees (_shared/referees/<name>) and executing code is on: the form to open one.
+function renderArena() {
+  const A = S.arena;
+  if (!A) return setHTML('#arena', !S.referees?.length ? '' : `<div class="sect memhead">${foldButton('arena', '训练窗口')}</div>`
+    + (folded.has('arena') ? '' : `<form id="arena-form" class="arenaform">
+      <textarea name="goal" rows="3" required placeholder="目标，原话交给每位成员，比如：写一个尽量强的 kore bot"></textarea>
+      <label>裁判 <select name="referee">${S.referees.map(r => `<option>${esc(r)}</option>`).join('')}</select></label>
+      <label>时长（分钟） <input name="minutes" type="number" min="1" max="600" value="30"></label>
+      <label>每隔几分钟评测 <input name="every" type="number" min="1" value="10"></label>
+      <button>开始：每人独立做，到点循环赛</button></form>`));
+  const left = Math.max(0, Math.ceil((A.until - Date.now() + clockSkew) / 60e3));
+  setHTML('#arena', `<div class="sect memhead">${foldButton('arena', `训练窗口 <span class="count">${A.id}</span>`)}`
+    + `<span class="acts"><button id="arena-stop">${A.phase === 'work' ? '结束训练' : '停止循环赛'}</button></span></div>`
+    + (folded.has('arena') ? '' : `<div class="memempty" title="${esc(A.goal)}">${A.phase === 'work' ? `还剩 ${left} 分钟` : '循环赛进行中…'}`
+      + ` · 裁判 ${esc(A.referee)} · <a href="${esc(A.url)}" target="_blank" rel="noopener">文件</a></div>`
+      + `<ul class="notelist">${A.members.map(m => `<li><span class="nt"><span style="color:${color(m.name)}">${esc(label(m.name))}</span> `
+        + `${A.probing === m.name ? '评测中…' : m.out ? '已退出' : A.phase !== 'work' ? '' : m.working ? '工作中' : '等待续上'}</span>`
+        + `<span class="nm">${m.rate == null ? '—' : `${Math.round(m.rate * 100)}%（第 ${m.probes} 版）`}</span></li>`).join('')}</ul>`));
+}
+document.addEventListener('submit', async e => {
+  if (e.target.id !== 'arena-form') return;
+  e.preventDefault();
+  const r = await post('/api/arena/start', Object.fromEntries(new FormData(e.target)));
+  if (!r.ok) alert((await r.json().catch(() => ({}))).error || '请求失败');
+});
+document.addEventListener('click', e => {
+  if (e.target.id === 'arena-stop' && confirm(S.arena.phase === 'work' ? '现在结束训练，用各人当前的 bot 打循环赛？' : '停止循环赛（没有结果）？')) post('/api/arena/stop');
+});
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-note-add],[data-note-edit],[data-note-drop]');
   if (!t) return;
@@ -941,7 +976,7 @@ function renderMembers() {
 function renderState() {
   const now = Date.now() - clockSkew;
   if (!messages.length) setHTML('#msgs', emptyState());
-  renderHistory(); renderModerator(); renderNotes(); renderJobs(); renderMemory(); renderMode(); renderTts(); renderThinking();
+  renderHistory(); renderModerator(); renderNotes(); renderJobs(); renderArena(); renderMemory(); renderMode(); renderTts(); renderThinking();
   $('#members').hidden = folded.has('members');
   $('[data-fold=members]').setAttribute('aria-expanded', !folded.has('members'));
   $('#s-exec').disabled = !S.sandboxed; $('#execrow').style.opacity = S.sandboxed ? '' : '.45';
