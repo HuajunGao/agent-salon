@@ -1689,7 +1689,18 @@ const routes = {
   },
   'POST /api/chat/new'({ title }) {
     switchChat(Number(run('INSERT INTO chats(title) VALUES(?)', title || `讨论 ${maxChat() + 1}`).lastInsertRowid));
+    return { id: chatId };
   },
+  // Saved prompts (the user's favourite openings, e.g. a game's full rules), with the mode to start them in.
+  // Same title: replaced. Sent to the browsers with init, not with every state tick.
+  'POST /api/prompts/save'({ title, text, mode }) {
+    title = String(title || '').trim().slice(0, 60); text = String(text || '').trim().slice(0, 50000);
+    if (!title || !text) throw new Error('标题和内容都不能为空');
+    const list = prompts().filter(p => p.title !== title);
+    list.unshift({ id: randomBytes(4).toString('hex'), title, text, mode: MODES[mode] ? mode : null, at: Date.now() });
+    savePrompts(list);
+  },
+  'POST /api/prompts/delete'({ id }) { savePrompts(prompts().filter(p => p.id !== id)); },
   'POST /api/chat/switch'({ id }) { if (q1('SELECT 1 FROM chats WHERE id=?', +id)) switchChat(+id); },
   // The user overrides (or returns to) Auto at any time; it applies from the next turn.
   'POST /api/chat/mode'({ id, mode }) {
@@ -1762,7 +1773,9 @@ function switchChat(id) {
   readUntil = 0; mod = null; writeTranscript(id);
   send(init());
 }
-const init = () => ({ type: 'init', messages: q('SELECT * FROM messages WHERE chat_id=? ORDER BY id', chatId), state: state(), modelLists });
+const prompts = () => JSON.parse(q1(`SELECT value FROM settings WHERE key='prompts'`)?.value || '[]');
+const savePrompts = list => { run(`INSERT OR REPLACE INTO settings VALUES('prompts', ?)`, JSON.stringify(list)); logDecision('prompts', null, { detail: { n: list.length } }); send(init()); };
+const init = () => ({ type: 'init', messages: q('SELECT * FROM messages WHERE chat_id=? ORDER BY id', chatId), state: state(), modelLists, prompts: prompts() });
 
 http.createServer((req, res) => {
   const key = `${req.method} ${req.url.split('?')[0]}`;

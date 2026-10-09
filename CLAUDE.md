@@ -120,6 +120,10 @@ left; three quick failures drop a member. State in `chats.state.arena`; `arena-*
 `probe <bot> <outdir>` / `rank <outdir> name=<bot> ...`, last stdout line JSON `{rate, games, replay?}` /
 `{standings: [{name, rate, games}], replays?}`, replays written to outdir (served under `/w/arena/<id>/`).
 
+Saved prompts (★ by the input): settings key `prompts`, [{id, title, text, mode}], sent with `init` only (never to a
+shared link); using one fills the input (and sets its mode in an empty discussion, or in a new one via "新讨论").
+The history list shows each discussion's id, the number the archive uses ("讨论 36").
+
 Agents' context: a new CLI session gets `intro()` (rules, members, archive location, the user memory) plus recent
 history; resumed sessions get only unseen messages plus a per-turn footer. Discussions are archived as
 `data/discussions/<id>.md` + `index.md` so agents can look up earlier ones.

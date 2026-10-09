@@ -80,6 +80,7 @@
     cursor:pointer; color:var(--ink-2); }
   .chat:hover { background:var(--hover); color:var(--ink); }
   .chat.on { background:var(--selected); color:var(--ink); font-weight:600; box-shadow:inset 2px 0 0 var(--ink-2); }
+  .chat .n { flex:none; min-width:2ch; font-size:var(--t-xs); color:var(--ink-3); font-variant-numeric:tabular-nums; }
   .chat .t { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .chat .m { font-size:var(--t-xs); color:var(--ink-3); flex:none; }
   .chat .acts { display:none; gap:0; flex:none; }
@@ -137,6 +138,7 @@
   #thinking { display:flex; flex-wrap:wrap; gap:4px 18px; margin:-4px 0 20px calc(var(--gut) + 22px); font-size:var(--t-sm); color:var(--ink-3); }
   #thinking:empty { display:none; }
   #thinking span { display:inline-flex; align-items:center; gap:6px; }
+  #thinking .rowbtn { display:inline-block; width:auto; height:24px; margin:0 0 0 6px; padding:0 10px; }
   #thinking b { font-weight:500; color:var(--c); }
   .msg.flash .num { color:var(--link); }
   .msg .meta { display:flex; align-items:center; gap:4px 10px; flex-wrap:wrap; min-height:20px; margin-bottom:2px; padding-right:48px;
@@ -227,7 +229,19 @@
   #input { display:block; width:100%; min-height:44px; max-height:220px; resize:none; border:none; outline:none; background:transparent;
     padding:6px 2px; font-size:var(--t-body); line-height:1.6; }
   #input::placeholder { color:var(--ink-3); }
-  .composer { container-type:inline-size; }
+  .composer { container-type:inline-size; position:relative; }
+  /* saved prompts: a list above the composer */
+  #prompts { position:absolute; left:0; right:0; bottom:calc(100% + 6px); max-height:50vh; overflow:auto; z-index:5; padding:var(--s2);
+    background:var(--surface); border:1px solid var(--hair); border-radius:var(--r-lg); box-shadow:var(--shadow); }
+  #prompts .ph { display:flex; align-items:center; justify-content:space-between; gap:var(--s2); padding:0 var(--s1) var(--s2); font-size:var(--t-sm); }
+  #prompts .ph b { white-space:nowrap; font-weight:500; }
+  #prompts .ph .rowbtn { width:auto; flex:none; margin:0; padding:0 var(--s3); }
+  .prow { display:flex; align-items:center; gap:var(--s2); padding:6px var(--s2); border-radius:var(--r-sm); cursor:pointer; font-size:var(--t-sm); }
+  .prow:hover { background:var(--sunk); }
+  .prow .pt { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .prow .k { flex:none; font-size:var(--t-xs); color:var(--ink-3); }
+  .prow button { flex:none; font-size:var(--t-xs); color:var(--ink-3); padding:2px 6px; border-radius:var(--r-sm); }
+  .prow button:hover { color:var(--ink); background:var(--surface); }
   .crow { display:flex; align-items:center; gap:var(--s1); }
   #ats { display:flex; gap:2px; flex-wrap:nowrap; min-width:0; overflow-x:auto; scrollbar-width:none; }
   @container (max-width: 600px) { .hint { display:none; } #send { margin-left:auto; } }
@@ -485,12 +499,14 @@
   <footer>
     <div class="status" id="info" aria-live="polite"></div>
     <div class="composer">
+      <div id="prompts" hidden><div class="ph"><b>收藏的 prompt</b><button class="rowbtn" data-psave>收藏当前输入</button></div><div id="plist"></div></div>
       <div id="quote"></div>
       <div id="atts"></div>
       <textarea id="input" rows="1" placeholder="说点什么，或 @ 某位成员…"></textarea>
       <div class="crow">
         <span id="ats"></span>
         <span class="hint">Enter 发送，Shift+Enter 换行，输入时暂缓发布</span>
+        <button class="icon" id="fav" title="收藏的 prompt：收藏当前输入，或用以前的 prompt 开局" aria-label="收藏的 prompt"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9Z"/></svg></button>
         <button class="icon" id="attach" title="添加文件或图片（也可以粘贴截图，或拖进来）" aria-label="添加附件"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m21 11-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l8-8"/></svg></button>
         <input type="file" id="filepick" multiple hidden>
         <button class="icon" id="mic" hidden title="语音输入：点一下开始说话，再点一下结束" aria-label="语音输入"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
@@ -740,7 +756,7 @@ function renderHistory() {
   for (const c of chats) {
     const gg = byKind ? MODE_LABEL[c.kind] || '未分类' : day(c);
     groups.set(gg, (groups.get(gg) || '') + `<div class="chat ${c.id === S.chatId ? 'on' : ''}" data-chat="${c.id}" title="${esc(c.title)}${c.preview ? `\n${esc(c.preview)}` : ''}\n${c.n} 条消息">
-      <span class="t">${esc(c.title)}</span>${!byKind && c.kind ? `<span class="k">${MODE_LABEL[c.kind]}</span>` : ''}<span class="m">${when(c.last || c.created_at)}</span>
+      <span class="n" title="讨论编号：消息里写“讨论 ${c.id}”，成员就能在存档里找到它">${c.id}</span><span class="t">${esc(c.title)}</span>${!byKind && c.kind ? `<span class="k">${MODE_LABEL[c.kind]}</span>` : ''}<span class="m">${when(c.last || c.created_at)}</span>
       <span class="acts"><span data-rename="${c.id}" title="重命名">${ICON.rename}</span><span data-export="${c.id}" title="导出 Markdown">${ICON.export}</span><span data-del="${c.id}" title="删除">${ICON.del}</span></span>
     </div>`);
   }
@@ -1052,6 +1068,7 @@ es.onmessage = e => {
   if (ev.type === 'init') {
     if (ev.state.profile) Object.assign($('#who'), { hidden: false, textContent: ev.state.profile });
     if (ev.modelLists && Object.keys(ev.modelLists).length) modelLists = ev.modelLists;
+    if (ev.prompts) { savedPrompts = ev.prompts; renderPrompts(); }
     delete lastHTML['#members']; S = ev.state; clockSkew = Date.now() - S.now; messages = ev.messages; renderState(); renderAll();
   }
   if (ev.type === 'state') { S = ev; clockSkew = Date.now() - S.now; renderState(); }
@@ -1270,6 +1287,43 @@ mainEl.addEventListener('dragover', e => { if (SHARED || !e.dataTransfer.types.i
 mainEl.addEventListener('dragleave', e => { if (!mainEl.contains(e.relatedTarget)) mainEl.classList.remove('dropping'); });
 mainEl.addEventListener('drop', e => { mainEl.classList.remove('dropping'); if (SHARED || !e.dataTransfer.files.length) return; e.preventDefault(); attach([...e.dataTransfer.files]); });
 $('#send').onclick = sendMsg;
+
+// ---------- saved prompts ----------
+// Kept on the server (any browser sees them). A prompt remembers the mode it was saved in: using it in an empty
+// discussion, or "新讨论", starts that mode; it only fills the input, the user still sends it.
+let savedPrompts = [];
+function renderPrompts() {
+  $('#plist').innerHTML = savedPrompts.map(p => `<div class="prow" data-puse="${p.id}" title="${esc(p.text.slice(0, 300))}">`
+    + `<span class="pt">${esc(p.title)}</span>${p.mode ? `<span class="k">${MODE_LABEL[p.mode] || ''}</span>` : ''}`
+    + `<button data-pnew="${p.id}" title="开一场新讨论${p.mode ? `（${MODE_LABEL[p.mode]}模式）` : ''}，把它填进输入框">新讨论</button>`
+    + `<button data-pdel="${p.id}" title="删除这条收藏" aria-label="删除">✕</button></div>`).join('')
+    || '<div class="memempty">还没有收藏。把 prompt 写进输入框，点“收藏当前输入”。</div>';
+}
+const fill = p => { $('#input').value = p.text; grow(); $('#input').focus(); $('#prompts').hidden = true; };
+$('#fav').onclick = () => { $('#prompts').hidden = !$('#prompts').hidden; };
+document.addEventListener('click', e => { if (!$('#prompts').hidden && !e.target.closest('#prompts,#fav')) $('#prompts').hidden = true; });
+$('#prompts').addEventListener('click', async e => {
+  const b = e.target.closest('[data-psave],[data-puse],[data-pnew],[data-pdel]');
+  if (!b) return;
+  const p = savedPrompts.find(x => x.id === (b.dataset.puse || b.dataset.pnew || b.dataset.pdel));
+  if (b.dataset.pdel) { if (confirm(`删除收藏「${p.title}」？`)) post('/api/prompts/delete', { id: p.id }); return; }
+  if (b.dataset.pnew) {
+    const { id } = await (await post('/api/chat/new')).json();
+    if (p.mode) await post('/api/chat/mode', { id, mode: p.mode });
+    return fill(p);
+  }
+  if (b.dataset.puse) {
+    if (p.mode && !messages.length && S.discussionMode.mode !== p.mode) await post('/api/chat/mode', { id: S.chatId, mode: p.mode });
+    return fill(p);
+  }
+  const text = $('#input').value.trim();
+  if (!text) return alert('先把要收藏的 prompt 写进输入框');
+  const title = prompt('给这个 prompt 起个名字', text.split('\n')[0].replace(/^#+\s*/, '').slice(0, 30))?.trim();
+  if (!title || (savedPrompts.some(x => x.title === title) && !confirm(`已经有「${title}」，覆盖吗？`))) return;
+  const mode = S.discussionMode.mode !== 'auto' ? S.discussionMode.mode : null;
+  const r = await post('/api/prompts/save', { title, text, mode });
+  if (!r.ok) alert((await r.json().catch(() => ({}))).error || '收藏失败');
+});
 $('#input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMsg(); } });
 $('#pause').onclick = () => post('/api/pause', { paused: !S.paused });
 $('#stop').onclick = () => post('/api/stop');

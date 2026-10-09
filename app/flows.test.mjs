@@ -383,3 +383,23 @@ test('game: a DM runs over lines up to the next marker; the host can pause, and 
   assert.equal(s.state.game.ledger, '账本 B');
   assert.ok(turns()[1].h === 'claude' && turns()[1].p.includes('程序修好了吗？'));     // the host is woken with the user's message
 });
+
+test('saved prompts: kept on the server with their mode, same title replaced, deleted; never sent to a shared link', async t => {
+  const { post, init, url } = await server(t);
+  assert.equal((await post('/api/prompts/save', { title: '', text: 'x' })).status, 500);
+  await post('/api/prompts/save', { title: '密封竞拍', text: '@glm 主持，玩密封竞拍 v1', mode: 'game' });
+  await post('/api/prompts/save', { title: '研究模板', text: '先查事实', mode: 'auto' });
+  await post('/api/prompts/save', { title: '密封竞拍', text: '@glm 主持，玩密封竞拍 v2', mode: 'game' });
+  let ps = (await init()).prompts;
+  assert.deepEqual(ps.map(p => [p.title, p.text, p.mode]), [['密封竞拍', '@glm 主持，玩密封竞拍 v2', 'game'], ['研究模板', '先查事实', null]]);
+  await post('/api/prompts/delete', { id: ps[1].id });
+  ps = (await init()).prompts;
+  assert.deepEqual(ps.map(p => p.title), ['密封竞拍']);
+  const { id } = await (await post('/api/chat/new')).json();                     // "新讨论" gets the new discussion's id
+  assert.equal((await init()).state.chatId, id);
+  const { share } = await (await post('/api/chat/share', { id })).json();
+  const rd = (await fetch(`${url}/events?s=${share}`)).body.getReader();
+  const first = new TextDecoder().decode((await rd.read()).value);
+  rd.cancel();
+  assert.ok(!first.includes('密封竞拍'));
+});
