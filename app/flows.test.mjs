@@ -47,26 +47,6 @@ test('notes: members keep them with [NOTE] lines', () => {
   assert.deepEqual(parseReply('观点。\n[NOTE add] 来源：RBA 9 月声明\n[STANCE 60%] 支持：会加息').stance, { t: '会加息', c: 60, l: '支持' });
 });
 
-test('commons, hard mode: random regrowth, only the lake size public, a random end', async () => {
-  const { commons, gameBrief } = await import('./game.mjs');
-  const g = commons.setup(['a', 'b'], { rounds: 10, hard: true }), o = n => ({ a: { take: n }, b: { take: n } });
-  assert.deepEqual(commons.act(g, 'a', '1000 吨').order, { take: 100, asked: 1000 });           // at most the lake
-  assert.deepEqual(commons.act(g, 'a', '12').order, { take: 12 });
-  const rolls = [0, 0.99, 0.5, 0.1], rand = () => rolls.shift();          // growth ×1.6, ×2.38, ×2.0 then the end roll
-  commons.resolve(g, o(20), x => x, rand);
-  assert.deepEqual([g.pool, g.round], [96, 2]);                                 // 60 left ×1.6
-  commons.resolve(g, o(20), x => x, rand);
-  assert.deepEqual([g.pool, g.round], [100, 3]);                                // 56 ×2.38 = 133, capped; no end roll before round 3
-  const brief = gameBrief(commons, g, 'a', 'talk', x => '@' + x);
-  assert.ok(brief.includes('you caught 20 (the total is secret)') && !brief.includes('40 caught') && !brief.includes('of 10'));
-  assert.ok(brief.includes('1 in 4 chance'));
-  commons.resolve(g, o(10), x => x, rand);                                       // ×2.0, then 0.1 < 1/4: over
-  assert.equal(g.over, 'ended');
-  const after = gameBrief(commons, g, 'a', 'over', x => '@' + x);
-  assert.ok(after.includes('ended at random after round 3') && after.includes('40 caught in total') && after.includes('(×1.6)'));
-  assert.ok(commons.final(g, x => x).includes('第 3 轮后随机结束') && !commons.final(g, x => x).includes('可持续'));
-});
-
 // ---------- the flows on a real server (SQLite, fake harness that records each turn; no Jev key) ----------
 import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -103,11 +83,10 @@ async function server(t, slowFirst = 0) {
       if (o.signal?.aborted) return {error:'stopped', ms:1};
       const text = p.includes('STORY RELAY') ? h+' 的一段。'+(story++ ? '' : '\\n@opencode')+'\\n[NOTE add] '+h+' 登场'
         : p.includes('You are the judge') ? '评判：正方赢在定义。'
-        : p.includes('reply with one line: [ACT]') ? '[ACT] 10\\n守约。'
         : p.includes('You are the HOST') ? ['', '规则：猜数。\\n[DM @codex] 你的数字是 7\\n[DM @agy] 你的数字是 3\\n[PHASE talk @opencode @agy]\\n[STATE]\\n回合 1',
             '交指令。\\n[PHASE orders @codex]\\n[STATE]\\n回合 2', '结算：codex 赢。\\n[END]\\n[STATE]\\n结束'][+p.match(/this is turn (\\d+)/)[1]]
         : p.includes('the host asks for your order') ? (o.onLive('🔧 Read /home/agent/.codex/sessions/x.jsonl'), '[ACT] 猜 5\\n凭直觉')
-        : p.includes('the negotiation before round') ? h+' 公开。\\n[DM @codex] '+h+' 的私信' : h+' 发言。';
+        : h+' 发言。';
       const mate = p.includes('私信测试') && p.match(/Your teammates?: @(\\w+)/)?.[1]; // debate: a word to the teammate
       return {text: mate ? text+'\\n[DM @'+mate+'] '+h+' 的暗号' : text, sid:'s-'+h, ms:150}};`);
   const srv = net.createServer(); srv.listen(0, '127.0.0.1'); await once(srv, 'listening');
@@ -317,36 +296,6 @@ else:
   assert.ok(!(await post('/api/arena/start', { goal: 'x', minutes: 10, referee: 'nope' })).ok);
 });
 
-test('game mode: talk in turn with private messages, secret simultaneous orders, the host resolves the rounds', async t => {
-  const { post, init, until, turns, root } = await server(t);
-  const id = (await init()).state.chatId;
-  await post('/api/chat/mode', { id, mode: 'fishing' });
-  await post('/api/send', { text: '开始，2 轮，简单', chat_id: id });
-  const s = await until(async () => { const x = await init(), end = x.messages.find(m => m.text.startsWith('🏁'));
-    return end && x.messages.filter(m => m.kind === 'agent' && m.id > end.id).length >= 4 && x; });
-  const g = s.state.game;
-  assert.equal(g.over, 'done');
-  assert.deepEqual(Object.values(g.caught), [20, 20, 20, 20]); // 10 each, twice: the lake refills to 100
-  // private messages: the others' to codex (codex's own to itself is dropped), 2 rounds × 2 laps
-  const dms = s.messages.filter(m => m.dm);
-  assert.equal(dms.length, 12);
-  assert.ok(dms.every(m => m.dm === 'codex' && m.sender !== 'codex' && m.text.endsWith('的私信')));
-  const tt = turns(), talk = tt.filter(x => x.p.includes('the negotiation before round')), orders = tt.filter(x => x.p.includes('[ACT] <tonnes>'));
-  assert.equal(talk.length, 16);
-  assert.equal(orders.length, 8);
-  for (let i = 1; i < talk.length; i++) assert.ok(talk[i].at - talk[i - 1].at >= 150, 'talk turns overlap');
-  assert.ok(orders[3].at - orders[0].at < 150, 'orders start together');
-  assert.ok(tt.filter(x => x.h !== 'codex').every(x => !x.p.includes('的私信')));            // only the addressee reads them
-  assert.ok(tt.some(x => x.h === 'codex' && x.p.includes('claude 的私信') && x.p.includes('(private message)')));
-  assert.ok(talk.slice(8).every(x => x.p.includes('Round 1: the lake had 100, 40 caught in total (you: 10)')));
-  assert.ok(talk.every(x => !x.p.includes('Everyone:')));                                    // catches stay secret
-  // orders go to the host only: the user sees them in notes, the members never
-  assert.ok(s.messages.filter(m => m.kind === 'agent').every(m => !m.text.includes('守约')));
-  assert.equal(s.messages.filter(m => m.kind === 'moderator' && m.text.startsWith('🔒')).length, 8);
-  assert.ok(!readFileSync(join(root, 'data', 'discussions', `${id}.md`), 'utf8').includes('的私信'));
-  const after = tt.slice(-4);
-  assert.ok(after.every(x => x.p.includes('The game is over') && x.p.includes('Everyone:')));
-});
 
 test('debate: teammates may coordinate by private message, unseen by the other side', async t => {
   const { post, init, until, turns } = await server(t);
@@ -361,8 +310,8 @@ test('debate: teammates may coordinate by private message, unseen by the other s
   assert.ok(turns().some(x => x.p.includes('的暗号') && x.p.includes('(private message)')));
 });
 
-test('free game: a member hosts with a private ledger, DMs the setup, collects secret orders, ends; peeking is flagged', async t => {
-  const { post, init, until, turns } = await server(t);
+test('game mode: a member hosts with a private ledger, DMs the setup, collects secret orders, ends; peeking is flagged', async t => {
+  const { post, init, until, turns, root } = await server(t);
   const id = (await init()).state.chatId;
   await post('/api/chat/mode', { id, mode: 'game' });
   await post('/api/send', { text: '我们玩个猜数游戏', chat_id: id });                                // no host named: asked for one
@@ -377,6 +326,7 @@ test('free game: a member hosts with a private ledger, DMs the setup, collects s
   assert.ok(host[2].p.includes('secret order') && host[2].p.includes('[ACT] 猜 5'));                // the order reached the host
   assert.ok(s.messages.every(m => !m.text.includes('[STATE]') && !m.text.includes('回合 1') && !m.text.includes('[PHASE')));
   const dm = s.messages.find(m => m.text === '你的数字是 7');
+  assert.ok(!readFileSync(join(root, 'data', 'discussions', `${id}.md`), 'utf8').includes('你的数字是'));           // DMs stay out of the archive
   assert.equal(dm.dm, 'codex');
   assert.ok(tt.filter(x => x.h !== 'codex' && x.h !== 'claude').every(x => !x.p.includes('你的数字是 7')));
   assert.ok(tt.some(x => x.h === 'codex' && x.p.includes('你的数字是 7')));

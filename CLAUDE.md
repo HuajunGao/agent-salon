@@ -40,8 +40,7 @@ Restart the server only when no agent is thinking (check `/events` state) — th
 - **app/modes.mjs** — the discussion modes as rules plus pure functions: each mode's flow (`free` raised hands,
   `relay` for stories, `debate` with drawn sides and an order of play), whether replies carry a [STANCE] line, whether
   the moderator steers, and what its notes are for; also the reply protocol (`parseReply`: [NOTE]/[STANCE]/[HAND]).
-- **app/game.mjs** — game mode's host program (pure): the commons engine (setup/rules/view/act/resolve/final) and
-  each turn's brief. A program, not a model, keeps the state and resolves rounds.
+- **app/game.mjs** — game mode (pure): parsing the host's markers and ledger, the host's and players' briefs.
 - **app/moderator.mjs** — Jev calls: `judge` (one request: convergence Score + stalling/debatable/challenged/circling
   Nouls) and `novelty` (one Noul per candidate: would it add something new?).
 - **app/memory.mjs** — `curate`: a configured active member folds the user's new messages into `data/memory.md` (or NO_CHANGE).
@@ -61,16 +60,12 @@ turn cap); debate draws sides at its first message (odd member count: one member
 turns start only when nothing else is thinking or queued, so each sees the previous reply. Every discussion keeps
 notes in `chats.state` (resources / setting / key lines): members change them with [NOTE add|edit|drop] lines, the
 user in the UI, and every turn's prompt includes them (`notesPrompt`) so long discussions and stories don't drift.
-Game modes (flow 'game', never picked by Auto; state in `chats.state.game`, rules' `game` says which):
-- 博弈 (`game`): any game the user describes, hosted by the member the first message @mentions (none: the server asks
-  for one). The host (game.mjs hostBrief, server hostDone) announces rules, DMs private setups, keeps a private ledger
-  ([STATE], stored in the game state, shown to the user) and picks each next step ([PHASE talk n @b @a] / [PHASE orders
-  @a @b] / [END]; listed handles set who speaks, in that order); orders reach it as `role='order'` DMs. The host may run
-  code (a rules program if it wants).
-- 经典捕鱼 (`fishing`): the commons, run by game.mjs ("4 轮" sets rounds; hard by default: random regrowth, only the
-  lake size public, a random end; "简单" for fixed doubling and public totals). Each round the players talk in turn
-  (twice each), then all give `[ACT] n` at once in turns that are never posted (the user sees them as 🔒 notes), then
-  the server resolves. The members learn the public totals and their own catches from the brief, not from notes.
+Game (博弈, never picked by Auto; state in `chats.state.game`): any game the user describes, hosted by the member the
+first message @mentions (none: the server asks for one). The host (game.mjs hostBrief, server hostDone) announces
+rules, DMs private setups, keeps a private ledger ([STATE], stored in the game state, shown to the user) and picks each
+next step ([PHASE talk n @b @a] / [PHASE orders @a @b] / [END]; listed handles set who speaks, in that order); orders
+reach it as `role='order'` DMs. The host may run code (a rules program if it wants). A built-in commons game (fishing,
+discussions 36-37) was removed: a member emptied the lake whenever it paid, so it taught nothing after the first game.
 Private messages are `messages.dm` (the addressee): `TALK` excludes them (archive, Jev), `HEARS` shows them only to
 sender and addressee; in a formal debate teammates may DM each other. Players' game turns are read-only, and `audit`
 flags tool calls touching other members' workspaces or CLI session files (🚨): all CLIs share one OS user, so this is

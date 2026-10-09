@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
 import { AGENTS, runTurn, listModels, runAs, spawnJob } from './agents.mjs';
 import { judge, novelty, classifyMode, stanceShift } from './moderator.mjs';
-import { commons, talkOrder, gameBrief, parseHost, hostBrief, playerBrief, HOST_TURNS } from './game.mjs';
+import { talkOrder, parseHost, hostBrief, playerBrief, HOST_TURNS } from './game.mjs';
 import { MODES, rulesOf, relayNext, debateSetup, debateScript, debateBrief, seatOf, PHASES, parseReply, applyNotes } from './modes.mjs';
 import { curate } from './memory.mjs';
 import { validateMember, memberMentions, atToken } from './members.mjs';
@@ -390,44 +390,26 @@ function finishDebate(c) {
   for (const n of NAMES) raise(n, 1, 'after the debate');
 }
 
-// Game: the first message starts a game with the enabled members. With a member @mentioned as host ("@claude 主持，
-// 玩狼人杀") it is a free game run by that member (game.mjs hostBrief); else the commons ("…3 轮" sets the rounds; hard
-// mode unless it says "经典": random regrowth, only the lake size public, a random end, the rounds a cap the players
-// aren't told). State in chats.state.game: phase ('host' | 'talk' | 'orders' | 'over'), round, the talk queue, step (talk
-// turns played, so a turn is counted once), the orders in; the commons adds the engine's state, a free game host,
-// waiting (who owes an order) and the host's ledger. Hands carry game: {round, phase, step}.
-// Talk turns follow one another; orders all start at once. The commons reads orders itself (the user sees them as
-// notes); in a free game they go to the host as private messages (role 'order'), and the host resolves them.
+// Game: the first message names the host (the first enabled member it @mentions; none: the server asks for one) and
+// what to play; the other enabled members play (game.mjs). State in chats.state.game: host, players, phase ('host' |
+// 'talk' | 'orders' | 'over'), round (host turns played), the talk queue, step (talk turns played, so a turn is counted
+// once), waiting (who owes an order), the orders in, and the host's ledger. Hands carry game: {round, phase, step}.
+// Talk turns follow one another; orders all start at once and go to the host as private messages (role 'order').
 // Players' game turns are read-only and their tool calls are checked for peeking (audit).
-const LAPS = 2; // ponytail: each player speaks twice per round's negotiation; make it a setting if games drag
 const handle = x => `@${memberAt(x)}`;
 function gameOnUser(m) {
   const st = chatState(chatId);
   if (st.game?.over) { for (const n of NAMES) raise(n, 1, 'user message'); return; }
   if (!st.game) {
-    if (rules(chatId).game === 'free') {
-      const host = mentions(m.text).find(n => S.enabled[n]);
-      if (!host) return note('🎲 博弈要有人主持：@ 一位成员当主持人，再说说玩什么、规则是什么，比如“@claude 主持，我们玩狼人杀”。');
-      const players = enabledOrder().filter(n => n !== host);
-      if (players.length < 2) return note('🎲 自由博弈除了主持人至少还要 2 位参与成员。');
-      st.game = { host, players, phase: 'host', round: 0, step: 0, orders: {}, waiting: [], queue: [], ledger: '' };
-      saveState(chatId, st);
-      logDecision('game-start', null, { message_id: m.id, detail: { game: 'free', host, players } });
-      note(`🎲 自由博弈：${handle(host)} 主持，玩家 ${players.map(handle).join('、')}。主持人先公布规则、私信发身份或资源，`
-        + '再一个阶段一个阶段推进（轮流发言 / 秘密行动），每个阶段后由它结算。私信、秘密指令和它的私密账本你都看得到。');
-      return gameNext(chatId);
-    }
-    const players = enabledOrder();
-    if (players.length < 2) return note('🎣 博弈至少需要 2 位参与成员。');
-    const hard = !/简单|easy/i.test(m.text), rounds = Math.min(20, +m.text.match(/(\d+)\s*轮/)?.[1] || (hard ? 10 : 6));
-    st.game = { ...commons.setup(players, { rounds, hard }), laps: LAPS, phase: 'talk', step: 0, orders: {}, queue: talkOrder(players, 1, LAPS) };
+    const host = mentions(m.text).find(n => S.enabled[n]);
+    if (!host) return note('🎲 博弈要有人主持：@ 一位成员当主持人，再说说玩什么、规则是什么，比如“@claude 主持，我们玩狼人杀”。');
+    const players = enabledOrder().filter(n => n !== host);
+    if (players.length < 2) return note('🎲 博弈除了主持人至少还要 2 位参与成员。');
+    st.game = { host, players, phase: 'host', round: 0, step: 0, orders: {}, waiting: [], queue: [], ledger: '' };
     saveState(chatId, st);
-    logDecision('game-start', null, { message_id: m.id, detail: { game: 'commons', players, rounds, hard } });
-    note(hard ? `🎣 博弈开始（困难模式）：${commons.label}，${players.map(handle).join('、')}。湖最多 ${st.game.cap} 吨鱼，每轮捕完剩下的按 ×1.6–2.4 随机恢复`
-      + `（不超过上限），剩不到 5 吨就崩溃。从第 3 轮起每轮结束有 1/4 概率游戏结束，最多 ${rounds} 轮（成员不知道上限）。每轮先轮流谈判`
-      + `（公开或私信，每人 ${LAPS} 次），再同时秘密下令。渔获和总数只有你看得到，成员们只知道湖的新大小。`
-      : `🎣 博弈开始：${commons.label}，${players.map(handle).join('、')} 共 ${rounds} 轮。湖最多 ${st.game.cap} 吨鱼，每轮捕完剩下的翻倍（不超过上限），`
-      + `剩不到 5 吨就崩溃。每轮先轮流谈判（公开或私信，每人 ${LAPS} 次），再同时秘密下令。各人的渔获只有你看得到，成员们只知道总数。`);
+    logDecision('game-start', null, { message_id: m.id, detail: { host, players } });
+    note(`🎲 博弈开始：${handle(host)} 主持，玩家 ${players.map(handle).join('、')}。主持人先公布规则、私信发身份或资源，`
+      + '再一个阶段一个阶段推进（轮流发言 / 秘密行动），每个阶段后由它结算。私信、秘密指令和它的私密账本你都看得到。');
     return gameNext(chatId);
   }
   if (!busy() && !NAMES.some(n => rt[n].hand)) gameNext(chatId); // nothing scheduled (e.g. after a stop): carry on
@@ -436,23 +418,19 @@ const present = a => S.enabled[a] && rt[a];
 function gameNext(c) {
   if (c !== chatId) return;
   const st = chatState(c), g = st.game;
-  if (!g || g.over) return;
+  if (!g?.host || g.over) return;
   const hand = phase => ({ r: 50, since: Date.now(), why: 'game', game: { round: g.round, phase, step: g.step } });
   if (g.phase === 'talk') {
     while (g.queue.length && !present(g.queue[0])) { g.queue.shift(); g.step++; }
     if (g.queue.length) { rt[g.queue[0]].hand = hand('talk'); return saveState(c, st); }
-    if (g.host) g.phase = 'host';
-    else { g.phase = 'orders'; noteNext(`🎣 第 ${g.round} 轮谈判结束，大家秘密下令。`); }
+    g.phase = 'host';
   }
   if (g.phase === 'orders') {
-    const who = g.host ? g.waiting : g.players;
-    for (const a of who) {
+    for (const a of g.waiting) {
       if (a in g.orders || rt[a]?.hand || rt[a]?.status === 'thinking') continue;
-      if (present(a)) rt[a].hand = hand('orders');
-      else g.orders[a] = g.host ? true : { ...commons.idle, error: '没有参加' };
+      if (present(a)) rt[a].hand = hand('orders'); else g.orders[a] = true; // not taking part: nothing to wait for
     }
-    if (who.some(a => !(a in g.orders))) return saveState(c, st);
-    if (!g.host) return (saveState(c, st), resolveRound(c));
+    if (g.waiting.some(a => !(a in g.orders))) return saveState(c, st);
     g.phase = 'host';
   }
   if (present(g.host) && !rt[g.host].hand && rt[g.host].status !== 'thinking') rt[g.host].hand = hand('host');
@@ -465,40 +443,16 @@ function gameTalkDone(c, h) {
   saveState(c, st);
   gameNext(c);
 }
-// An order turn's reply. The commons: its last [ACT] line, checked by the engine (a missing or invalid order counts as
-// idle). A free game: the reply goes to the host as a private message.
+// An order turn's reply goes to the host as a private message.
 function gameOrder(c, a, h, res) {
   const st = chatState(c), g = st.game;
-  if (!g || g.over || g.phase !== 'orders' || g.round !== h.round || a in g.orders) return;
-  const p = res.error ? null : parseReply(res.text), act = p?.acts.at(-1);
-  if (g.host) {
-    g.orders[a] = true; saveState(c, st);
-    insertMsg({ chat_id: c, sender: a, kind: 'agent', dm: g.host, role: 'order', mode: 'game', latency_ms: res.ms, model: S.models[a] || 'default',
-      text: p ? [...p.acts.map(x => `[ACT] ${x}`), p.text].filter(Boolean).join('\n') || '（空）' : `（这一回合出错了，没有指令：${res.error.slice(0, 80)}）` });
-    logDecision('game-order', a, { latency_ms: res.ms, detail: { round: g.round, act: act ?? null, error: res.error || null } });
-    return gameNext(c);
-  }
-  const r = act == null ? { error: res.error ? `出错：${res.error.slice(0, 80)}` : '回复里没有 [ACT] 行' } : commons.act(g, a, act);
-  g.orders[a] = r.error ? { ...commons.idle, error: r.error } : r.order;
-  saveState(c, st);
-  logDecision('game-order', a, { latency_ms: res.ms, detail: { round: g.round, act: act ?? null, ...g.orders[a] } });
-  jobNote(c, `🔒 ${handle(a)} 下令${r.error ? `无效（${r.error}），按 ${commons.show(commons.idle)} 算` : `：${commons.show(r.order)}`}`
-    + `${p?.text ? `。${p.text.slice(0, 300)}` : ''}`);
-  if (g.players.every(x => x in g.orders)) resolveRound(c);
-}
-function resolveRound(c) {
-  const st = chatState(c), g = st.game;
-  const text = commons.resolve(g, g.orders, handle);
-  g.orders = {};
-  if (g.over) g.phase = 'over';
-  else Object.assign(g, { phase: 'talk', queue: talkOrder(g.players, g.round, g.laps) });
-  saveState(c, st);
-  logDecision('game-round', null, { detail: g.history.at(-1) });
-  jobNote(c, text);
-  if (!g.over) return gameNext(c);
-  jobNote(c, commons.final(g, handle));
-  logDecision('game-over', null, { detail: { over: g.over, caught: g.caught } });
-  if (c === chatId) for (const a of g.players) raise(a, 1, 'after the game');
+  if (!g?.host || g.over || g.phase !== 'orders' || g.round !== h.round || a in g.orders) return;
+  const p = res.error ? null : parseReply(res.text);
+  g.orders[a] = true; saveState(c, st);
+  insertMsg({ chat_id: c, sender: a, kind: 'agent', dm: g.host, role: 'order', mode: 'game', latency_ms: res.ms, model: S.models[a] || 'default',
+    text: p ? [...p.acts.map(x => `[ACT] ${x}`), p.text].filter(Boolean).join('\n') || '（空）' : `（这一回合出错了，没有指令：${res.error.slice(0, 80)}）` });
+  logDecision('game-order', a, { latency_ms: res.ms, detail: { round: g.round, acts: p?.acts || [], error: res.error || null } });
+  gameNext(c);
 }
 // The host's turn is over (its public text and DMs are on their way): keep its ledger and start the phase it asked for.
 // h: null when the turn failed (it plays again after the user's next message).
@@ -787,7 +741,7 @@ function turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, r
   let ask;
   const g = r.flow === 'game' && chatState(chat).game;
   if (r.flow === 'relay') ask = `\n\n(Your turn in the relay. Reply in ${S.language}. ${tools})\n${r.prompt}`;
-  else if (g) ask = `\n\n${!g.host ? gameBrief(commons, g, a, play?.phase || 'over', handle)
+  else if (g) ask = `\n\n${!g.host ? 'The game is over: talk about it in public.' // an old built-in game
     : a !== g.host ? playerBrief(g, a, play?.phase || 'over', handle)
     : play?.phase === 'host' ? hostBrief(g, handle, exec, !g.round) : 'You hosted the game, which is over: talk about it in public.'}`
     + `\n\n(Reply in ${S.language}. ${tools})\n${r.prompt}`;
@@ -1536,14 +1490,13 @@ function state() {
     chats: listChats(),
     sandboxed: !!RUNAS,
     discussionMode: { ...chatMode(chatId), pending: modePending === chatId,
-      rules: (({ flow, stance, notes, game }) => ({ flow, stance: !!stance, notesTitle: notes.title, game }))(rules(chatId)) },
+      rules: (({ flow, stance, notes }) => ({ flow, stance: !!stance, notesTitle: notes.title }))(rules(chatId)) },
     notes: chatState(chatId).notes || [],
     debate: (({ debate: d }) => d && !d.skipped ? { pro: d.pro, con: d.con, judge: d.judge, done: d.done, motion: d.motion,
       phase: d.script[d.at]?.phase || null, step: Math.min(d.at + 1, d.script.length), steps: d.script.length } : null)(chatState(chatId)),
     // the user hosts: the whole game state, catches included
-    game: (({ game: g }) => g && { label: commons.label, round: g.round, rounds: g.rounds, hard: !!g.hard, phase: g.phase, pool: g.pool, cap: g.cap,
-      caught: g.caught, players: g.players, ordered: Object.keys(g.orders), over: g.over || null,
-      host: g.host || null, waiting: g.waiting, ledger: g.ledger })(chatState(chatId)),
+    game: (({ game: g }) => g?.host && { host: g.host, players: g.players, round: g.round, phase: g.phase, waiting: g.waiting,
+      ordered: Object.keys(g.orders), ledger: g.ledger, over: g.over || null })(chatState(chatId)),
     stances: stances(),
     arena: arena && { id: arena.id, chat: arena.chat, goal: arena.goal, until: arena.until, phase: arena.phase, referee: arena.referee,
       url: arenaURL(arena), probing, members: Object.entries(arena.members).map(([a, m]) => ({ name: a, rate: m.rate ?? null,
