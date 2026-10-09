@@ -178,7 +178,7 @@ const lastUserId = c => q1(`SELECT coalesce(max(id),0) m FROM messages WHERE cha
 
 function logDecision(event, agent, extra = {}) {
   run('INSERT INTO decisions(chat_id, mode, event, agent, score, detail, based_on, message_id, latency_ms) VALUES(?,?,?,?,?,?,?,?,?)',
-    chatId, S.scheduler, event, agent ?? null, extra.score ?? null, extra.detail ? JSON.stringify(extra.detail) : null,
+    extra.chat ?? chatId, S.scheduler, event, agent ?? null, extra.score ?? null, extra.detail ? JSON.stringify(extra.detail) : null,
     extra.based_on ?? null, extra.message_id ?? null, extra.latency_ms ?? null);
 }
 
@@ -256,7 +256,9 @@ const note = text => insertMsg({ chat_id: chatId, sender: 'moderator', kind: 'mo
 // A note about what comes next ("进入自由辩") waits until the replies already written are published, so it lands
 // between the last reply of one phase and the first of the next even while replies wait for reading or read-aloud.
 const held = [];
-const noteNext = text => held.push({ chat: chatId, text });
+// In a discussion that isn't the current one (the user switched away mid-turn) there is nothing to wait for: posted at once.
+const noteNext = (text, c = chatId) => c === chatId ? held.push({ chat: c, text })
+  : insertMsg({ chat_id: c, sender: 'moderator', kind: 'moderator', text });
 function releaseHeld() {
   if (ready.some(r => r.chat === chatId)) return;
   for (const h of held.splice(0)) if (h.chat === chatId) note(h.text);
@@ -506,15 +508,15 @@ function hostDone(c, play, h) {
   // [PAUSE], or no next step at all (a guess could run the wrong phase): wait for the user, whose message wakes the host
   if (!h.next || h.next.kind === 'pause') {
     saveState(c, st);
-    logDecision('game-pause', g.host, { detail: { round: g.round, asked: !!h.next } });
+    logDecision('game-pause', g.host, { chat: c, detail: { round: g.round, asked: !!h.next } });
     return noteNext(h.next ? '⏸ 主持人暂停了比赛（原因见它的发言）。发一条消息让它继续。'
-      : '⏸ 主持人这一回合没写下一步（[PHASE …] / [PAUSE] / [END]），比赛先暂停。发一条消息让它继续。');
+      : '⏸ 主持人这一回合没写下一步（[PHASE …] / [PAUSE] / [END]），比赛先暂停。发一条消息让它继续。', c);
   }
   const next = h.next;
   if (next.kind === 'end' || g.round >= HOST_TURNS) {
     Object.assign(g, { over: next.kind === 'end' ? 'end' : 'cap', phase: 'over' }); saveState(c, st);
-    logDecision('game-over', g.host, { detail: { over: g.over, turns: g.round } });
-    noteNext(g.over === 'end' ? '🏁 主持人宣布游戏结束。' : `🏁 主持人已经主持了 ${HOST_TURNS} 回合，游戏到此结束。`);
+    logDecision('game-over', g.host, { chat: c, detail: { over: g.over, turns: g.round } });
+    noteNext(g.over === 'end' ? '🏁 主持人宣布游戏结束。' : `🏁 主持人已经主持了 ${HOST_TURNS} 回合，游戏到此结束。`, c);
     if (c === chatId) for (const a of [...g.players, g.host]) raise(a, 1, 'after the game');
     return;
   }
@@ -527,9 +529,9 @@ function hostDone(c, play, h) {
     Object.assign(g, { phase: 'orders', waiting: who.length ? who : g.players, orders: {} });
   }
   saveState(c, st);
-  logDecision('game-phase', g.host, { detail: { round: g.round, ...next, waiting: g.waiting } });
+  logDecision('game-phase', g.host, { chat: c, detail: { round: g.round, ...next, waiting: g.waiting } });
   noteNext(next.kind === 'talk' ? `🎲 轮流发言${order.length ? `：${g.queue.map(handle).join(' → ')}` : next.laps > 1 ? `（每人 ${next.laps} 次）` : ''}。`
-    : `🎲 秘密行动：${g.waiting.map(handle).join('、')}，指令只交给主持人。`);
+    : `🎲 秘密行动：${g.waiting.map(handle).join('、')}，指令只交给主持人。`, c);
   gameNext(c);
 }
 // Every CLI runs as the same OS user, so a player could read other members'
@@ -1813,6 +1815,10 @@ function switchChat(id) {
   chatId = id; paused = !!q1('SELECT paused FROM chats WHERE id=?', id).paused; jev.circlePaused = false;
   for (const n of NAMES) rt[n].hand = null;
   readUntil = 0; mod = null; writeTranscript(id);
+  // A game whose turns were due while the user was elsewhere (gameNext only schedules the current discussion) carries on.
+  // Not in the host phase: that is also how a paused game waits for the user's message.
+  const g = chatState(id).game;
+  if (g && !g.over && (g.phase === 'talk' || g.phase === 'orders')) gameNext(id);
   send(init());
 }
 const prompts = () => JSON.parse(q1(`SELECT value FROM settings WHERE key='prompts'`)?.value || '[]');

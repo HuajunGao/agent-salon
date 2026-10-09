@@ -420,6 +420,21 @@ test('game: the user can end a game the host never ended; the next message is fr
   assert.ok(!turns().slice(1).some(x => x.p.includes('You are the HOST')));          // no host turn after the end
 });
 
+test('game: the user leaves while the host plays its turn; its notes stay in the game, which carries on when the user is back', async t => {
+  const { post, init, until, turns } = await server(t, 1);                        // the host's first turn is slow
+  const id = (await init()).state.chatId;
+  await post('/api/chat/mode', { id, mode: 'game' });
+  await post('/api/send', { text: '@claude 主持，我们玩个猜数游戏', chat_id: id });
+  await until(async () => turns().length >= 1);
+  await post('/api/chat/new');                                                    // away while the host thinks
+  await new Promise(r => setTimeout(r, 5500));                                   // the host's turn ends meanwhile
+  assert.equal(turns().length, 1);                                               // nothing plays in a discussion nobody is in
+  assert.ok(!(await init()).messages.some(m => m.text.startsWith('🎲')));         // the game's note isn't here
+  await post('/api/chat/switch', { id });
+  const s = await until(async () => { const x = await init(); return x.state.game?.over && x; });
+  assert.ok(s.messages.some(m => m.text === '🎲 轮流发言：@opencode → @agy。'));
+});
+
 test('names: a member names itself with [NAME], shown on its messages; @name reaches it, a former name too; clashes refused', async t => {
   const { post, init, until, turns } = await server(t);
   const id = (await init()).state.chatId;
