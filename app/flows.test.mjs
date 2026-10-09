@@ -104,7 +104,7 @@ async function server(t, slowFirst = 0) {
       const text = p.includes('STORY RELAY') ? h+' 的一段。'+(story++ ? '' : '\\n@opencode')+'\\n[NOTE add] '+h+' 登场'
         : p.includes('You are the judge') ? '评判：正方赢在定义。'
         : p.includes('reply with one line: [ACT]') ? '[ACT] 10\\n守约。'
-        : p.includes('You are the HOST') ? ['', '规则：猜数。\\n[DM @codex] 你的数字是 7\\n[DM @agy] 你的数字是 3\\n[PHASE talk]\\n[STATE]\\n回合 1',
+        : p.includes('You are the HOST') ? ['', '规则：猜数。\\n[DM @codex] 你的数字是 7\\n[DM @agy] 你的数字是 3\\n[PHASE talk @opencode @agy]\\n[STATE]\\n回合 1',
             '交指令。\\n[PHASE orders @codex]\\n[STATE]\\n回合 2', '结算：codex 赢。\\n[END]\\n[STATE]\\n结束'][+p.match(/this is turn (\\d+)/)[1]]
         : p.includes('the host asks for your order') ? (o.onLive('🔧 Read /home/agent/.codex/sessions/x.jsonl'), '[ACT] 猜 5\\n凭直觉')
         : p.includes('the negotiation before round') ? h+' 公开。\\n[DM @codex] '+h+' 的私信' : h+' 发言。';
@@ -367,7 +367,7 @@ test('free game: a member hosts with a private ledger, DMs the setup, collects s
   await post('/api/chat/mode', { id, mode: 'game' });
   await post('/api/send', { text: '@claude 主持，我们玩个猜数游戏', chat_id: id });
   const s = await until(async () => { const x = await init();
-    return x.state.game?.over && x.messages.filter(m => m.kind === 'agent' && !m.dm && m.text.endsWith('发言。')).length >= 7 && x; });
+    return x.state.game?.over && x.messages.filter(m => m.kind === 'agent' && !m.dm && m.text.endsWith('发言。')).length >= 6 && x; });
   assert.deepEqual([s.state.game.host, s.state.game.over, s.state.game.ledger], ['claude', 'end', '结束']);
   const tt = turns(), host = tt.filter(x => x.p.includes('You are the HOST'));
   assert.equal(host.length, 3);
@@ -379,7 +379,8 @@ test('free game: a member hosts with a private ledger, DMs the setup, collects s
   assert.ok(tt.filter(x => x.h !== 'codex' && x.h !== 'claude').every(x => !x.p.includes('你的数字是 7')));
   assert.ok(tt.some(x => x.h === 'codex' && x.p.includes('你的数字是 7')));
   const talk = tt.filter(x => x.p.includes('Now: the table talks')), orders = tt.filter(x => x.p.includes('the host asks for your order'));
-  assert.deepEqual(talk.map(x => x.h).sort(), ['agy', 'codex', 'opencode']);
+  assert.deepEqual(talk.map(x => x.h), ['opencode', 'agy']);                                      // the host's order
+  assert.ok(s.messages.some(m => m.text === '🎲 轮流发言：@opencode → @agy。'));
   assert.deepEqual(orders.map(x => x.h), ['codex']);                                                // only who the host named
   const order = s.messages.find(m => m.role === 'order');
   assert.deepEqual([order.sender, order.dm], ['codex', 'claude']);

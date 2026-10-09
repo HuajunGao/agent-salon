@@ -515,14 +515,17 @@ function hostDone(c, play, h) {
     if (c === chatId) for (const a of [...g.players, g.host]) raise(a, 1, 'after the game');
     return;
   }
-  if (next.kind === 'talk') Object.assign(g, { phase: 'talk', queue: talkOrder(g.players, g.round, next.laps) });
+  // the host's order (handles as listed, repeats allowed), else everyone, starting one seat later each time
+  const order = (next.who || '').split(/\s+/).filter(t => t.startsWith('@')).map(t => mentions(t)[0]).filter(x => g.players.includes(x));
+  if (next.kind === 'talk') Object.assign(g, { phase: 'talk',
+    queue: order.length ? Array.from({ length: next.laps }, () => order).flat() : talkOrder(g.players, g.round, next.laps) });
   else {
     const who = mentions(next.who).filter(x => g.players.includes(x));
     Object.assign(g, { phase: 'orders', waiting: who.length ? who : g.players, orders: {} });
   }
   saveState(c, st);
   logDecision('game-phase', g.host, { detail: { round: g.round, ...next, waiting: g.waiting } });
-  noteNext(next.kind === 'talk' ? `🎲 轮流发言${next.laps > 1 ? `（每人 ${next.laps} 次）` : ''}。`
+  noteNext(next.kind === 'talk' ? `🎲 轮流发言${order.length ? `：${g.queue.map(handle).join(' → ')}` : next.laps > 1 ? `（每人 ${next.laps} 次）` : ''}。`
     : `🎲 秘密行动：${g.waiting.map(handle).join('、')}，指令只交给主持人。`);
   gameNext(c);
 }
@@ -717,7 +720,7 @@ const execOn = () => !!RUNAS && S.exec;
 // The address the user opens the app at (from the browser's Host header), so members can give full links to /w/ pages.
 let webHost = q1(`SELECT value FROM settings WHERE key='host'`)?.value || '';
 const wURL = () => (webHost ? `http://${webHost}/w/` : '/w/');
-const toolRule = a => (execOn()
+const toolRule = (a, exec) => (exec
   ? `You have your own workspace, ${wsOf(a)} (your current directory): you may create files and run code there to check a
   claim, e.g. a small script, a quick benchmark, or installing a package locally. Keep it quick: a turn should finish within
   a couple of minutes. Stay inside your workspace; the discussion files are read-only for you.
@@ -745,7 +748,7 @@ const SHELL_RULE = {
   codex: 'Your sandbox is read-only: read-only shell commands (cat, rg, ls) are fine for reading files.',
   default: "Don't run shell commands (they are denied, and a denied action ends your turn without a reply).",
 };
-function intro(a, chat) {
+function intro(a, chat, exec) {
   const memory = S.memory ? readMemory().trim() : '';
   return `You are ${describe(a)}, one member of a live group chat running on the user's machine.
 Members: the user (a human, full participant) and the participating agents ${memberOrder().filter(n => S.enabled[n]).map(describe).join(', ')}.
@@ -757,7 +760,7 @@ Rules:
 - The user is a participant: when the user has spoken, engage with their points first.
 - If you have nothing worth adding right now, answer exactly PASS. If a message @mentions someone else and not you, usually PASS.
 - To speak again after others respond, end your message with [HAND]. To ask a member something, @mention them.
-- You may search the web, read web pages and read files to inform the discussion. ${toolRule(a)}
+- You may search the web, read web pages and read files to inform the discussion. ${toolRule(a, exec)}
 - The user may attach files or images; their paths come with the message. Open them with your file tools (images too,
   if you can see images); if you can't open one, say so rather than guess what it contains.
 - This discussion's full transcript is ${archiveFile(chat)}. Earlier discussions are archived in ${ARCHIVE}: index.md lists
@@ -812,6 +815,8 @@ async function startTurn(a, retried = false) {
   const r = rules(chat), d = chatState(chat).debate, phase = slot != null ? d.script[slot].phase : null;
   const role = summary ? 'summary' : why === 'devil' ? 'devil' : phase === 'verdict' ? 'verdict' : null;
   Object.assign(rt[a], { status: 'thinking', started: Date.now(), live: '', hand: null, note: '', error: '', role });
+  // A player's game turns are read-only (no code, so no rules engine of its own and less to peek with); the host's aren't.
+  const exec = execOn() && !(play && play.phase !== 'host');
   let msgs, prompt;
   if (s.cli_session_id) {
     msgs = q(`SELECT * FROM messages WHERE chat_id=? AND id>? AND ${UNSEEN} AND ${HEARS} ORDER BY id`, chat, s.last_seen_id, a, a, a);
@@ -820,13 +825,11 @@ async function startTurn(a, retried = false) {
     // New (or lost) session: seed with the recent history, trimmed to stay under the Windows command-line limit.
     msgs = q(`SELECT * FROM messages WHERE chat_id=? AND ${HEARS} ORDER BY id DESC LIMIT 40`, chat, a, a).reverse();
     while (msgs.map(fmt).join('').length > 16000) msgs.shift();
-    prompt = intro(a, chat) + `Conversation so far:\n\n`;
+    prompt = intro(a, chat, exec) + `Conversation so far:\n\n`;
   }
   prompt += msgs.map(m => (m.sender === a && m.role !== 'outsider' ? `#${m.id} (you${m.dm ? ` → ${who(m.dm)}, private` : ''}): ${m.text}` : fmt(m))).join('\n\n') || '(no new messages)';
   const k = turnsSinceUser(a) + 1, n = msgs.filter(m => m.sender !== a).length;
   prompt += jobReport(a, chat);
-  // A player's game turns are read-only (no code, so no rules engine of its own and less to peek with); the host's aren't.
-  const exec = execOn() && !(play && play.phase !== 'host');
   prompt += turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, role, play, exec });
   sendState();
 

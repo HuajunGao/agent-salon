@@ -119,7 +119,7 @@ export function gameBrief(engine, g, a, phase, handle) {
 // in its workspace and run it to resolve turns: its call, not ours.
 export const HOST_TURNS = 60; // ponytail: a cap on host turns so a game can't run forever; raise it if real games need more
 
-// The host's reply: [STATE] starts its ledger (the rest of the reply); [PHASE talk n] / [PHASE orders @a @b] / [END] on a
+// The host's reply: [STATE] starts its ledger (the rest of the reply); [PHASE talk n @b @a] / [PHASE orders @a @b] / [END] on a
 // line of its own is the next step (the last one counts). Returns {body, next: {kind, laps?, who?} | null, ledger | null}.
 export function parseHost(raw) {
   const i = raw.search(/^[ \t>*_-]*\[STATE\]/im);
@@ -128,7 +128,8 @@ export function parseHost(raw) {
   const body = (i < 0 ? raw : raw.slice(0, i)).replace(/^[ \t>*_-]*\[(PHASE|END)\b([^\]]*)\][*_]*(.*)$/gim, (_, k, arg, rest) => {
     const [kind, ...more] = arg.trim().split(/\s+/);
     if (/^end$/i.test(k)) next = { kind: 'end' };
-    else if (/^talk$/i.test(kind)) next = { kind: 'talk', laps: Math.min(3, Math.max(1, parseInt(more[0]) || 1)) };
+    else if (/^talk$/i.test(kind)) next = { kind: 'talk', laps: Math.min(3, Math.max(1, parseInt(more.find(x => /^\d+$/.test(x))) || 1)),
+      who: `${more.filter(x => !/^\d+$/.test(x)).join(' ')} ${rest}` };
     else if (/^orders?$/i.test(kind)) next = { kind: 'orders', who: `${more.join(' ')} ${rest}` };
     return '';
   });
@@ -142,7 +143,9 @@ export function hostBrief(g, handle, exec, first) {
       + 'cards, resources, goal) by DM, and start the first phase.\n' : '')
     + `Each of your turns: write what the whole table hears (short). Send private information with lines of their own: `
     + `[DM @player] text (only that player reads it). Then put exactly one of these on a line of its own:\n`
-    + `[PHASE talk] (the players speak in turn, once each; [PHASE talk 2]: twice; they may DM each other)\n`
+    + `[PHASE talk] (the players speak in turn, once each; [PHASE talk 2]: twice; they may DM each other). To set who `
+    + `speaks and in what order, list them: [PHASE talk @c @a] (only those, in that order; name someone twice to let them `
+    + `speak twice)\n`
     + `[PHASE orders] (every player secretly sends you an order at the same time) or [PHASE orders @a @b] (only those `
     + `players, e.g. a night action). Their orders reach you as private messages marked "secret order".\n`
     + `[END] when the game is over: announce the result and the ranking first.\n`

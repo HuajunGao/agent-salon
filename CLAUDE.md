@@ -69,7 +69,7 @@ Private messages are `messages.dm` (the addressee): `TALK` excludes them (archiv
 sender and addressee; in a formal debate teammates may DM each other. The members learn the public totals and their own catches from the brief, not from notes.
 Free game: "@x 主持，玩…" makes member x the host (game.mjs hostBrief, server hostDone): it announces rules, DMs private
 setups, keeps a private ledger ([STATE], stored in the game state, shown to the user) and picks each next step
-([PHASE talk n] / [PHASE orders @a @b] / [END]); orders reach it as `role='order'` DMs. The host may run code (a rules
+([PHASE talk n @b @a] / [PHASE orders @a @b] / [END]; listed handles set who speaks, in that order); orders reach it as `role='order'` DMs. The host may run code (a rules
 program if it wants); players' game turns are read-only, and `audit` flags tool calls touching other members'
 workspaces or CLI session files (🚨): all CLIs share one OS user, so this is detection, not prevention.
 
