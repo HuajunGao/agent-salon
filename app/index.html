@@ -245,11 +245,11 @@
   .prow button { flex:none; font-size:var(--t-xs); color:var(--ink-3); padding:2px 6px; border-radius:var(--r-sm); }
   .prow button:hover { color:var(--ink); background:var(--surface); }
   .crow { display:flex; align-items:center; gap:var(--s1); }
-  #ats { display:flex; gap:2px; flex-wrap:nowrap; min-width:0; overflow-x:auto; scrollbar-width:none; }
+  #ats { display:flex; flex:0 1 auto; gap:2px; flex-wrap:nowrap; min-width:0; overflow-x:auto; scrollbar-width:none; }
   @container (max-width: 600px) { .hint { display:none; } #send { margin-left:auto; } }
-  #ats .chip { height:24px; padding:0 8px; font-size:var(--t-xs); background:transparent; }
+  #ats .chip { height:24px; padding:0 8px; font-size:var(--t-xs); background:transparent; flex:none; white-space:nowrap; }
   #ats .chip:hover { background:var(--hover); }
-  .hint { margin-left:auto; margin-right:var(--s2); font-size:var(--t-xs); color:var(--ink-3); white-space:nowrap; }
+  .hint { margin-left:auto; margin-right:var(--s2); font-size:var(--t-xs); color:var(--ink-3); white-space:nowrap; flex:0 100 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; }
   /* read-aloud and voice input */
   #tts.on { color:var(--mod); background:var(--mod-soft); }
   #tts:not(.on) .wave { opacity:.35; }
