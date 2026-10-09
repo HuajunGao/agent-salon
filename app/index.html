@@ -677,9 +677,13 @@ function emptyState() {
   </div>`;
 }
 const thinkingEl = Object.assign(document.createElement('div'), { id: 'thinking' });
+thinkingEl.onclick = e => e.target.closest('[data-go]') && post('/api/opening/go');
 thinkingEl.setAttribute('aria-live', 'polite');
 function renderThinking() {
-  const html = S.members.filter(m => m.status === 'thinking').map(m => `<span style="--c:${color(m.name)}">`
+  // after Jev picks the mode for a new discussion, a few seconds to switch it before anyone starts
+  const open = S.opening ? `<span>⏳ <span data-left="${S.opening}"></span> 后按「${MODE_LABEL[S.discussionMode.effective]}」开始，不对就在顶栏换模式`
+    + `<button class="rowbtn" data-go>现在开始</button></span>` : '';
+  const html = open + S.members.filter(m => m.status === 'thinking').map(m => `<span style="--c:${color(m.name)}">`
     + `<span class="dot"></span><b>${esc(m.label)}</b><span class="pulse">正在思考</span><span data-since="${m.started}"></span></span>`).join('');
   if (thinkingEl.dataset.html !== html) { thinkingEl.innerHTML = thinkingEl.dataset.html = html; }
   if (messages.length && thinkingEl.parentNode !== $('#msgs')) $('#msgs').appendChild(thinkingEl);
@@ -1009,6 +1013,7 @@ function renderState() {
   });
   // thinking timers tick without re-rendering the rows (keeps dropdowns and hover stable)
   document.querySelectorAll('[data-since]').forEach(s => (s.textContent = fmtSecs(now - +s.dataset.since)));
+  document.querySelectorAll('[data-left]').forEach(s => (s.textContent = fmtSecs(+s.dataset.left - now)));
   setHTML('#ats', S.members.filter(m => m.enabled).map(m => `<button class="chip" data-at="${esc(m.at)}" title="点名 @${esc(m.at)}"><span class="dot" style="--c:${color(m.name)}"></span>@${esc(m.at)}</button>`).join(''));
   const p = $('#pause');
   setHTML('#pause', S.paused

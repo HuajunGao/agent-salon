@@ -53,7 +53,8 @@ after the previous message's reading time (`readMs`, counts CJK chars + Latin wo
 the user types → publishing raises new hands ([HAND] marker, @mentions, broadcast mode) and triggers `assess()`
 (Jev novelty, jev mode) and `checkConvergence()` (Jev judge → wrap-up summary, devil's advocate, or circling pause).
 
-Modes (per discussion, Jev picks one for Auto): research and roundtable use the free flow below; story is a relay
+Modes (per discussion, Jev picks one for Auto, then the room waits `OPEN_HOLD` (10 s) so the user can switch it or start
+at once; switching starts it in the new mode): research and roundtable use the free flow below; story is a relay
 (one member at a time, the baton goes to whoever the passage @mentions, else the next member; skips members at the
 turn cap); debate draws sides at its first message (odd member count: one member judges, even: the user does), plays
 `debateScript` slot by slot (hands carry `slot`), and after the verdict continues as free discussion. Relay and debate

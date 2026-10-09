@@ -285,9 +285,28 @@ async function classifyChat(c, msg) {
   } else if (chatMode(c).mode === 'auto') { // the user may have picked a mode meanwhile
     run('UPDATE chats SET auto_mode=? WHERE id=?', r.mode, c);
     logDecision('mode', null, { score: r.probabilities[r.mode], latency_ms: r.ms, detail: { source: 'jev', ...r } });
-    if (c === chatId) note(`🧭 讨论模式：${MODES[r.mode].label}（Jev 判断，${Math.round(r.probabilities[r.mode] * 100)}%）。可以在顶栏随时切换。`);
+    if (c === chatId) note(`🧭 讨论模式：${MODES[r.mode].label}（Jev 判断，${Math.round(r.probabilities[r.mode] * 100)}%）。`
+      + `${msg ? `${OPEN_HOLD / 1e3} 秒后开始，不对的话现在在顶栏换模式。` : '可以在顶栏随时切换。'}`);
   }
-  if (msg && c === chatId) wake(msg);
+  if (msg && c === chatId) holdOpening(c, msg);
+  pump();
+}
+// Auto's pick can be wrong (a pasted prompt the user forgot to pick a mode for), and the first turns set the discussion
+// up (debate sides, a game's host), so the room waits OPEN_HOLD after Jev picks: switching the mode, or "现在开始",
+// starts it at once in the mode then in force. Not kept over a restart (the user's next message wakes the room).
+const OPEN_HOLD = 10e3;
+let opening = null; // {chat, msg, until, timer}
+function holdOpening(c, msg) {
+  clearTimeout(opening?.timer);
+  opening = { chat: c, msg, until: Date.now() + OPEN_HOLD, timer: setTimeout(() => openNow(c), OPEN_HOLD) };
+  sendState();
+}
+function openNow(c, wakeIt = true) {
+  if (opening?.chat !== c) return;
+  const { msg, until } = opening;
+  clearTimeout(opening.timer); opening = null;
+  logDecision('opening', null, { message_id: msg.id, detail: { mode: chatMode(c).effective, leftMs: Math.max(0, until - Date.now()), started: wakeIt } });
+  if (wakeIt && c === chatId) wake(msg);
   pump();
 }
 
@@ -1489,6 +1508,7 @@ function state() {
     speech: { on: speechOn(), models: ttsModels(), defaults: Object.fromEntries(NAMES.map(n => [n, defaultVoice(NAMES.indexOf(n))])) },
     chats: listChats(),
     sandboxed: !!RUNAS,
+    opening: opening?.chat === chatId ? opening.until : null,
     discussionMode: { ...chatMode(chatId), pending: modePending === chatId,
       rules: (({ flow, stance, notes }) => ({ flow, stance: !!stance, notesTitle: notes.title }))(rules(chatId)) },
     notes: chatState(chatId).notes || [],
@@ -1609,7 +1629,7 @@ const routes = {
     const m = insertMsg({ chat_id: chatId, sender: 'user', kind: 'user', text, reply_to: reply_to || null, files });
     logDecision('user', null, { message_id: m.id, detail: { mentions: mentions(text), reply_to: reply_to || null } });
     const cm = chatMode(chatId);
-    if (modePending === chatId) return;                                      // the pending classification wakes the room
+    if (modePending === chatId || opening?.chat === chatId) return;         // the pending classification / hold wakes the room
     if (cm.mode === 'auto' && !cm.auto) return void classifyChat(chatId, m); // first question of an Auto discussion
     wake(m);
   },
@@ -1634,8 +1654,10 @@ const routes = {
     paused = jev.circlePaused = false; run('UPDATE chats SET paused=0 WHERE id=?', chatId);
     wrapRound = lastUserId(chatId); // the round is over: nothing raises hands until the user writes again
     readUntil = speakingAt = 0;
+    if (opening) openNow(opening.chat, false); // nothing starts after a stop
     logDecision('stop', null, { detail: { cancelled, dropped: dropped.map(r => r.agent) } });
   },
+  'POST /api/opening/go'() { openNow(chatId); },
   'POST /api/arena/start'(body) { startArena(chatId, body); },
   'POST /api/arena/stop'() { if (arena?.phase === 'work') endWork('user'); else ranking?.kill?.(); },
   'POST /api/outsider'() { if (!startOutsider(chatId, 'user')) throw new Error('局外人已经在想了，或者没有可用的成员'); },
@@ -1670,6 +1692,7 @@ const routes = {
     run('UPDATE chats SET mode=? WHERE id=?', mode, id);
     logDecision('mode', null, { detail: { source: 'user', mode } });
     const cm = chatMode(id);
+    if (opening?.chat === id) openNow(id); // the user chose during the hold: start now, in that mode
     if (id === chatId) note(mode === 'auto'
       ? `🧭 讨论模式改回自动${cm.auto ? `：${MODES[cm.auto].label}` : '，Jev 会根据问题判断'}。`
       : `🧭 讨论模式改为：${MODES[mode].label}（你指定），从下一轮发言开始生效。`);

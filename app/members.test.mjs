@@ -89,7 +89,11 @@ test('HTTP member lifecycle persists, keeps credentials private and routes @hand
     assert.equal(s.state.members.find(m => m.name === 'gpt').config.hasKey, true);
     assert.ok(!JSON.stringify(s).includes(body.apiKey));
     assert.equal((await post('/api/send', { text: '@gpt hello' })).status, 200);
-    s = await state(); assert.equal(s.state.members.find(m => m.name === 'gpt').hand.r, 10);
+    // Auto picked a mode (here: Jev is down, the fallback): the room waits a few seconds so the user can switch it
+    await new Promise(r => setTimeout(r, 300));
+    s = await state(); assert.ok(s.state.opening > Date.now()); assert.equal(s.state.members.find(m => m.name === 'gpt').hand, null);
+    await post('/api/opening/go');
+    s = await state(); assert.equal(s.state.opening, null); assert.equal(s.state.members.find(m => m.name === 'gpt').hand.r, 10);
     assert.equal(s.state.members.find(m => m.name === 'reviewer').hand, null);
     await post('/api/lower', { agent: 'gpt' });
     await post('/api/pause', { paused: false });

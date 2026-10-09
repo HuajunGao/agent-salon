@@ -339,3 +339,16 @@ test('game mode: a member hosts with a private ledger, DMs the setup, collects s
   assert.ok(tt.filter(x => x.h !== 'claude').every(x => !x.p.includes('猜 5')));
   assert.ok(s.messages.some(m => m.kind === 'moderator' && m.text.startsWith('🚨') && m.text.includes('.codex/sessions')));
 });
+
+test('Auto: the room waits a few seconds after the mode is picked; switching starts it at once in the new mode', async t => {
+  const { post, init, until, turns } = await server(t);
+  const id = (await init()).state.chatId;
+  await post('/api/send', { text: '开个头：雨夜，一封没有署名的信。', chat_id: id });            // Auto (Jev down: roundtable)
+  await until(async () => (await init()).state.opening);
+  await new Promise(r => setTimeout(r, 500));
+  assert.equal(turns().length, 0);                                                              // nobody starts during the hold
+  await post('/api/chat/mode', { id, mode: 'story' });
+  await until(async () => turns().length >= 1);
+  assert.ok(turns()[0].p.includes('STORY RELAY'));                                              // the first turn is in the new mode
+  assert.equal((await init()).state.opening, null);
+});
