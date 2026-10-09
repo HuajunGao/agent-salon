@@ -481,7 +481,14 @@ function hostDone(c, play, h) {
   if (!h) return void jobNote(c, '⚠ 主持人这一回合没成功，发一条消息让它再来一次。');
   if (h.ledger != null) g.ledger = h.ledger;
   g.round++;
-  const next = h.next || { kind: 'talk', laps: 1 };
+  // [PAUSE], or no next step at all (a guess could run the wrong phase): wait for the user, whose message wakes the host
+  if (!h.next || h.next.kind === 'pause') {
+    saveState(c, st);
+    logDecision('game-pause', g.host, { detail: { round: g.round, asked: !!h.next } });
+    return noteNext(h.next ? '⏸ 主持人暂停了比赛（原因见它的发言）。发一条消息让它继续。'
+      : '⏸ 主持人这一回合没写下一步（[PHASE …] / [PAUSE] / [END]），比赛先暂停。发一条消息让它继续。');
+  }
+  const next = h.next;
   if (next.kind === 'end' || g.round >= HOST_TURNS) {
     Object.assign(g, { over: next.kind === 'end' ? 'end' : 'cap', phase: 'over' }); saveState(c, st);
     logDecision('game-over', g.host, { detail: { over: g.over, turns: g.round } });

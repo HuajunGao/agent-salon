@@ -83,6 +83,8 @@ async function server(t, slowFirst = 0) {
       if (o.signal?.aborted) return {error:'stopped', ms:1};
       const text = p.includes('STORY RELAY') ? h+' 的一段。'+(story++ ? '' : '\\n@opencode')+'\\n[NOTE add] '+h+' 登场'
         : p.includes('You are the judge') ? '评判：正方赢在定义。'
+        : /暂停测试|程序修好了吗/.test(p) && p.includes('You are the HOST') ? (/this is turn 1\\)/.test(p)
+            ? '程序校验失败，先停一下。\\n[PAUSE]\\n[STATE]\\n账本 A' : '修好了，结束。\\n[END]\\n[STATE]\\n账本 B')
         : p.includes('You are the HOST') ? ['', '规则：猜数。\\n[DM @codex] 你的数字是 7\\n[DM @agy] 你的数字是 3\\n[PHASE talk @opencode @agy]\\n[STATE]\\n回合 1',
             '交指令。\\n[PHASE orders @codex]\\n[STATE]\\n回合 2', '结算：codex 赢。\\n[END]\\n[STATE]\\n结束'][+p.match(/this is turn (\\d+)/)[1]]
         : p.includes('the host asks for your order') ? (o.onLive('🔧 Read /home/agent/.codex/sessions/x.jsonl'), '[ACT] 猜 5\\n凭直觉')
@@ -359,4 +361,25 @@ test('game: without the host\'s order the talk goes in a random order, everyone 
   assert.deepEqual(q, ['b', 'c', 'a', 'b', 'c', 'a']);
   const orders = new Set(Array.from({ length: 200 }, () => talkOrder(['a', 'b', 'c'], 1).join('')));
   assert.equal(orders.size, 6);                                             // every order happens
+});
+
+test('game: a DM runs over lines up to the next marker; the host can pause, and the user\'s message resumes it', async t => {
+  const { parseReply } = await import('./modes.mjs'), { parseHost } = await import('./game.mjs');
+  const h = parseHost('公开。\n[DM @a] 估值：\n| 1A | 55 |\n| 1B | 20 |\n[DM @b] 1A 30\n[PAUSE]\n[STATE]\n账本');
+  assert.deepEqual([h.next, h.ledger], [{ kind: 'pause' }, '账本']);
+  assert.deepEqual(parseReply(h.body).dms.map(d => [d.to, d.text]), [['a', '估值：\n| 1A | 55 |\n| 1B | 20 |'], ['b', '1A 30']]);
+  assert.equal(parseReply(h.body).text, '公开。');                                  // no table line leaks into the public text
+
+  const { post, init, until, turns } = await server(t);
+  const id = (await init()).state.chatId;
+  await post('/api/chat/mode', { id, mode: 'game' });
+  await post('/api/send', { text: '@claude 主持，暂停测试', chat_id: id });
+  await until(async () => (await init()).messages.some(m => m.text.startsWith('⏸ 主持人暂停了比赛')));
+  await new Promise(r => setTimeout(r, 500));
+  assert.equal(turns().length, 1);                                                    // nobody plays while paused
+  assert.equal((await init()).state.game.ledger, '账本 A');
+  await post('/api/send', { text: '程序修好了吗？', chat_id: id });
+  const s = await until(async () => { const x = await init(); return x.state.game?.over && x; });
+  assert.equal(s.state.game.ledger, '账本 B');
+  assert.ok(turns()[1].h === 'claude' && turns()[1].p.includes('程序修好了吗？'));     // the host is woken with the user's message
 });
