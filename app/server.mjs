@@ -1811,14 +1811,17 @@ const getRoutes = {
   },
 };
 const maxChat = () => q1('SELECT coalesce(max(id),0) m FROM chats').m;
+// A game whose turns were due while the user was elsewhere (gameNext only schedules the current discussion) or the server
+// was down carries on. Not in the host phase: that is also how a paused game waits for the user's message.
+function resumeGame(id) {
+  const g = chatState(id).game;
+  if (g && !g.over && (g.phase === 'talk' || g.phase === 'orders')) gameNext(id);
+}
 function switchChat(id) {
   chatId = id; paused = !!q1('SELECT paused FROM chats WHERE id=?', id).paused; jev.circlePaused = false;
   for (const n of NAMES) rt[n].hand = null;
   readUntil = 0; mod = null; writeTranscript(id);
-  // A game whose turns were due while the user was elsewhere (gameNext only schedules the current discussion) carries on.
-  // Not in the host phase: that is also how a paused game waits for the user's message.
-  const g = chatState(id).game;
-  if (g && !g.over && (g.phase === 'talk' || g.phase === 'orders')) gameNext(id);
+  resumeGame(id);
   send(init());
 }
 const prompts = () => JSON.parse(q1(`SELECT value FROM settings WHERE key='prompts'`)?.value || '[]');
@@ -1942,6 +1945,7 @@ a:hover{background:#f3f3f3}</style><h2 style="text-align:center;font-weight:500"
     catch (e) { console.error(e); res.writeHead(500).end(JSON.stringify({ error: e.message })); }
   });
 }).listen(PORT, HOST, () => console.log(`agent-chat on http://${HOST}:${PORT}`));
+resumeGame(chatId);
 
 loadCatalog().then(() => send(init())); // the gateway's voices, for the per-member voice picker
 for (const c of q('SELECT id FROM chats')) writeTranscript(c.id); // archive discussions from before the archive existed
