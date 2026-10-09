@@ -19,14 +19,15 @@ const GROW = [1.6, 2.4], END_FROM = 3, END_P = 0.25;
 export const commons = {
   label: '公地捕鱼',
   idle: { take: 0 },
-  show: o => `${o.take} 吨`,
+  show: o => (o.asked ? `${o.take} 吨（报了 ${o.asked}，超过湖里的存量，按存量算）` : `${o.take} 吨`),
 
   setup(players, { rounds = 6, cap = 100, hard = false } = {}) {
     return { players, rounds, cap, hard, pool: cap, round: 1, caught: Object.fromEntries(players.map(a => [a, 0])), history: [] };
   },
 
   rules: g => `Game: THE COMMONS. ${g.players.length} fishers share one lake. It holds at most ${g.cap} tonnes of fish. Each `
-    + `round, after the talk, every fisher secretly orders how many tonnes to catch. If the orders add up to more than the `
+    + `round, after the talk, every fisher secretly orders how many tonnes to catch (an order above what the lake holds `
+    + `counts as the whole lake). If the orders add up to more than the `
     + `lake holds, each gets a share of what is there in proportion to its order. Whatever is left then `
     + (g.hard ? `regrows by a random factor between ${GROW[0]} and ${GROW[1]} (weather, spawning), up to ${g.cap}. ` : `doubles, up to ${g.cap}. `)
     + `If fewer than ${COLLAPSE} tonnes are left after a catch, the lake collapses and the game ends at once. `
@@ -51,11 +52,12 @@ export const commons = {
       + (lines.length ? `\n${lines.join('\n')}` : '');
   },
 
-  // An order is the first whole number in the [ACT] line: the tonnes to catch.
+  // An order is the first whole number in the [ACT] line: the tonnes to catch, at most the lake (in round 5 of discussion 36
+  // a member ordered 1000 tonnes to take nearly all of the proportional share).
   act(g, a, text) {
     const n = Number(String(text).match(/-?\d+(\.\d+)?/)?.[0]);
     if (!Number.isInteger(n) || n < 0) return { error: `要一个不小于 0 的整数吨数，收到「${String(text).slice(0, 40)}」` };
-    return { order: { take: n } };
+    return { order: n > g.pool ? { take: g.pool, asked: n } : { take: n } };
   },
 
   // Resolves the round in place (g.over: 'collapse' | 'done' | 'ended' (hard: at random), else the next round) and returns

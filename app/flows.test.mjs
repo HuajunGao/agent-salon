@@ -50,6 +50,8 @@ test('notes: members keep them with [NOTE] lines', () => {
 test('commons, hard mode: random regrowth, only the lake size public, a random end', async () => {
   const { commons, gameBrief } = await import('./game.mjs');
   const g = commons.setup(['a', 'b'], { rounds: 10, hard: true }), o = n => ({ a: { take: n }, b: { take: n } });
+  assert.deepEqual(commons.act(g, 'a', '1000 吨').order, { take: 100, asked: 1000 });           // at most the lake
+  assert.deepEqual(commons.act(g, 'a', '12').order, { take: 12 });
   const rolls = [0, 0.99, 0.5, 0.1], rand = () => rolls.shift();          // growth ×1.6, ×2.38, ×2.0 then the end roll
   commons.resolve(g, o(20), x => x, rand);
   assert.deepEqual([g.pool, g.round], [96, 2]);                                 // 60 left ×1.6
