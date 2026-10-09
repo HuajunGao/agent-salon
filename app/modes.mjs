@@ -107,10 +107,13 @@ export function debateBrief(d, name, phase, motion, handle) {
   if (name === d.judge) return `Debate on the motion: "${motion}". You are the judge (评委). Pro: ${list('pro')}. Con: ${list('con')}.\n`
     + 'The debate is over. Decide which side argued better and why (cite #N), name the best debater, and say in a line '
     + 'what each side missed. After your verdict the floor opens for free discussion.' + SPOKEN;
-  const side = d.pro.includes(name) ? 'pro' : 'con';
+  const side = d.pro.includes(name) ? 'pro' : 'con', mates = d[side].filter(x => x !== name);
   return `Debate on the motion: "${motion}". You are ${seatOf(d, name)}, on the ${side === 'pro' ? 'pro side (for' : 'con side (against'} `
     + `the motion). Pro: ${list('pro')}. Con: ${list('con')}. Judge: ${judge}.\nNow: ${PHASES[phase]}. ${PHASE_GUIDE[phase]} `
-    + 'Your side is assigned, not your own view: argue it as well as you can, and answer the user if they interjected.' + SPOKEN;
+    + 'Your side is assigned, not your own view: argue it as well as you can, and answer the user if they interjected.'
+    + (mates.length ? ` Your teammate${mates.length > 1 ? 's' : ''}: ${mates.map(handle).join(', ')}. To coordinate with them privately `
+      + '(split the arguments, warn of a trap, plan the closing), add a line of its own: [DM @handle] message. Only that '
+      + 'teammate reads it, not the other side or the judge; the user sees everything.' : '') + SPOKEN;
 }
 
 // ---------- the reply protocol ----------

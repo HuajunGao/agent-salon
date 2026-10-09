@@ -391,7 +391,7 @@ function finishDebate(c) {
 }
 
 // Game: the first message starts a game of the commons (game.mjs) with the enabled members ("…3 轮" sets the rounds,
-// "困难" hard mode: random regrowth, only the lake size public, a random end with the rounds as a cap the players aren't told).
+// hard mode unless it says "经典": random regrowth, only the lake size public, a random end with the rounds as a cap the players aren't told).
 // State in chats.state.game: the engine's state plus phase ('talk' | 'orders' | 'over'), the talk queue, step (talk
 // turns played, so a turn is counted once) and the orders in. Hands carry game: {round, phase, step}.
 // Talk turns follow one another; orders all start at once, are read only by the server and never posted to the members.
@@ -403,7 +403,7 @@ function gameOnUser(m) {
   if (!st.game) {
     const players = enabledOrder();
     if (players.length < 2) return note('🎣 博弈至少需要 2 位参与成员。');
-    const hard = /困难|hard/i.test(m.text), rounds = Math.min(20, +m.text.match(/(\d+)\s*轮/)?.[1] || (hard ? 10 : 6));
+    const hard = !/经典|简单|classic|easy/i.test(m.text), rounds = Math.min(20, +m.text.match(/(\d+)\s*轮/)?.[1] || (hard ? 10 : 6));
     st.game = { ...commons.setup(players, { rounds, hard }), laps: LAPS, phase: 'talk', step: 0, orders: {}, queue: talkOrder(players, 1, LAPS) };
     saveState(chatId, st);
     logDecision('game-start', null, { message_id: m.id, detail: { game: 'commons', players, rounds, hard } });
@@ -791,8 +791,9 @@ async function startTurn(a, retried = false) {
     insertMsg({ chat_id: chat, sender: 'system', kind: 'system', text: `⚠ ${memberConfigs[a].label} 出错: ${res.error}`, based_on: basedOn, latency_ms: res.ms });
   } else {
     const reply = parseReply(res.text), { hand, stance, notes } = reply, jobs = execOn() ? reply.jobs : [], todo = execOn() ? reply.tasks : [];
-    // private messages: game mode only, to another player of the game
-    const players = r.flow === 'game' ? chatState(chat).game?.players || [] : [];
+    // private messages: in a game to another player, in a formal debate to a teammate
+    const cs = chatState(chat), players = r.flow === 'game' ? cs.game?.players || []
+      : r.flow === 'debate' && !cs.debate?.done ? [cs.debate?.pro, cs.debate?.con].find(s => s?.includes(a)) || [] : [];
     const dms = reply.dms.map(x => ({ to: mentions(`@${x.to}`)[0], text: x.text })).filter(x => x.to !== a && players.includes(x.to));
     text = reply.text || (jobs.length || todo.length ? '（启动后台任务）' : '');
     if (dms.length && /^PASS[.。!！]?$/i.test(text)) text = '';

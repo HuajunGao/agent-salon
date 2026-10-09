@@ -61,11 +61,12 @@ turn cap); debate draws sides at its first message (odd member count: one member
 turns start only when nothing else is thinking or queued, so each sees the previous reply. Every discussion keeps
 notes in `chats.state` (resources / setting / key lines): members change them with [NOTE add|edit|drop] lines, the
 user in the UI, and every turn's prompt includes them (`notesPrompt`) so long discussions and stories don't drift.
-Game (博弈, never picked by Auto): the first message starts the commons with the enabled members ("4 轮" sets rounds);
+Game (博弈, never picked by Auto): the first message starts the commons with the enabled members ("4 轮" sets rounds;
+hard by default: random regrowth, only the lake size public, a random end; "经典" for the classic rules);
 state in `chats.state.game`. Each round the players talk in turn (twice each) in public or with `[DM @x]` lines, then
 all give `[ACT] n` at once in turns that are never posted (the user sees them as 🔒 notes), then the server resolves.
 Private messages are `messages.dm` (the addressee): `TALK` excludes them (archive, Jev), `HEARS` shows them only to
-sender and addressee. The members learn the public totals and their own catches from the brief, not from notes.
+sender and addressee; in a formal debate teammates may DM each other. The members learn the public totals and their own catches from the brief, not from notes.
 
 Scheduling (free flow): score = relevance × fairness × freshness − cooldown (fairness modifies priority, it doesn't decide it);
 modes `broadcast` / `algorithm` / `jev`. Every scheduler event is written to the `decisions` table for later A/B

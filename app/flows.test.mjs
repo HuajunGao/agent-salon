@@ -103,7 +103,8 @@ async function server(t, slowFirst = 0) {
         : p.includes('You are the judge') ? '评判：正方赢在定义。'
         : p.includes('reply with one line: [ACT]') ? '[ACT] 10\\n守约。'
         : p.includes('the negotiation before round') ? h+' 公开。\\n[DM @codex] '+h+' 的私信' : h+' 发言。';
-      return {text, sid:'s-'+h, ms:150}};`);
+      const mate = p.includes('私信测试') && p.match(/Your teammates?: @(\\w+)/)?.[1]; // debate: a word to the teammate
+      return {text: mate ? text+'\\n[DM @'+mate+'] '+h+' 的暗号' : text, sid:'s-'+h, ms:150}};`);
   const srv = net.createServer(); srv.listen(0, '127.0.0.1'); await once(srv, 'listening');
   const port = srv.address().port; await new Promise(r => srv.close(r));
   const url = `http://127.0.0.1:${port}`;
@@ -315,7 +316,7 @@ test('game mode: talk in turn with private messages, secret simultaneous orders,
   const { post, init, until, turns, root } = await server(t);
   const id = (await init()).state.chatId;
   await post('/api/chat/mode', { id, mode: 'game' });
-  await post('/api/send', { text: '开始，2 轮', chat_id: id });
+  await post('/api/send', { text: '开始，2 轮，经典', chat_id: id });
   const s = await until(async () => { const x = await init(), end = x.messages.find(m => m.text.startsWith('🏁'));
     return end && x.messages.filter(m => m.kind === 'agent' && m.id > end.id).length >= 4 && x; });
   const g = s.state.game;
@@ -340,4 +341,17 @@ test('game mode: talk in turn with private messages, secret simultaneous orders,
   assert.ok(!readFileSync(join(root, 'data', 'discussions', `${id}.md`), 'utf8').includes('的私信'));
   const after = tt.slice(-4);
   assert.ok(after.every(x => x.p.includes('The game is over') && x.p.includes('Everyone:')));
+});
+
+test('debate: teammates may coordinate by private message, unseen by the other side', async t => {
+  const { post, init, until, turns } = await server(t);
+  const id = (await init()).state.chatId;
+  await post('/api/chat/mode', { id, mode: 'debate' });
+  await post('/api/send', { text: '私信测试：该不该提前还房贷？', chat_id: id });
+  const s = await until(async () => { const x = await init(); return x.messages.some(m => m.text.includes('请你作为评委')) && x; });
+  const d = s.state.debate, side = n => (d.pro.includes(n) ? 'pro' : 'con'), dms = s.messages.filter(m => m.dm);
+  assert.equal(dms.length, 10);                                                   // one per debate turn
+  assert.ok(dms.every(m => m.dm !== m.sender && side(m.dm) === side(m.sender)));
+  for (const x of turns()) for (const m of dms) if (x.p.includes(m.text)) assert.equal(x.h, m.dm); // only the addressee
+  assert.ok(turns().some(x => x.p.includes('的暗号') && x.p.includes('(private message)')));
 });
