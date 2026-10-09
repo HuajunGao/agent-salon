@@ -138,8 +138,9 @@ const TASK = /^[ \t>*_-]*\[TASK(\s+shared)?\][*_]*[ \t:：]*(.*)$/gim;
 const MARK = String.raw`^[ \t>*_-]*\[`; // a marker at the start of a line
 const DM = new RegExp(MARK + String.raw`DM\s+@?([^\]\s]+)\s*\][*_]*[ \t:：]*([\s\S]*?)(?=` + MARK
   + String.raw`(?:DM|ACT|PHASE|STATE|END|NOTE|STANCE|立场|HAND|JOB|TASK|NAME)\b|(?![\s\S]))`, 'gim');
-// "[NAME] 老狐狸": the name the member gives itself in this discussion (the last one counts).
-const NAME = /^[ \t>*_-]*\[NAME\][*_]*[ \t:：]*(.*)$/gim;
+// "[NAME] 老狐狸": the name the member gives itself in this discussion (the last one counts). Also "[NAME 老狐狸]"
+// (deepseek wrote that and it showed as text).
+const NAME = /^[ \t>*_-]*\[NAME(?:[ \t:：]+([^\]\n]*))?\][*_]*[ \t:：]*(.*)$/gim;
 const ACT = /^[ \t>*_-]*\[ACT\][*_]*[ \t:：]*(.*)$/gim;
 const STANCE = /(?<!`)[*_]*\[(?:STANCE|立场)\s*[:：]?\s*(\d{1,3})\s*%?\][ \t*_:：]*(.*)$/gim;
 const NOTE = /(?<!`)[*_]*\[NOTE\s+(add|edit|drop)(?:\s+N?(\d+))?\][ \t*_:：]*(.*)$/gim;
@@ -151,7 +152,7 @@ export function parseReply(raw) {
     t = t.trim();
     if (t && dms.length < 12) dms.push({ to, text: t.slice(0, 4000) });
     return '';
-  }).replace(NAME, (_, n) => ((n = n.trim().replace(/^["“「『']+|["”」』']+$/g, '').trim()) && (nick = n), '')).replace(ACT, (_, o) => (o.trim() && acts.push(o.trim().slice(0, 200)), '')).replace(JOB, (_, cmd) => {
+  }).replace(NAME, (_, inner, n) => ((n = (inner?.trim() || n).trim().replace(/^["“「『']+|["”」』']+$/g, '').trim()) && (nick = n), '')).replace(ACT, (_, o) => (o.trim() && acts.push(o.trim().slice(0, 200)), '')).replace(JOB, (_, cmd) => {
     cmd = cmd.trim().replace(/^`+|`+$/g, '').trim();
     if (cmd && jobs.length < 2) jobs.push(cmd);
     return '';

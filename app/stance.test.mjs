@@ -105,3 +105,8 @@ test('research mode: everyone answers the question at once, stances reach the st
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('parseReply takes a name written as [NAME] x or [NAME x]', () => {
+  for (const raw of ['[NAME] 截胡\n正文', '[NAME 截胡]\n\n正文', '**[NAME: 「截胡」]**\n正文'])
+    assert.deepEqual((({ text, nick }) => ({ text, nick }))(parseReply(raw)), { text: '正文', nick: '截胡' }, raw);
+});
