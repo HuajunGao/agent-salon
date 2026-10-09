@@ -88,6 +88,9 @@ async function server(t, slowFirst = 0) {
         : p.includes('You are the HOST') ? ['', '规则：猜数。\\n[DM @codex] 你的数字是 7\\n[DM @agy] 你的数字是 3\\n[PHASE talk @opencode @agy]\\n[STATE]\\n回合 1',
             '交指令。\\n[PHASE orders @codex]\\n[STATE]\\n回合 2', '结算：codex 赢。\\n[END]\\n[STATE]\\n结束'][+p.match(/this is turn (\\d+)/)[1]]
         : p.includes('the host asks for your order') ? (o.onLive('🔧 Read /home/agent/.codex/sessions/x.jsonl'), '[ACT] 猜 5\\n凭直觉')
+        : p.includes('取名测试') && h === 'claude' ? '我是老狐狸。\\n[NAME] 老狐狸'
+        : p.includes('取名测试') && h === 'codex' ? '我也取一个。\\n[NAME] claude2'
+        : p.includes('改名吧') ? '好。\\n[NAME] 黑猫'
         : h+' 发言。';
       const mate = p.includes('私信测试') && p.match(/Your teammates?: @(\\w+)/)?.[1]; // debate: a word to the teammate
       return {text: mate ? text+'\\n[DM @'+mate+'] '+h+' 的暗号' : text, sid:'s-'+h, ms:150}};`);
@@ -415,4 +418,36 @@ test('game: the user can end a game the host never ended; the next message is fr
   await post('/api/send', { text: '聊聊刚才那局', chat_id: id });
   await until(async () => (await init()).messages.some(m => m.kind === 'agent' && m.text.endsWith('发言。')));
   assert.ok(!turns().slice(1).some(x => x.p.includes('You are the HOST')));          // no host turn after the end
+});
+
+test('names: a member names itself with [NAME], shown on its messages; @name reaches it, a former name too; clashes refused', async t => {
+  const { post, init, until, turns } = await server(t);
+  const id = (await init()).state.chatId;
+  await post('/api/chat/mode', { id, mode: 'roundtable' });
+  await post('/api/send', { text: '取名测试：各自介绍一下', chat_id: id });
+  let s = await until(async () => { const x = await init(); return x.messages.filter(m => m.kind === 'agent').length >= 4 && x; });
+  const fox = s.messages.find(m => m.sender === 'claude');
+  assert.deepEqual([fox.text, fox.nick], ['我是老狐狸。', '老狐狸']);
+  assert.equal(s.messages.find(m => m.sender === 'codex').nick, null);                    // too close to @claude: refused
+  assert.ok(s.messages.some(m => m.kind === 'moderator' && m.text === '🏷 @claude 给自己取名「老狐狸」'));
+  assert.equal(s.state.members.find(m => m.name === 'claude').nick, '老狐狸');
+
+  const n = turns().length;
+  await post('/api/send', { text: '@老狐狸 改名吧', chat_id: id });                        // @name reaches its member
+  await until(async () => (await init()).messages.some(m => m.text.includes('改成「黑猫」')));
+  assert.deepEqual(turns().slice(n).map(x => x.h), ['claude']);
+  s = await init();
+  assert.equal(s.messages.filter(m => m.sender === 'claude').at(-1).nick, '黑猫');
+  assert.equal(fox.nick, s.messages.find(m => m.id === fox.id).nick);                     // the old message keeps its name
+
+  const k = turns().length;
+  await post('/api/send', { text: '@老狐狸 还在吗', chat_id: id });                        // a former name still works
+  await until(async () => turns().length > k);
+  assert.equal(turns()[k].h, 'claude');
+  assert.ok(turns()[k].p.includes('called 「黑猫」 here'));                                 // the roster carries the name
+
+  const j = turns().length;
+  await post('/api/send', { text: '@codex 你呢', chat_id: id });
+  await until(async () => turns().length > j);
+  assert.ok(turns()[j].h === 'codex' && turns()[j].p.includes('Your name "claude2" was not taken'));
 });

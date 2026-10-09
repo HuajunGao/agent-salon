@@ -89,7 +89,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS members(name TEXT PRIMARY KEY, config TEXT N
 // seat: the speaker's part in a debate (正方一辩, 评委); note_ops: the notes this reply changed ([{op, n}]).
 // files: the user's attachments, JSON [{file: '<chat>/<stored name>', name, size, type}].
 // dm: a private message (game mode): the member it is addressed to; only it and the sender's session ever see it.
-for (const col of ['model', 'role', 'mode', 'stance', 'seat', 'note_ops', 'files', 'dm'])
+// nick: the name the sender had given itself in this discussion when it wrote the message ([NAME]).
+for (const col of ['model', 'role', 'mode', 'stance', 'seat', 'note_ops', 'files', 'dm', 'nick'])
   if (!db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === col)) db.exec(`ALTER TABLE messages ADD COLUMN ${col} TEXT`);
 // Discussion mode per chat: 'auto' (Jev classifies the first question into auto_mode) or a mode the user chose.
 // state: JSON {notes: [{n, text, by, msg}], debate: {pro, con, judge, motion, script, at, done}}.
@@ -182,10 +183,10 @@ function logDecision(event, agent, extra = {}) {
 }
 
 function insertMsg(m) {
-  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model, role, mode, stance, seat, note_ops, files, dm)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
+  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model, role, mode, stance, seat, note_ops, files, dm, nick)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
     m.latency_ms ?? null, m.turn_no ?? null, m.stale ? 1 : 0, m.model ?? null, m.role ?? null, m.mode ?? null,
-    m.stance ? JSON.stringify(m.stance) : null, m.seat ?? null, m.note_ops ?? null, m.files?.length ? JSON.stringify(m.files) : null, m.dm ?? null).lastInsertRowid);
+    m.stance ? JSON.stringify(m.stance) : null, m.seat ?? null, m.note_ops ?? null, m.files?.length ? JSON.stringify(m.files) : null, m.dm ?? null, m.nick ?? null).lastInsertRowid);
   const msg = q1('SELECT * FROM messages WHERE id=?', id);
   writeTranscript(m.chat_id);
   if (m.chat_id === chatId) send({ type: 'msg', msg });
@@ -197,13 +198,13 @@ const defaultAlias = a => a;
 const aliasOf = a => memberConfigs[a].label || defaultAlias(a);
 const atOf = a => atToken(a, memberConfigs[a].label);
 const who = s => (s === 'user' ? '用户 (user)' : memberConfigs[s] ? `@${atOf(s)}` : `@${s}`);
-const describe = a => `@${atOf(a)} (${aliasOf(a)}, ${memberConfigs[a].harness} running ${modelOf(a)})`;
+const describe = a => `@${atOf(a)}${nickOf(a) ? ` called 「${nickOf(a)}」 here` : ''} (${aliasOf(a)}, ${memberConfigs[a].harness} running ${modelOf(a)})`;
 // Members (and Jev) see each other's stated stance and confidence, as in ReConcile's round table.
 const withStance = m => { const st = m.stance && JSON.parse(m.stance);
   return st ? `${m.text}\n[STANCE ${st.c}%] ${st.t}` : m.text; };
 const attached = m => { const fs = m.files && JSON.parse(m.files);
   return fs?.length ? `\n(Attached: ${fs.map(f => `${join(UPLOADS, f.file)} (${f.name}, ${f.type || 'file'}, ${Math.ceil(f.size / 1024)} KB)`).join('; ')})` : ''; };
-const fmt = m => `#${m.id} ${who(m.sender)}${m.dm ? ` → ${who(m.dm)} (${m.role === 'order' ? 'secret order' : 'private message'})` : ''}${m.role === 'outsider' ? ' (outsider: a fresh session of this model that thought it through before reading the discussion)' : ''}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${withStance(m)}${attached(m)}`;
+const fmt = m => `#${m.id} ${who(m.sender)}${m.nick ? `「${m.nick}」` : ''}${m.dm ? ` → ${who(m.dm)} (${m.role === 'order' ? 'secret order' : 'private message'})` : ''}${m.role === 'outsider' ? ' (outsider: a fresh session of this model that thought it through before reading the discussion)' : ''}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${withStance(m)}${attached(m)}`;
 const archiveFile = c => join(ARCHIVE, `${c}.md`);
 function writeTranscript(c) {
   const chat = q1('SELECT title, created_at FROM chats WHERE id=?', c);
@@ -310,7 +311,28 @@ function openNow(c, wakeIt = true) {
   pump();
 }
 
-const mentions = text => memberMentions(text, NAMES, Object.fromEntries(NAMES.map(n => [n, memberConfigs[n].label])));
+const mentions = (text, c = chatId) => { const names = chatState(c).names || {};
+  return memberMentions(text, NAMES, Object.fromEntries(NAMES.map(n => [n, [memberConfigs[n].label, ...names[n] || []]]))); };
+
+// ---------- names the members give themselves ([NAME]) ----------
+// Per discussion, in chats.state.names: {member: [current, ...former]}. Only a way to address a member: everything the
+// server keeps (hands, game players, DM addressees, orders) uses the handle, so renames can't break anything; former names
+// still reach their member and nobody else may take them. At most NICK_MAX names per member and discussion.
+const NICK_MAX = 6;
+const nickOf = (a, c = chatId) => (chatState(c).names || {})[a]?.[0] || null;
+function setNick(c, a, nick) {
+  const st = chatState(c), names = st.names ??= {}, mine = names[a] ??= [], low = nick.toLowerCase();
+  if (mine[0] === nick) return null;
+  if (!/^[^\s@#\[\]()（）「」<>]{1,12}$/u.test(nick)) return 'a name is 1-12 characters, without spaces, @, # or brackets';
+  // taken: another member's handle, @-name or any of its names, or one is a prefix of the other (@老狐 would also match @老狐狸)
+  const clash = n => { n = String(n || '').toLowerCase(); return n && (n.startsWith(low) || low.startsWith(n)); };
+  const other = NAMES.find(n => n !== a && [n, atOf(n), memberConfigs[n].label, ...names[n] || []].some(clash));
+  if (other) return `it is too close to @${atOf(other)}'s name`;
+  if (!mine.includes(nick) && mine.length >= NICK_MAX) return `you already used ${NICK_MAX} names in this discussion`;
+  names[a] = [nick, ...mine.filter(x => x !== nick)];
+  saveState(c, st);
+  return null;
+}
 // An alias that would be @-called must not be another member's handle or @-name.
 function checkAlias(name, label) {
   for (const at of new Set([name, atToken(name, label).toLowerCase()]))
@@ -760,7 +782,9 @@ function turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, r
   const tools = exec ? `You may run code in your workspace ${wsOf(a)} to check claims, or work in the shared repo ${SHARED}; keep it quick.`
     : memberConfigs[a].harness === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.';
   const roster = `\nCurrent participating members (${enabledOrder().length}): ${enabledOrder().map(describe).join(', ')}. `
-    + 'This roster overrides earlier rosters. Use these exact @handles when addressing them.';
+    + 'This roster overrides earlier rosters. Use these exact @handles when addressing them (@names work too). '
+    + 'You may give yourself a name for this discussion with a line [NAME] <name> (up to 12 characters, no spaces); it '
+    + 'shows next to your messages and others can @ you by it.';
   const reply = `(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later. ${tools})`;
   if (summary) return `\n\nThe moderator judged that the discussion has converged. Write a short summary for the user: `
     + `the conclusion, who agreed (cite #N), and caveats still open. No new arguments, no @mentions, no [HAND].\n\n${reply}${roster}`;
@@ -861,7 +885,7 @@ async function startTurn(a, retried = false) {
       rt[a].note = 'PASS'; text = '';
       logDecision('pass', a, { based_on: basedOn, latency_ms: res.ms });
     } else {
-      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, stance, notes, jobs, todo, dms, seat, slot, model: model || 'default', role, done: Date.now() });
+      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, stance, notes, jobs, todo, dms, nick: reply.nick, seat, slot, model: model || 'default', role, done: Date.now() });
       // A browser is reading aloud: synthesize while the reply waits in the queue, so it plays without delay.
       if (speechOn() && Date.now() - ttsActiveAt < 120e3) synth(spoken(a, text), voiceOf(a)).catch(() => {});
       logDecision('ready', a, { based_on: basedOn, latency_ms: res.ms, detail: { hand, chars: text.length } });
@@ -906,8 +930,15 @@ function publishOne(r) {
   // The reply's [NOTE] lines update the discussion's notes; the message records what changed.
   const st = chatState(r.chat);
   const changed = r.notes?.length ? applyNotes(st.notes ??= [], r.notes, { by: r.agent }) : [];
+  if (r.nick) {
+    const was = nickOf(r.agent, r.chat), why = setNick(r.chat, r.agent, r.nick);
+    logDecision('nick', r.agent, { detail: { nick: r.nick, was, refused: why } });
+    if (why) (rt[r.agent].jobs ??= []).push({ kind: 'note', chat: r.chat, summary: `Your name "${r.nick}" was not taken: ${why}.` });
+    else if (was !== r.nick) jobNote(r.chat, `🏷 @${atOf(r.agent)} ${was ? `把名字从「${was}」改成` : '给自己取名'}「${r.nick}」`);
+  }
   // A game reply may be only private messages (no public text): m is then the last of them.
-  const base = { chat_id: r.chat, sender: r.agent, kind: 'agent', based_on: r.basedOn, latency_ms: r.ms, model: r.model, mode: chatMode(r.chat).effective };
+  const base = { chat_id: r.chat, sender: r.agent, kind: 'agent', based_on: r.basedOn, latency_ms: r.ms, model: r.model, mode: chatMode(r.chat).effective,
+    nick: nickOf(r.agent, r.chat) };
   const pub = r.text || !r.dms?.length ? insertMsg({ ...base, text: r.text, turn_no: turnNo, stale, role: r.role, stance: r.stance,
     seat: r.seat, note_ops: changed.length ? JSON.stringify(changed) : null }) : null;
   let m = pub;
@@ -1118,7 +1149,7 @@ const MERGE_INFO = {
 function jobReport(a, chat) {
   const mine = (rt[a].jobs || []).filter(j => j.chat === chat);
   rt[a].jobs = (rt[a].jobs || []).filter(j => j.chat !== chat);
-  return mine.map(j => j.kind === 'arena' ? `\n\n${j.summary}` : `\n\nYour background ${j.kind}${j.id ? ` ${tag(j.id, j.kind)}` : ''} \`${j.cmd}\`: ${j.status}`
+  return mine.map(j => j.kind === 'arena' || j.kind === 'note' ? `\n\n${j.summary}` : `\n\nYour background ${j.kind}${j.id ? ` ${tag(j.id, j.kind)}` : ''} \`${j.cmd}\`: ${j.status}`
     + `${j.code != null ? ` (exit code ${j.code})` : ''}${j.ms != null ? ` after ${dur(j.ms)}` : ''}${j.why ? ` (${j.why})` : ''}.`
     + (j.merge ? ` ${MERGE_INFO[j.merge].replaceAll('BRANCH', j.branch)}` : '')
     + (j.id && existsSync(jobLog(j.id, j.kind)) ? ` Log: ${jobLog(j.id, j.kind)}` : '')
@@ -1535,7 +1566,7 @@ function state() {
     jev: { on: jevOn(), assessing: jev.assessing, judging: jev.judging, ms: jev.ms, down: S.scheduler === 'jev' && !jevOn() },
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
     members: memberOrder().map(n => ({
-      name: n, label: aliasOf(n), at: atOf(n), alias: memberConfigs[n].label || '', defaultAlias: defaultAlias(n), color: memberConfigs[n].color, ...rt[n], enabled: S.enabled[n], model: S.models[n],
+      name: n, label: aliasOf(n), at: atOf(n), nick: nickOf(n), alias: memberConfigs[n].label || '', defaultAlias: defaultAlias(n), color: memberConfigs[n].color, ...rt[n], enabled: S.enabled[n], model: S.models[n],
       configurable: memberConfigs[n].harness === 'opencode', harness: memberConfigs[n].harness,
       harnessLabel: AGENTS[memberConfigs[n].harness].label,
       config: { baseURL: memberConfigs[n].baseURL || '',

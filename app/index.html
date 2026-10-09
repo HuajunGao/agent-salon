@@ -186,6 +186,8 @@
   .tag { display:inline-flex; align-items:center; gap:3px; height:19px; padding:0 7px; border-radius:999px; font-size:var(--t-xs);
     color:var(--ink-2); background:var(--hover); white-space:nowrap; }
   .tag.warn { color:var(--warn); background:var(--warn-soft); }
+  .tag.nick { border:none; font-family:inherit; cursor:pointer; color:var(--c, var(--ink-2)); font-weight:500; }
+  .tag.nick:hover { background:var(--sunk); }
   .tag.devil { color:var(--danger); background:var(--danger-soft); }
   .tag.summary { color:var(--mod); background:var(--mod-soft); }
 
@@ -661,6 +663,8 @@ function renderMsg(m) {
   const gut = `<div class="gut"><span class="who">${esc(label(m.sender))}</span>
     <small>${hm(m.created_at)} <span class="num" title="消息编号，正文里的 #${m.id} 指的就是这条">#${m.id}</span></small></div>`;
   const hd = [];
+  // the name the member gave itself in this discussion: click to @ it
+  if (m.nick) hd.unshift(`<button class="tag nick" data-at="${esc(m.nick)}" title="它在这场讨论里给自己取的名字，点一下 @ 它">${esc(m.nick)}</button>`);
   if (m.model) hd.push(`<span class="model" title="${esc(m.model)}">${esc(m.model)}</span>`);
   if (m.latency_ms) hd.push(`<span title="思考用时">想了 ${Math.round(m.latency_ms / 1000)}s</span>`);
   const st = m.stance && JSON.parse(m.stance);
@@ -1031,7 +1035,7 @@ function renderState() {
   // thinking timers tick without re-rendering the rows (keeps dropdowns and hover stable)
   document.querySelectorAll('[data-since]').forEach(s => (s.textContent = fmtSecs(now - +s.dataset.since)));
   document.querySelectorAll('[data-left]').forEach(s => (s.textContent = fmtSecs(+s.dataset.left - now)));
-  setHTML('#ats', S.members.filter(m => m.enabled).map(m => `<button class="chip" data-at="${esc(m.at)}" title="点名 @${esc(m.at)}"><span class="dot" style="--c:${color(m.name)}"></span>@${esc(m.at)}</button>`).join(''));
+  setHTML('#ats', S.members.filter(m => m.enabled).map(m => `<button class="chip" data-at="${esc(m.nick || m.at)}" title="点名 @${esc(m.nick || m.at)}"><span class="dot" style="--c:${color(m.name)}"></span>@${esc(m.nick || m.at)}</button>`).join(''));
   const p = $('#pause');
   setHTML('#pause', S.paused
     ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l12-7.5Z"/></svg><span class="lbl">继续</span>'

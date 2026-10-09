@@ -126,7 +126,7 @@ export function debateBrief(d, name, phase, motion, handle) {
 // the end of the reply: a host DMs whole tables; at most 12 kept, the server allows players 3) and "[ACT] order" lines
 // (to the host).
 // Returns {text, hand, stance: {t, c, l?} | null, notes: [{op, n?, text?}], jobs: [cmd], tasks: [{desc, shared}],
-// dms: [{to, text}], acts: [order]}; those markers are removed from the text.
+// dms: [{to, text}], acts: [order], nick: string | null}; those markers are removed from the text.
 // Agents don't keep to the layout: markers come mid-line ("…对上。[STANCE 94%] …"), several on one line
 // ("[HAND] [STANCE 70%] …"), or with more text after them (Claude appends "Sources:" after [HAND]). So a marker counts
 // anywhere except right after a backtick (`[HAND]` in code is talk about the protocol), and NOTE / STANCE / JOB take the
@@ -137,18 +137,21 @@ const JOB = /^[ \t>*_-]*\[JOB\][*_]*[ \t]*(.*)$/gim;
 const TASK = /^[ \t>*_-]*\[TASK(\s+shared)?\][*_]*[ \t:：]*(.*)$/gim;
 const MARK = String.raw`^[ \t>*_-]*\[`; // a marker at the start of a line
 const DM = new RegExp(MARK + String.raw`DM\s+@?([^\]\s]+)\s*\][*_]*[ \t:：]*([\s\S]*?)(?=` + MARK
-  + String.raw`(?:DM|ACT|PHASE|STATE|END|NOTE|STANCE|立场|HAND|JOB|TASK)\b|(?![\s\S]))`, 'gim');
+  + String.raw`(?:DM|ACT|PHASE|STATE|END|NOTE|STANCE|立场|HAND|JOB|TASK|NAME)\b|(?![\s\S]))`, 'gim');
+// "[NAME] 老狐狸": the name the member gives itself in this discussion (the last one counts).
+const NAME = /^[ \t>*_-]*\[NAME\][*_]*[ \t:：]*(.*)$/gim;
 const ACT = /^[ \t>*_-]*\[ACT\][*_]*[ \t:：]*(.*)$/gim;
 const STANCE = /(?<!`)[*_]*\[(?:STANCE|立场)\s*[:：]?\s*(\d{1,3})\s*%?\][ \t*_:：]*(.*)$/gim;
 const NOTE = /(?<!`)[*_]*\[NOTE\s+(add|edit|drop)(?:\s+N?(\d+))?\][ \t*_:：]*(.*)$/gim;
 export function parseReply(raw) {
   const notes = [], jobs = [], tasks = [], dms = [], acts = [];
+  let nick = null;
   const hand = raw.search(HAND) >= 0;
   let text = raw.replace(HAND, '').replace(DM, (_, to, t) => {
     t = t.trim();
     if (t && dms.length < 12) dms.push({ to, text: t.slice(0, 4000) });
     return '';
-  }).replace(ACT, (_, o) => (o.trim() && acts.push(o.trim().slice(0, 200)), '')).replace(JOB, (_, cmd) => {
+  }).replace(NAME, (_, n) => ((n = n.trim().replace(/^["“「『']+|["”」』']+$/g, '').trim()) && (nick = n), '')).replace(ACT, (_, o) => (o.trim() && acts.push(o.trim().slice(0, 200)), '')).replace(JOB, (_, cmd) => {
     cmd = cmd.trim().replace(/^`+|`+$/g, '').trim();
     if (cmd && jobs.length < 2) jobs.push(cmd);
     return '';
@@ -172,7 +175,7 @@ export function parseReply(raw) {
   });
   // Agents sometimes write a reply and then a stray "PASS" on its own last line: drop it (a bare PASS stays a pass).
   text = text.replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim().replace(/\n\s*PASS[.。!！]?$/i, '').trim();
-  return { text, hand, stance, notes, jobs, tasks, dms, acts };
+  return { text, hand, stance, notes, jobs, tasks, dms, acts, nick };
 }
 
 // Applies note ops to a list [{n, text, ...}]: returns the ops that changed something, with the numbers they got.

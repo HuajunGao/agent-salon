@@ -121,6 +121,11 @@ left; three quick failures drop a member. State in `chats.state.arena`; `arena-*
 `probe <bot> <outdir>` / `rank <outdir> name=<bot> ...`, last stdout line JSON `{rate, games, replay?}` /
 `{standings: [{name, rate, games}], replays?}`, replays written to outdir (served under `/w/arena/<id>/`).
 
+Names ([NAME] 老狐狸, any mode): a member names itself for one discussion, in `chats.state.names` {member: [current,
+...former]}, stored on each message (`messages.nick`, shown as a tag that @-mentions it). Names are only resolved by
+`mentions` (@ and DM addressees): everything kept uses handles, so renames can't break state; former names keep working
+and can't be taken; clashes (incl. prefixes) refused, at most 6 per member, refusals told in the next turn.
+
 Saved prompts (★ by the input): settings key `prompts`, [{id, title, text, mode}], sent with `init` only (never to a
 shared link); using one fills the input (and sets its mode in an empty discussion, or in a new one via "新讨论").
 The history list shows each discussion's id, the number the archive uses ("讨论 36").

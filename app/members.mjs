@@ -38,10 +38,11 @@ export function providerConfig(member, v2) {
 // What members are @-called by: the alias when it is one token, else the handle.
 export const atToken = (name, alias) => (alias && !/[\s@]/.test(alias) ? alias : name);
 
-// Members @-mentioned by handle or alias (case-insensitive), in the order they first appear.
+// Members @-mentioned by handle or alias (case-insensitive), in the order they first appear. aliases[n]: one alias or
+// a list (the configured alias plus the names the member gave itself in this discussion).
 export function memberMentions(text, names, aliases = {}) {
   const t = text.toLowerCase();
   const pos = s => (s ? t.search(new RegExp(`@${s.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`)) : -1);
-  return names.map(n => [n, Math.min(...[pos(n), pos(aliases[n])].map(i => (i < 0 ? Infinity : i)))])
+  return names.map(n => [n, Math.min(...[n, ...[].concat(aliases[n] ?? [])].map(pos).map(i => (i < 0 ? Infinity : i)))])
     .filter(([, i]) => i < Infinity).sort((a, b) => a[1] - b[1]).map(([n]) => n);
 }
