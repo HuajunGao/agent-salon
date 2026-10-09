@@ -816,7 +816,8 @@ function renderSeats() {
   const who = n => (n === 'user' ? '你' : `<span style="color:${color(n)}">${esc(label(n))}</span>`);
   if (g && S.discussionMode.rules.flow === 'game') return `<div class="seats"><b>主持</b><span>${who(g.host)}</span>`
     + `<b>玩家</b><span>${g.players.map(who).join('、')}</span></div>`
-    + (g.ledger ? `<div class="ledger" title="主持人的私密账本，只有它和你看得到">${esc(g.ledger)}</div>` : '');
+    + (g.ledger ? `<div class="ledger" title="主持人的私密账本，只有它和你看得到">${esc(g.ledger)}</div>` : '')
+    + (g.over ? '' : '<button class="rowbtn" data-gameend title="主持人忘了宣布结束、或者不想玩了：这局到此为止，之后的消息是普通聊天">结束这局游戏</button>');
   if (!d) return '';
   return `<div class="seats"><b>正方</b><span>${d.pro.map(who).join('、')}</span><b>反方</b><span>${d.con.map(who).join('、')}</span>`
     + `<b>评委</b><span>${who(d.judge)}</span></div>`;
@@ -1222,6 +1223,7 @@ document.addEventListener('change', e => {
   }
 });
 for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind', 'outsider']) $('#s-' + k).onchange = e => post('/api/settings', { [k]: e.target.checked });
+document.addEventListener('click', e => { if (e.target.closest('[data-gameend]') && confirm('结束这局游戏？之后的消息就是普通聊天。')) post('/api/game/end'); });
 $('#outsider-now').onclick = async () => { const r = await post('/api/outsider'); if (!r.ok) alert((await r.json().catch(() => ({}))).error || '请求失败'); };
 for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin'])
   $('#s-' + k).addEventListener('change', e => post('/api/settings', { [k]: e.target.value }));

@@ -1664,6 +1664,16 @@ const routes = {
     logDecision('stop', null, { detail: { cancelled, dropped: dropped.map(r => r.agent) } });
   },
   'POST /api/opening/go'() { openNow(chatId); },
+  // The user ends the game (e.g. its host never wrote [END] and kept the talk going): turns still running finish
+  // without moving it on, and the next message is free talk.
+  'POST /api/game/end'() {
+    const st = chatState(chatId), g = st.game;
+    if (!g?.host || g.over) return;
+    for (const n of NAMES) if (rt[n].hand?.game) rt[n].hand = null;
+    Object.assign(g, { over: 'user', phase: 'over' }); saveState(chatId, st);
+    logDecision('game-over', null, { detail: { over: 'user', turns: g.round } });
+    note('🏁 你结束了这局游戏。之后的消息就是普通聊天。');
+  },
   'POST /api/arena/start'(body) { startArena(chatId, body); },
   'POST /api/arena/stop'() { if (arena?.phase === 'work') endWork('user'); else ranking?.kill?.(); },
   'POST /api/outsider'() { if (!startOutsider(chatId, 'user')) throw new Error('局外人已经在想了，或者没有可用的成员'); },

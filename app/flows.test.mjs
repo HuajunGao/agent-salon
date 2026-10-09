@@ -403,3 +403,16 @@ test('saved prompts: kept on the server with their mode, same title replaced, de
   rd.cancel();
   assert.ok(!first.includes('密封竞拍'));
 });
+
+test('game: the user can end a game the host never ended; the next message is free talk', async t => {
+  const { post, init, until, turns } = await server(t);
+  const id = (await init()).state.chatId;
+  await post('/api/chat/mode', { id, mode: 'game' });
+  await post('/api/send', { text: '@claude 主持，暂停测试', chat_id: id });
+  await until(async () => (await init()).messages.some(m => m.text.startsWith('⏸')));
+  await post('/api/game/end');
+  assert.equal((await init()).state.game.over, 'user');
+  await post('/api/send', { text: '聊聊刚才那局', chat_id: id });
+  await until(async () => (await init()).messages.some(m => m.kind === 'agent' && m.text.endsWith('发言。')));
+  assert.ok(!turns().slice(1).some(x => x.p.includes('You are the HOST')));          // no host turn after the end
+});
