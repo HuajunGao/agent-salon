@@ -783,8 +783,9 @@ function turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, r
     : memberConfigs[a].harness === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.';
   const roster = `\nCurrent participating members (${enabledOrder().length}): ${enabledOrder().map(describe).join(', ')}. `
     + 'This roster overrides earlier rosters. Use these exact @handles when addressing them (@names work too). '
-    + 'You may give yourself a name for this discussion with a line [NAME] <name> (up to 12 characters, no spaces); it '
-    + 'shows next to your messages and others can @ you by it.';
+    + (nickOf(a, chat) ? `Your name here is ${nickOf(a, chat)}; a line [NAME] <name> changes it if your role or mood changes.`
+      : 'Give yourself a name for this discussion: a line [NAME] <name> (up to 12 characters, no spaces). Have fun with it, '
+        + 'pick one that fits your character, role or stance here; it shows next to your messages and others can @ you by it.');
   const reply = `(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later. ${tools})`;
   if (summary) return `\n\nThe moderator judged that the discussion has converged. Write a short summary for the user: `
     + `the conclusion, who agreed (cite #N), and caveats still open. No new arguments, no @mentions, no [HAND].\n\n${reply}${roster}`;
