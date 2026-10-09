@@ -47,6 +47,24 @@ test('notes: members keep them with [NOTE] lines', () => {
   assert.deepEqual(parseReply('观点。\n[NOTE add] 来源：RBA 9 月声明\n[STANCE 60%] 支持：会加息').stance, { t: '会加息', c: 60, l: '支持' });
 });
 
+test('commons, hard mode: random regrowth, only the lake size public, a random end', async () => {
+  const { commons, gameBrief } = await import('./game.mjs');
+  const g = commons.setup(['a', 'b'], { rounds: 10, hard: true }), o = n => ({ a: { take: n }, b: { take: n } });
+  const rolls = [0, 0.99, 0.5, 0.1], rand = () => rolls.shift();          // growth ×1.6, ×2.38, ×2.0 then the end roll
+  commons.resolve(g, o(20), x => x, rand);
+  assert.deepEqual([g.pool, g.round], [96, 2]);                                 // 60 left ×1.6
+  commons.resolve(g, o(20), x => x, rand);
+  assert.deepEqual([g.pool, g.round], [100, 3]);                                // 56 ×2.38 = 133, capped; no end roll before round 3
+  const brief = gameBrief(commons, g, 'a', 'talk', x => '@' + x);
+  assert.ok(brief.includes('you caught 20 (the total is secret)') && !brief.includes('40 caught') && !brief.includes('of 10'));
+  assert.ok(brief.includes('1 in 4 chance'));
+  commons.resolve(g, o(10), x => x, rand);                                       // ×2.0, then 0.1 < 1/4: over
+  assert.equal(g.over, 'ended');
+  const after = gameBrief(commons, g, 'a', 'over', x => '@' + x);
+  assert.ok(after.includes('ended at random after round 3') && after.includes('40 caught in total') && after.includes('(×1.6)'));
+  assert.ok(commons.final(g, x => x).includes('第 3 轮后随机结束') && !commons.final(g, x => x).includes('可持续'));
+});
+
 // ---------- the flows on a real server (SQLite, fake harness that records each turn; no Jev key) ----------
 import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';

@@ -11,32 +11,43 @@
 // shape (setup / rules / view / act / resolve / final / idle / show) and a picker.
 
 const COLLAPSE = 5; // fewer tonnes than this left after a catch and the lake is dead
+// Hard mode: the regrowth is random and only the lake's new size is public, so a smaller lake can be bad luck or a cheat;
+// and nobody knows the last round (after round END_FROM on, each round ends the game with chance END_P; `rounds` is a
+// cap the players aren't told), so there is no last round to plan a grab for.
+const GROW = [1.6, 2.4], END_FROM = 3, END_P = 0.25;
 
 export const commons = {
   label: '公地捕鱼',
   idle: { take: 0 },
   show: o => `${o.take} 吨`,
 
-  setup(players, { rounds = 6, cap = 100 } = {}) {
-    return { players, rounds, cap, pool: cap, round: 1, caught: Object.fromEntries(players.map(a => [a, 0])), history: [] };
+  setup(players, { rounds = 6, cap = 100, hard = false } = {}) {
+    return { players, rounds, cap, hard, pool: cap, round: 1, caught: Object.fromEntries(players.map(a => [a, 0])), history: [] };
   },
 
   rules: g => `Game: THE COMMONS. ${g.players.length} fishers share one lake. It holds at most ${g.cap} tonnes of fish. Each `
     + `round, after the talk, every fisher secretly orders how many tonnes to catch. If the orders add up to more than the `
-    + `lake holds, each gets a share of what is there in proportion to its order. Whatever is left then doubles, up to `
-    + `${g.cap}. If fewer than ${COLLAPSE} tonnes are left after a catch, the lake collapses and the game ends at once. `
-    + `The game lasts ${g.rounds} rounds. Your score is your own total catch; at the end the fishers are ranked by it. `
-    + `Catches are secret: each round everyone learns only the total caught and the lake's new size, so nobody can check `
-    + `what anyone says about their own catch. The full record is revealed when the game ends.`,
+    + `lake holds, each gets a share of what is there in proportion to its order. Whatever is left then `
+    + (g.hard ? `regrows by a random factor between ${GROW[0]} and ${GROW[1]} (weather, spawning), up to ${g.cap}. ` : `doubles, up to ${g.cap}. `)
+    + `If fewer than ${COLLAPSE} tonnes are left after a catch, the lake collapses and the game ends at once. `
+    + (g.hard ? `Nobody knows when the game ends: from round ${END_FROM} on, each round has a 1 in ${1 / END_P} chance of being `
+      + `the last, announced only after it is played. ` : `The game lasts ${g.rounds} rounds. `)
+    + `Your score is your own total catch; at the end the fishers are ranked by it. Catches are secret: each round everyone `
+    + (g.hard ? `learns only the lake's new size, not even the total caught, so a smaller lake may be bad luck or someone's `
+      + `cheating, and nobody can check what anyone says about their own catch. ` : `learns only the total caught and the `
+      + `lake's new size, so nobody can check what anyone says about their own catch. `)
+    + `The full record is revealed when the game ends.`,
 
   // What player a knows: the lake now, its own catches, the public totals. After the game: everything.
   view(g, a, handle = p => p) {
-    const lines = g.history.map(h => `Round ${h.round}: the lake had ${h.before}, ${h.total} caught in total (you: ${h.got[a]}`
-      + `${h.bad[a] ? `; your order was invalid: ${h.bad[a]}, counted as 0` : ''}), ${h.after} after regrowth.`
+    const total = h => (!g.hard || g.over ? `${h.total} caught in total (you: ${h.got[a]}` : `you caught ${h.got[a]} (the total is secret`);
+    const lines = g.history.map(h => `Round ${h.round}: the lake had ${h.before}, ${total(h)}`
+      + `${h.bad[a] ? `; your order was invalid: ${h.bad[a]}, counted as 0` : ''}), ${h.after} after regrowth`
+      + (g.hard && g.over ? ` (×${h.grow})` : '') + '.'
       + (g.over ? ` Everyone: ${g.players.map(p => `${handle(p)} ${h.got[p]}`).join(', ')}.` : ''));
-    return (g.over ? `The game is over (${g.over === 'collapse' ? 'the lake collapsed' : `all ${g.rounds} rounds played`}). `
-      + `Final catches: ${rank(g).map(([p, n]) => `${handle(p)} ${n}`).join(', ')}.`
-      : `Round ${g.round} of ${g.rounds}. The lake holds ${g.pool} tonnes now. Your catch so far: ${g.caught[a]} tonnes.`)
+    const why = { collapse: 'the lake collapsed', done: `all ${g.rounds} rounds played`, ended: `it ended at random after round ${g.history.at(-1)?.round}` };
+    return (g.over ? `The game is over (${why[g.over]}). Final catches: ${rank(g).map(([p, n]) => `${handle(p)} ${n}`).join(', ')}.`
+      : `Round ${g.round}${g.hard ? '' : ` of ${g.rounds}`}. The lake holds ${g.pool} tonnes now. Your catch so far: ${g.caught[a]} tonnes.`)
       + (lines.length ? `\n${lines.join('\n')}` : '');
   },
 
@@ -47,28 +58,32 @@ export const commons = {
     return { order: { take: n } };
   },
 
-  // Resolves the round in place (g.over: 'collapse' | 'done', else the next round) and returns the host's note.
-  resolve(g, orders, who) {
+  // Resolves the round in place (g.over: 'collapse' | 'done' | 'ended' (hard: at random), else the next round) and returns
+  // the host's note.
+  resolve(g, orders, who, rand = Math.random) {
     const before = g.pool, want = g.players.reduce((s, a) => s + orders[a].take, 0);
     const got = Object.fromEntries(g.players.map(a => [a, want <= before ? orders[a].take : Math.floor(orders[a].take * before / want)]));
     const total = g.players.reduce((s, a) => s + got[a], 0), left = before - total;
-    g.pool = left < COLLAPSE ? left : Math.min(g.cap, left * 2);
+    const grow = g.hard ? +(GROW[0] + (GROW[1] - GROW[0]) * rand()).toFixed(2) : 2;
+    g.pool = left < COLLAPSE ? left : Math.min(g.cap, Math.round(left * grow));
     for (const a of g.players) g.caught[a] += got[a];
     const bad = Object.fromEntries(g.players.filter(a => orders[a].error).map(a => [a, orders[a].error]));
-    g.history.push({ round: g.round, before, want, got, total, after: g.pool, bad });
-    if (left < COLLAPSE) g.over = 'collapse'; else if (g.round >= g.rounds) g.over = 'done'; else g.round++;
+    g.history.push({ round: g.round, before, want, got, total, after: g.pool, grow, bad });
+    if (left < COLLAPSE) g.over = 'collapse'; else if (g.round >= g.rounds) g.over = 'done';
+    else if (g.hard && g.round >= END_FROM && rand() < END_P) g.over = 'ended'; else g.round++;
     return `🎣 第 ${g.history.at(-1).round} 轮结算：湖里原有 ${before} 吨，${want > before ? `大家要 ${want} 吨超过了存量，按比例分，` : ''}`
       + `共捕 ${total} 吨（${g.players.map(a => `${who(a)} ${got[a]}`).join('、')}），剩 ${left} 吨，`
-      + (left < COLLAPSE ? '**湖崩溃了**。' : `恢复到 ${g.pool} 吨。`) + '成员们只知道总数。';
+      + (left < COLLAPSE ? '**湖崩溃了**。' : `${g.hard ? `按 ×${grow} ` : ''}恢复到 ${g.pool} 吨。`)
+      + (g.over === 'ended' ? '**抽中了结束**。' : '') + (g.hard ? '成员们只知道湖的新大小。' : '成员们只知道总数。');
   },
 
   // The end: standings, and how the group did against the most a sustainable lake gives
   // (half the lake each round keeps it full, and the last round can take everything).
   final(g, who) {
     const all = g.players.reduce((s, a) => s + g.caught[a], 0), best = (g.rounds - 1) * g.cap / 2 + g.cap;
-    return `🏁 游戏结束（${g.over === 'collapse' ? `第 ${g.history.at(-1).round} 轮湖崩溃了` : `打满 ${g.rounds} 轮`}）。排名：`
-      + rank(g).map(([a, n], i) => `${i + 1}. ${who(a)} ${n} 吨`).join('；')
-      + `。全体合计 ${all} 吨，可持续捕捞最多能有 ${best} 吨。完整记录已经告诉大家。`;
+    const last = g.history.at(-1).round, why = { collapse: `第 ${last} 轮湖崩溃了`, done: `打满 ${g.rounds} 轮`, ended: `第 ${last} 轮后随机结束` };
+    return `🏁 游戏结束（${why[g.over]}）。排名：` + rank(g).map(([a, n], i) => `${i + 1}. ${who(a)} ${n} 吨`).join('；')
+      + `。全体合计 ${all} 吨${g.hard ? '' : `，可持续捕捞最多能有 ${best} 吨`}。完整记录已经告诉大家。`;
   },
 };
 const rank = g => g.players.map(a => [a, g.caught[a]]).sort((x, y) => y[1] - x[1]);

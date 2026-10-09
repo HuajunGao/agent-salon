@@ -390,7 +390,8 @@ function finishDebate(c) {
   for (const n of NAMES) raise(n, 1, 'after the debate');
 }
 
-// Game: the first message starts a game of the commons (game.mjs) with the enabled members ("…3 轮" sets the rounds).
+// Game: the first message starts a game of the commons (game.mjs) with the enabled members ("…3 轮" sets the rounds,
+// "困难" hard mode: random regrowth, only the lake size public, a random end with the rounds as a cap the players aren't told).
 // State in chats.state.game: the engine's state plus phase ('talk' | 'orders' | 'over'), the talk queue, step (talk
 // turns played, so a turn is counted once) and the orders in. Hands carry game: {round, phase, step}.
 // Talk turns follow one another; orders all start at once, are read only by the server and never posted to the members.
@@ -402,11 +403,14 @@ function gameOnUser(m) {
   if (!st.game) {
     const players = enabledOrder();
     if (players.length < 2) return note('🎣 博弈至少需要 2 位参与成员。');
-    const rounds = Math.min(20, +m.text.match(/(\d+)\s*轮/)?.[1] || 6);
-    st.game = { ...commons.setup(players, { rounds }), laps: LAPS, phase: 'talk', step: 0, orders: {}, queue: talkOrder(players, 1, LAPS) };
+    const hard = /困难|hard/i.test(m.text), rounds = Math.min(20, +m.text.match(/(\d+)\s*轮/)?.[1] || (hard ? 10 : 6));
+    st.game = { ...commons.setup(players, { rounds, hard }), laps: LAPS, phase: 'talk', step: 0, orders: {}, queue: talkOrder(players, 1, LAPS) };
     saveState(chatId, st);
-    logDecision('game-start', null, { message_id: m.id, detail: { game: 'commons', players, rounds } });
-    note(`🎣 博弈开始：${commons.label}，${players.map(handle).join('、')} 共 ${rounds} 轮。湖最多 ${st.game.cap} 吨鱼，每轮捕完剩下的翻倍（不超过上限），`
+    logDecision('game-start', null, { message_id: m.id, detail: { game: 'commons', players, rounds, hard } });
+    note(hard ? `🎣 博弈开始（困难模式）：${commons.label}，${players.map(handle).join('、')}。湖最多 ${st.game.cap} 吨鱼，每轮捕完剩下的按 ×1.6–2.4 随机恢复`
+      + `（不超过上限），剩不到 5 吨就崩溃。从第 3 轮起每轮结束有 1/4 概率游戏结束，最多 ${rounds} 轮（成员不知道上限）。每轮先轮流谈判`
+      + `（公开或私信，每人 ${LAPS} 次），再同时秘密下令。渔获和总数只有你看得到，成员们只知道湖的新大小。`
+      : `🎣 博弈开始：${commons.label}，${players.map(handle).join('、')} 共 ${rounds} 轮。湖最多 ${st.game.cap} 吨鱼，每轮捕完剩下的翻倍（不超过上限），`
       + `剩不到 5 吨就崩溃。每轮先轮流谈判（公开或私信，每人 ${LAPS} 次），再同时秘密下令。各人的渔获只有你看得到，成员们只知道总数。`);
     return gameNext(chatId);
   }
@@ -1454,7 +1458,7 @@ function state() {
     debate: (({ debate: d }) => d && !d.skipped ? { pro: d.pro, con: d.con, judge: d.judge, done: d.done, motion: d.motion,
       phase: d.script[d.at]?.phase || null, step: Math.min(d.at + 1, d.script.length), steps: d.script.length } : null)(chatState(chatId)),
     // the user hosts: the whole game state, catches included
-    game: (({ game: g }) => g && { label: commons.label, round: g.round, rounds: g.rounds, phase: g.phase, pool: g.pool, cap: g.cap,
+    game: (({ game: g }) => g && { label: commons.label, round: g.round, rounds: g.rounds, hard: !!g.hard, phase: g.phase, pool: g.pool, cap: g.cap,
       caught: g.caught, players: g.players, ordered: Object.keys(g.orders), over: g.over || null })(chatState(chatId)),
     stances: stances(),
     arena: arena && { id: arena.id, chat: arena.chat, goal: arena.goal, until: arena.until, phase: arena.phase, referee: arena.referee,
