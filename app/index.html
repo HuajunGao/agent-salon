@@ -244,32 +244,33 @@
 
   /* ---------- right: room state ---------- */
   #right { width:296px; flex:none; overflow:auto; background:var(--side); border-left:1px solid var(--hair);
-    padding:var(--s2) var(--s3) var(--s4); display:flex; flex-direction:column; gap:var(--s4); transition:width .2s ease, padding .2s ease; }
+    padding:var(--s2) var(--s3) var(--s4); display:flex; flex-direction:column; transition:width .2s ease, padding .2s ease; }
   body.noroom #right { width:0; padding:0; border-left:none; overflow:hidden; }
-  .sect { font-size:var(--t-xs); color:var(--ink-3); padding:0 var(--s1); margin-bottom:var(--s1); display:flex; align-items:center; gap:var(--s2); }
-  /* moderator module */
-  .room { padding:0 var(--s1); }
-  .room .rh { display:flex; align-items:center; gap:var(--s2); margin-bottom:var(--s2); font-size:var(--t-xs); color:var(--ink-3); }
-  .room.folded .rh { margin-bottom:0; }
-  .room .rh .memtoggle { flex:none; }
-  .sect .count { color:var(--ink-3); font-weight:400; }
-  .room .rh .rs { margin-left:auto; min-width:0; text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .room .room-body { padding-left:18px; }
-  .room .mode { font-size:var(--t-xs); color:var(--ink-3); margin:0 0 var(--s2); line-height:1.6; }
+  /* every section of the right panel: a header (fold, title, count, status, actions) and its body; hairline between */
+  .pane { padding:var(--s3) 0; border-top:1px solid var(--hair); }
+  .pane:empty { display:none; }
+  .righttop + .pane { border-top:none; padding-top:var(--s1); }
+  .ph { display:flex; align-items:center; gap:var(--s2); min-height:24px; padding:0 var(--s1); font-size:var(--t-xs); color:var(--ink-3); }
+  .ph .memtoggle { flex:none; font-weight:500; color:var(--ink-2); }
+  .ph .count { color:var(--ink-3); font-weight:400; margin-left:2px; }
+  .ph .st { flex:1; min-width:0; text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ph .pa { margin-left:auto; display:flex; gap:2px; flex:none; }
+  .ph .st + .pa { margin-left:0; }
+  .ph .pa button { height:22px; padding:0 7px; border-radius:var(--r-sm); font-size:var(--t-xs); color:var(--ink-3); }
+  .ph .pa button:hover { background:var(--hover); color:var(--ink); }
+  .ph + * { margin-top:var(--s2); }
+  .pane .lead { font-size:var(--t-xs); color:var(--ink-3); padding:0 var(--s1); margin-bottom:var(--s2); line-height:1.6; }
+  .pane .metric, .pane .quiet, .pane .seats, .pane .wrapnote { margin-left:var(--s1); margin-right:var(--s1); }
   .metric { display:flex; align-items:center; gap:var(--s2); height:22px; font-size:var(--t-sm); color:var(--ink-2); }
-  .room .quiet { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:var(--s1) var(--s3); margin-top:var(--s2); font-size:var(--t-xs); color:var(--ink-3); line-height:1.6; }
-  .room .quiet > span { display:flex; justify-content:space-between; gap:var(--s1); }
-  .room .quiet b { font-weight:500; color:var(--ink-2); }
+  .quiet { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:var(--s1) var(--s3); margin-top:var(--s2); font-size:var(--t-xs); color:var(--ink-3); line-height:1.6; }
+  .quiet > span { display:flex; justify-content:space-between; gap:var(--s1); }
+  .quiet b { font-weight:500; color:var(--ink-2); }
   .metric .ml { flex:1; }
   .metric .mini { width:84px; }
   .metric .mv { width:34px; text-align:right; color:var(--ink); }
   .flags { display:flex; gap:var(--s4); margin-top:var(--s1); font-size:var(--t-xs); color:var(--ink-3); }
   .flags b { font-weight:500; color:var(--ink-2); }
   /* memory about the user */
-  .memhead { display:flex; align-items:center; gap:var(--s2); }
-  .memhead .acts { margin-left:auto; display:flex; gap:2px; }
-  .memhead .acts button { height:22px; padding:0 7px; border-radius:var(--r-sm); font-size:var(--t-xs); color:var(--ink-3); }
-  .memhead .acts button:hover { background:var(--hover); color:var(--ink); }
   .memtoggle { display:inline-flex; align-items:center; gap:6px; color:inherit; }
   .memtoggle:hover { color:var(--ink-2); }
   .memtoggle svg { transition:transform .15s; }
@@ -279,10 +280,11 @@
   .memlist li::before { content:""; position:absolute; left:2px; top:11px; width:4px; height:4px; border-radius:50%; background:var(--ink-3); }
   .memlist li .src { color:var(--ink-3); font-size:var(--t-xs); }
   .memempty { font-size:var(--t-xs); color:var(--ink-3); padding:0 var(--s1); line-height:1.5; }
-  .arenaform { display:grid; gap:var(--s2); padding:0 var(--s1); font-size:var(--t-sm); color:var(--ink-2); }
-  .arenaform textarea { width:100%; box-sizing:border-box; font:inherit; resize:vertical; }
-  .arenaform label { display:flex; justify-content:space-between; gap:var(--s2); align-items:center; }
-  .arenaform input { width:70px; }
+  .arenaform textarea { display:block; width:calc(100% - 2 * var(--s1)); margin:0 var(--s1) var(--s1); padding:6px 8px; border:none; border-radius:var(--r-sm);
+    background:var(--surface); box-shadow:0 0 0 1px var(--hair); font:inherit; font-size:var(--t-sm); line-height:1.5; resize:vertical; }
+  .rowbtn { display:block; width:calc(100% - 2 * var(--s1)); margin:var(--s1) var(--s1) 0; height:30px; border-radius:var(--r-sm);
+    font-size:var(--t-sm); color:var(--ink-2); background:var(--surface); box-shadow:0 0 0 1px var(--hair); }
+  .rowbtn:hover { color:var(--ink); background:var(--hover); }
   .username { display:flex; align-items:center; justify-content:space-between; gap:var(--s3); height:30px; padding:0 var(--s1);
     margin-bottom:var(--s1); font-size:var(--t-sm); color:var(--ink-2); }
   .username input { width:110px; height:24px; padding:0 6px; border:none; border-radius:var(--r-sm); background:var(--surface);
@@ -291,8 +293,7 @@
     box-shadow:0 0 0 1px var(--hair); font-size:var(--t-sm); line-height:1.55; resize:vertical; }
   .wrapnote { margin-top:var(--s2); font-size:var(--t-xs); color:var(--mod); }
   /* stances: each member's own one-line position and confidence */
-  .stances { margin-top:var(--s3); padding-top:var(--s3); border-top:1px solid var(--hair); display:flex; flex-direction:column; gap:var(--s3); }
-  .stances .sl { font-size:var(--t-xs); color:var(--ink-3); margin-bottom:calc(-1 * var(--s1)); }
+  .stances { display:flex; flex-direction:column; gap:var(--s3); padding:0 var(--s1); }
   .stance .sh { display:flex; align-items:center; gap:var(--s2); font-size:var(--t-sm); }
   .stance .sh a { flex:1; min-width:0; color:var(--ink-2); }
   .stance .sh .verdict { font-size:var(--t-xs); color:var(--ink-3); overflow-wrap:anywhere; }
@@ -306,7 +307,9 @@
   .notelist { margin:0; padding:0 var(--s1); list-style:none; font-size:var(--t-sm); color:var(--ink-2); line-height:1.5; }
   .notelist li { position:relative; display:flex; gap:var(--s2); padding:3px 0; }
   .notelist .nn { flex:none; min-width:22px; font-size:var(--t-xs); color:var(--ink-3); line-height:1.9; }
-  .notelist .nt { flex:1; min-width:0; }
+  .notelist .nt { flex:1; min-width:0; overflow-wrap:anywhere; }
+  .notelist .clamp { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; cursor:pointer; }
+  .notelist .clamp.open { display:block; }
   .notelist .nm { flex:none; display:flex; align-items:flex-start; gap:2px; font-size:var(--t-xs); color:var(--ink-3); line-height:1.9; }
   .notelist .nm button { display:none; width:20px; height:20px; place-items:center; border-radius:5px; color:var(--ink-3); }
   .notelist li:hover .nm button, .notelist .nm button:focus-visible { display:inline-grid; }
@@ -342,12 +345,6 @@
   .mdetail summary, #jobs summary { cursor:pointer; color:var(--ink-2); font-size:var(--t-xs); }
   .mdetail pre, #jobs pre { max-height:180px; overflow:auto; white-space:pre-wrap; font:11px/1.45 Consolas, "Cascadia Mono", monospace; color:var(--ink-2);
     background:var(--canvas); padding:var(--s2); margin:var(--s1) 0 0; border-radius:var(--r-sm); }
-  #add-member { float:right; color:var(--ink-2); font-size:var(--t-xs); padding:2px 7px; border-radius:6px; }
-  #add-member:hover { background:var(--hover); }
-  .member-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-  .member-tools { display:flex; gap:4px; }
-  #order-members { color:var(--ink-3); font-size:var(--t-xs); padding:2px 7px; border-radius:6px; }
-  #order-members:hover { color:var(--ink); background:var(--hover); }
   .member-move { display:flex; gap:3px; flex:none; }
   .member-move button { width:30px; height:30px; border-radius:7px; color:var(--ink-2); background:var(--surface); border:1px solid var(--hair); }
   .member-move button:hover:not(:disabled) { background:var(--selected); color:var(--ink); }
@@ -395,11 +392,7 @@
   .switch input:checked { background:var(--mod); }
   .switch input:checked::after { left:13px; }
   /* settings */
-  .settings > summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:6px; font-size:var(--t-xs); color:var(--ink-3); padding:0 var(--s1); }
-  .settings > summary::-webkit-details-marker { display:none; }
-  .settings > summary svg { transition:transform .15s; }
-  .settings[open] > summary svg { transform:rotate(90deg); }
-  .settings .grp { margin-top:var(--s3); padding:var(--s1) 0; }
+  .settings .grp + .grp { margin-top:var(--s3); }
   .settings .gl { font-size:var(--t-xs); color:var(--ink-3); padding:0 var(--s1) var(--s1); }
   .settings label { display:flex; align-items:center; justify-content:space-between; gap:var(--s3); height:30px; padding:0 var(--s1);
     font-size:var(--t-sm); color:var(--ink-2); border-radius:var(--r-sm); }
@@ -504,14 +497,15 @@
 </main>
 <aside id="right">
   <div class="righttop"><button class="icon" data-toggle-room title="收起" aria-label="收起房间状态面板"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></svg></button></div>
-  <section id="moderator"></section>
-  <section id="notes"></section>
-  <section id="jobs"></section>
-  <section id="arena"></section>
-  <section id="memory"></section>
-  <section><div class="sect member-heading"><button class="memtoggle" data-fold="members" aria-expanded="true" title="展开或收起"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 5 7 7-7 7"/></svg>成员</button> <span class="member-tools"><button id="order-members">调整顺序</button><button id="add-member">＋ 新成员</button></span></div><div id="member-order-hint" hidden>用上下箭头调整显示顺序，自动保存。</div><div id="members"></div></section>
-  <details class="settings">
-    <summary><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m9 5 7 7-7 7"/></svg>讨论设置</summary>
+  <section class="pane" id="moderator"></section>
+  <section class="pane"><div class="ph"><button class="memtoggle" data-fold="members" aria-expanded="true" title="展开或收起"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 5 7 7-7 7"/></svg>成员</button><span class="pa"><button id="order-members">调整顺序</button><button id="add-member">＋ 新成员</button></span></div><div id="member-order-hint" hidden>用上下箭头调整显示顺序，自动保存。</div><div id="members"></div></section>
+  <section class="pane" id="stances"></section>
+  <section class="pane" id="notes"></section>
+  <section class="pane" id="jobs"></section>
+  <section class="pane" id="arena"></section>
+  <section class="pane" id="memory"></section>
+  <section class="pane"><div class="ph"><button class="memtoggle" data-fold="settings" aria-expanded="true" title="展开或收起"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 5 7 7-7 7"/></svg>讨论设置</button></div>
+  <div class="settings" id="settings-body">
     <div class="grp">
       <div class="gl">节奏</div>
       <label>讨论语言 <input id="s-language"></label>
@@ -530,14 +524,17 @@
       <label class="switch" title="Jev 判断观点已收敛时，请一位成员总结后结束本轮">收敛后自动收尾 <input id="s-autoStop" type="checkbox"></label>
       <label title="收敛度达到这个值就收尾；“大体一致且只在附和/重复”也会收尾">收敛阈值（%） <input id="s-convergeAt" type="number" min="50" max="100" step="5"></label>
       <label class="switch" title="见仁见智的问题如果没人认真反对就达成一致，收尾前请一位成员唱反调（每轮一次）">太快一致时唱反调 <input id="s-devil" type="checkbox"></label>
-      <label class="switch" id="execrow" title="成员可以在各自的工作目录里写文件、运行代码来验证观点；只在服务器以独立的普通用户运行成员时可用">允许执行代码 <input id="s-exec" type="checkbox"></label>
-      <label class="switch" title="每轮结束后，把你说过的长期有用的信息整理进“关于你”，新讨论里的成员都会先读到">跨讨论记住我 <input id="s-memory" type="checkbox"></label>
       <label class="switch" title="同样的论点来回重复、没有进展时暂停，等你定方向（每轮一次）">原地打转时暂停 <input id="s-circlePause" type="checkbox"></label>
       <label class="switch" title="研究模式下，讨论的第一个问题先由所有成员同时、各自独立回答（互相看不到），再进入讨论，避免被第一个回答带偏；之后的追问照常讨论">研究模式开场先独立作答 <input id="s-blind" type="checkbox"></label>
       <label class="switch" title="每 40 条发言、或 Jev 判断讨论在原地打转时，轮流请一位成员用新会话当局外人：只看你的提问和共享文件，先独立想，再读讨论记录，只带回群里没试过的方向">卡住时请局外人 <input id="s-outsider" type="checkbox"></label>
-      <button type="button" id="outsider-now" title="现在就请一位成员当局外人（轮流），几分钟后带回群里没试过的方向">现在请局外人</button>
+      <button type="button" class="rowbtn" id="outsider-now" title="现在就请一位成员当局外人（轮流），几分钟后带回群里没试过的方向">现在请局外人</button>
     </div>
-  </details>
+    <div class="grp">
+      <div class="gl">成员能力与记忆</div>
+      <label class="switch" id="execrow" title="成员可以在各自的工作目录里写文件、运行代码来验证观点；只在服务器以独立的普通用户运行成员时可用">允许执行代码 <input id="s-exec" type="checkbox"></label>
+      <label class="switch" title="每轮结束后，把你说过的长期有用的信息整理进“关于你”，新讨论里的成员都会先读到">跨讨论记住我 <input id="s-memory" type="checkbox"></label>
+    </div>
+  </div></section>
 </aside>
 <dialog id="member-dialog" aria-labelledby="member-title" aria-describedby="member-subtitle">
   <form id="member-form">
@@ -755,9 +752,7 @@ function renderModerator() {
     : j.down ? 'Jev 暂不可用，改用算法' : j.ms ? `上次判断 ${j.ms}ms` : '待命';
   const row = (name, v, tick, hint) => `<div class="metric" title="${hint}"><span class="ml">${name}</span>${mini(v, tick)}<span class="mv">${v == null ? '–' : pct(v)}</span></div>`;
   const modeText = mode === 'jev' ? '按新意请人发言' : mode === 'algorithm' ? '按算法调度' : '广播：每条唤醒所有人';
-  const head = `<div class="rh">${foldButton('moderator', '主持人 Jev')}<span class="rs">${status}</span></div>`;
-  let html = folded.has('moderator') ? `<div class="room folded">${head}</div>` : `<div class="room">${head}<div class="room-body">
-    <div class="mode">${flowText(modeText)}</div>${renderSeats()}
+  const html = pane('moderator', '主持人 Jev', { status, body: `<div class="lead">${flowText(modeText)}</div>${renderSeats()}
     ${m?.convergence != null ? row('观点收敛', m.convergence, S.settings.autoStop ? S.settings.convergeAt : null, '刻度是收尾阈值') : ''}
     ${m?.convergence != null ? `<div class="quiet">${[
       `<span title="最近几条是否只在附和或复述">附和重复 <b>${pct(m.stalling)}</b></span>`,
@@ -765,7 +760,7 @@ function renderModerator() {
       m.debatable != null ? `<span title="问题是否见仁见智（不是有标准答案的事实题）">见仁见智 <b>${pct(m.debatable)}</b></span>` : '',
       m.challenged != null ? `<span title="本轮有没有人认真反对过多数意见">有人反对 <b>${pct(m.challenged)}</b></span>` : '',
     ].filter(Boolean).join('')}</div>` : ''}
-    ${S.wrapped ? '<div class="wrapnote">本轮已收尾，发新消息可继续讨论。</div>' : ''}${S.discussionMode.rules.stance ? renderStances() : ''}</div></div>`;
+    ${S.wrapped ? '<div class="wrapnote">本轮已收尾，发新消息可继续讨论。</div>' : ''}` });
   setHTML('#moderator', html);
   const line = $('#convline');
   line.classList.toggle('off', m?.convergence == null);
@@ -792,10 +787,19 @@ function renderSeats() {
     + `<b>评委</b><span>${who(d.judge)}</span></div>`;
 }
 
-// ---------- folding the right panel's sections ----------
-// The room card, the notes and the members fold (the memory and the settings have their own toggles); remembered.
+// ---------- the right panel's sections ----------
+// Every section has the same header: fold toggle, title, count, status on the right, action buttons. Folds are remembered;
+// "about you" and the settings start folded (the old separate toggle is carried over once).
 const folded = new Set(JSON.parse(localStorage.folded || '[]'));
+if (!localStorage.foldV2) {
+  if (localStorage.getItem('memory-collapsed') !== 'false') folded.add('memory');
+  folded.add('settings'); localStorage.removeItem('memory-collapsed');
+  localStorage.folded = JSON.stringify([...folded]); localStorage.foldV2 = '1';
+}
 const foldButton = (key, inner) => `<button class="memtoggle" data-fold="${key}" aria-expanded="${!folded.has(key)}" title="展开或收起"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 5 7 7-7 7"/></svg>${inner}</button>`;
+const pane = (key, title, { count, status = '', acts = '', body = '' } = {}) => `<div class="ph">${foldButton(key,
+  `${title}${count ? `<span class="count">${count}</span>` : ''}`)}${status ? `<span class="st">${status}</span>` : ''}`
+  + `${acts ? `<span class="pa">${acts}</span>` : ''}</div>${folded.has(key) ? '' : body}`;
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-fold]');
   if (!b) return;
@@ -809,13 +813,21 @@ document.addEventListener('click', e => {
 // Kept by the members with [NOTE] lines at the end of their replies, and seen by every turn; the user can edit them here.
 function renderNotes() {
   const title = S.discussionMode.rules.notesTitle;
-  setHTML('#notes', `<div class="sect memhead">${foldButton('notes', `${esc(title)}${S.notes.length ? ` <span class="count">${S.notes.length}</span>` : ''}`)}`
-    + `<span class="acts"><button data-note-add>添加</button></span></div>`
-    + (folded.has('notes') ? '' : S.notes.length ? `<ul class="notelist">${S.notes.map(x => `<li><span class="nn">N${x.n}</span><span class="nt">${linkRefs(x.text)}</span>`
+  setHTML('#notes', pane('notes', esc(title), { count: S.notes.length, acts: '<button data-note-add>添加</button>', body:
+    S.notes.length ? `<ul class="notelist">${S.notes.map(x => `<li><span class="nn">N${x.n}</span><span class="nt clamp ${openNotes.has(x.n) ? 'open' : ''}" data-note-open="${x.n}">${linkRefs(x.text)}</span>`
       + `<span class="nm">${x.msg ? ref(x.msg) : x.by === 'user' ? '你' : ''}<button data-note-edit="${x.n}" title="修改" aria-label="修改 N${x.n}">${ICON.rename}</button>`
       + `<button data-note-drop="${x.n}" title="删除" aria-label="删除 N${x.n}">${ICON.del}</button></span></li>`).join('')}</ul>`
-      : `<div class="memempty">成员发言时会把需要前后一致的内容记在这里（${esc(title)}），之后每一轮都会参考。你也可以自己添加或修改。</div>`));
+      : `<div class="memempty">成员发言时会把需要前后一致的内容记在这里（${esc(title)}），之后每一轮都会参考。你也可以自己添加或修改。</div>` }));
 }
+// long notes show three lines; a click opens one (links inside still work)
+const openNotes = new Set();
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-note-open]');
+  if (!t || e.target.closest('a')) return;
+  const n = +t.dataset.noteOpen;
+  openNotes.has(n) ? openNotes.delete(n) : openNotes.add(n);
+  t.classList.toggle('open');
+});
 // ---------- background jobs ([JOB] lines) ----------
 // Shown only when there are any: running ones (stoppable) and this discussion's recent ones. Minutes, not seconds,
 // so the list doesn't re-render every tick under the stop button.
@@ -826,14 +838,14 @@ function renderJobs() {
   const mins = j => Math.max(0, Math.floor((Date.now() - clockSkew - Date.parse(j.started_at.replace(' ', 'T') + 'Z')) / 60e3));
   // J = a [JOB] command, T = a [TASK] coding session (its description; a running one shows its live output)
   const tagOf = j => `${j.kind === 'task' ? 'T' : 'J'}${j.id}`, short = s => (s.length > 60 ? s.slice(0, 60) + '…' : s);
-  setHTML('#jobs', !jobs.length ? '' : `<div class="sect memhead">${foldButton('jobs', `后台任务 <span class="count">${jobs.filter(j => j.status === 'running').length || ''}</span>`)}</div>`
-    + (folded.has('jobs') ? '' : `<ul class="notelist">${jobs.map(j => `<li><span class="nn">${tagOf(j)}</span>`
+  const running = jobs.filter(j => j.status === 'running').length;
+  setHTML('#jobs', !jobs.length ? '' : pane('jobs', '后台任务', { count: running, status: running ? '' : '都已结束', body: `<ul class="notelist">${jobs.map(j => `<li><span class="nn">${tagOf(j)}</span>`
       + `<span class="nt"><span style="color:${color(j.agent)}">${esc(label(j.agent))}</span> `
       + (j.kind === 'task' ? `<span title="${esc(j.cmd)}">${esc(short(j.cmd))}</span>${j.branch ? ` <code>${esc(j.branch)}</code>` : ''}`
         : `<code title="${esc(j.cmd)}">${esc(short(j.cmd))}</code>`)
       + (j.live ? `<details data-job-live="${j.id}" ${openJobLive.has(j.id) ? 'open' : ''}><summary>实时输出</summary><pre>${esc(j.live)}</pre></details>` : '')
       + `</span><span class="nm">${j.status === 'running' ? `${mins(j)} 分钟<button data-job-stop="${j.id}" data-tag="${tagOf(j)}" title="停止" aria-label="停止 ${tagOf(j)}">${ICON.del}</button>`
-        : `${JOB_STATUS[j.status] || j.status}${j.code ? ` (${j.code})` : ''}`}</span></li>`).join('')}</ul>`))
+        : `${JOB_STATUS[j.status] || j.status}${j.code ? ` (${j.code})` : ''}`}</span></li>`).join('')}</ul>` }))
     && document.querySelectorAll('[data-job-live]').forEach(d => {
       d.ontoggle = () => d.open ? openJobLive.add(+d.dataset.jobLive) : openJobLive.delete(+d.dataset.jobLive);
       const pre = d.querySelector('pre'); pre.scrollTop = pre.scrollHeight;
@@ -848,21 +860,19 @@ document.addEventListener('click', e => {
 // Otherwise, when there are referees (_shared/referees/<name>) and executing code is on: the form to open one.
 function renderArena() {
   const A = S.arena;
-  if (!A) return setHTML('#arena', !S.referees?.length ? '' : `<div class="sect memhead">${foldButton('arena', '训练窗口')}</div>`
-    + (folded.has('arena') ? '' : `<form id="arena-form" class="arenaform">
+  if (!A) return setHTML('#arena', !S.referees?.length ? '' : pane('arena', '训练窗口', { status: '每人独立做，到点循环赛', body: `<form id="arena-form" class="settings arenaform">
       <textarea name="goal" rows="3" required placeholder="目标，原话交给每位成员，比如：写一个尽量强的 kore bot"></textarea>
       <label>裁判 <select name="referee">${S.referees.map(r => `<option>${esc(r)}</option>`).join('')}</select></label>
       <label>时长（分钟） <input name="minutes" type="number" min="1" max="600" value="30"></label>
       <label>每隔几分钟评测 <input name="every" type="number" min="1" value="10"></label>
-      <button>开始：每人独立做，到点循环赛</button></form>`));
+      <button class="rowbtn">开始训练</button></form>` }));
   const left = Math.max(0, Math.ceil((A.until - Date.now() + clockSkew) / 60e3));
-  setHTML('#arena', `<div class="sect memhead">${foldButton('arena', `训练窗口 <span class="count">${A.id}</span>`)}`
-    + `<span class="acts"><button id="arena-stop">${A.phase === 'work' ? '结束训练' : '停止循环赛'}</button></span></div>`
-    + (folded.has('arena') ? '' : `<div class="memempty" title="${esc(A.goal)}">${A.phase === 'work' ? `还剩 ${left} 分钟` : '循环赛进行中…'}`
-      + ` · 裁判 ${esc(A.referee)} · <a href="${esc(A.url)}" target="_blank" rel="noopener">文件</a></div>`
+  setHTML('#arena', pane('arena', '训练窗口', { status: A.phase === 'work' ? `还剩 ${left} 分钟` : '<span class="pulse">循环赛中</span>',
+    acts: `<button id="arena-stop">${A.phase === 'work' ? '结束' : '停止'}</button>`, body:
+      `<div class="lead" title="${esc(A.goal)}">${esc(A.id)} · 裁判 ${esc(A.referee)} · <a href="${esc(A.url)}" target="_blank" rel="noopener">文件</a></div>`
       + `<ul class="notelist">${A.members.map(m => `<li><span class="nt"><span style="color:${color(m.name)}">${esc(label(m.name))}</span> `
         + `${A.probing === m.name ? '评测中…' : m.out ? '已退出' : A.phase !== 'work' ? '' : m.working ? '工作中' : '等待续上'}</span>`
-        + `<span class="nm">${m.rate == null ? '—' : `${Math.round(m.rate * 100)}%（第 ${m.probes} 版）`}</span></li>`).join('')}</ul>`));
+        + `<span class="nm">${m.rate == null ? '—' : `${Math.round(m.rate * 100)}%（第 ${m.probes} 版）`}</span></li>`).join('')}</ul>` }));
 }
 document.addEventListener('submit', async e => {
   if (e.target.id !== 'arena-form') return;
@@ -884,8 +894,9 @@ document.addEventListener('click', e => {
 
 // Each member ends a message with its position and confidence; Jev judges whether a change was moved by a new argument.
 function renderStances() {
-  if (!S.stances?.length) return '';
-  return `<div class="stances"><div class="sl" title="成员每条发言末尾给出当前立场和信心；立场变化时由 Jev 判断有没有新论据">立场</div>${S.stances.map(x => {
+  if (!S.discussionMode.rules.stance || !S.stances?.length) return setHTML('#stances', '');
+  setHTML('#stances', pane('stances', '<span title="成员每条发言末尾给出当前立场和信心；立场变化时由 Jev 判断有没有新论据">立场</span>',
+    { count: S.stances.length, body: `<div class="stances">${S.stances.map(x => {
     const was = x.prev ? `之前：${x.prev.t}（${x.prev.c}%）` : '';
     const tag = x.role === 'devil' ? '<span class="tag devil">唱反调</span>'
       : x.changed >= 0.5 ? (x.evidence < 0.5 ? `<span class="tag warn" title="${esc(was)}">改了立场，但没有新论据</span>`
@@ -893,13 +904,12 @@ function renderStances() {
     return `<div class="stance"><div class="sh"><span class="dot" style="--c:${color(x.name)}"></span>
       <a class="ref" data-id="${x.id}" title="跳到 #${x.id}">${esc(label(x.name))}</a>${x.l ? `<span class="verdict">${esc(x.l)}</span>` : ''}<span class="mv" title="信心">${x.c}%</span></div>
       <div class="stx">${esc(x.t)}</div>${tag}</div>`;
-  }).join('')}</div>`;
+  }).join('')}</div>` }));
 }
 
 // ---------- memory about the user ----------
 // Facts the agents read at the start of each new discussion; the user can edit or refresh them.
 let memEditing = false;
-let memoryCollapsed = localStorage.getItem('memory-collapsed') !== 'false';
 function renderMemory() {
   if (memEditing) return; // don't overwrite the textarea while the user edits
   const m = S.memory, items = (m.text || '').split('\n').map(l => l.replace(/^-\s*/, '').trim()).filter(Boolean);
@@ -910,22 +920,17 @@ function renderMemory() {
   const SRC = /\s*[(（]\s*(#\d+(?:\s*[,，、]\s*#\d+)*)(?:\s*[,，、]\s*(\d{4}-\d{2}(?:-\d{2})?))?\s*[)）]\s*$/;
   const item = t => { const src = t.match(SRC);
     return `<li>${linkRefs(t.replace(SRC, ''))}${src ? ` <span class="src">${linkRefs(src[1])}${src[2] ? ` · ${src[2]}` : ''}</span>` : ''}</li>`; };
-  setHTML('#memory', `<div class="sect memhead"><button class="memtoggle" data-mem-toggle aria-expanded="${!memoryCollapsed}" aria-controls="memory-body"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 5 7 7-7 7"/></svg>关于你</button> <span>${status}</span><span class="acts">
-      <button data-mem-curate title="把你最近说的话整理进来">整理</button><button data-mem-edit title="修改或删除记忆">编辑</button></span></div>
-    <div id="memory-body" ${memoryCollapsed ? 'hidden' : ''}><label class="username" title="朗读时，别人引用你的发言（如 #12）会念成这个称呼">朗读时称呼你
+  setHTML('#memory', pane('memory', '关于你', { count: items.length, status,
+    acts: '<button data-mem-curate title="把你最近说的话整理进来">整理</button><button data-mem-edit title="修改或删除记忆">编辑</button>',
+    body: `<div><label class="username" title="朗读时，别人引用你的发言（如 #12）会念成这个称呼">朗读时称呼你
       <input data-user-name maxlength="20" placeholder="用户" value="${esc(S.settings.userName || '')}"></label>${items.length ? `<ul class="memlist">${items.map(item).join('')}</ul>`
-      : '<div class="memempty">还没有关于你的记忆。每轮讨论安静下来后，会从你说过的话里整理出长期有用的信息，新讨论里的成员都会先读到。</div>'}</div>`);
+      : '<div class="memempty">还没有关于你的记忆。每轮讨论安静下来后，会从你说过的话里整理出长期有用的信息，新讨论里的成员都会先读到。</div>'}</div>` }));
 }
 document.addEventListener('click', e => {
-  if (e.target.closest('[data-mem-toggle]')) {
-    memoryCollapsed = !memoryCollapsed;
-    localStorage.setItem('memory-collapsed', String(memoryCollapsed));
-    delete lastHTML['#memory']; renderMemory();
-  }
   if (e.target.closest('[data-mem-curate]')) post('/api/memory/curate');
   if (e.target.closest('[data-mem-edit]')) {
     memEditing = true;
-    $('#memory').innerHTML = `<div class="sect memhead">关于你<span class="acts"><button data-mem-save>保存</button><button data-mem-cancel>取消</button></span></div>
+    $('#memory').innerHTML = `<div class="ph"><span class="memtoggle">关于你</span><span class="pa"><button data-mem-save>保存</button><button data-mem-cancel>取消</button></span></div>
       <textarea id="memedit" placeholder="每行一条，比如：- 在家用 Proxmox 自托管服务"></textarea>`;
     $('#memedit').value = S.memory.text || ''; $('#memedit').focus();
   }
@@ -976,9 +981,10 @@ function renderMembers() {
 function renderState() {
   const now = Date.now() - clockSkew;
   if (!messages.length) setHTML('#msgs', emptyState());
-  renderHistory(); renderModerator(); renderNotes(); renderJobs(); renderArena(); renderMemory(); renderMode(); renderTts(); renderThinking();
-  $('#members').hidden = folded.has('members');
-  $('[data-fold=members]').setAttribute('aria-expanded', !folded.has('members'));
+  renderHistory(); renderModerator(); renderStances(); renderNotes(); renderJobs(); renderArena(); renderMemory(); renderMode(); renderTts(); renderThinking();
+  for (const [k, el] of [['members', '#members'], ['settings', '#settings-body']]) {
+    $(el).hidden = folded.has(k); $(`[data-fold=${k}]`).setAttribute('aria-expanded', !folded.has(k));
+  }
   $('#s-exec').disabled = !S.sandboxed; $('#execrow').style.opacity = S.sandboxed ? '' : '.45';
   const cur = S.chats.find(c => c.id === S.chatId);
   $('#title').textContent = cur?.title || '';
