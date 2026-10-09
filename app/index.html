@@ -63,7 +63,8 @@
   .newbtn { flex:1; display:flex; align-items:center; gap:var(--s2); height:30px; padding:0 var(--s2); border-radius:var(--r-sm);
     color:var(--ink); font-weight:500; white-space:nowrap; }
   .newbtn:hover { background:var(--hover); }
-  #search { width:100%; height:30px; padding:0 var(--s2) 0 28px; border:none; border-radius:var(--r-sm); background:var(--hover) no-repeat 9px 50%;
+  #search { width:100%; height:30px; padding:0 var(--s2) 0 28px; border:none; border-radius:var(--r-sm); background:var(--surface) no-repeat 9px 50%;
+    box-shadow:0 0 0 1px var(--hair);
     background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='%239A9DA3' stroke-width='2.5'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
     font-size:var(--t-sm); outline:none; flex:1; min-width:0; }
   #search::placeholder { color:var(--ink-3); }
@@ -72,7 +73,9 @@
   .chat .k { flex:none; font-size:var(--t-xs); color:var(--ink-3); }
   .chat:hover .k { display:none; }
   #history { overflow:auto; flex:1; margin:0 calc(-1 * var(--s1)); padding:0 var(--s1); }
-  .group { font-size:var(--t-xs); color:var(--ink-3); padding:var(--s3) var(--s2) var(--s1); }
+  #history .pane { padding:var(--s2) 0; }
+  #history .pane:first-child { border-top:none; padding-top:0; }
+  #history .ph + * { margin-top:var(--s1); }
   .chat { position:relative; display:flex; align-items:center; gap:var(--s2); height:30px; padding:0 var(--s2); border-radius:var(--r-sm);
     cursor:pointer; color:var(--ink-2); }
   .chat:hover { background:var(--hover); color:var(--ink); }
@@ -714,26 +717,28 @@ const ICON = {
 function renderHistory() {
   if (searchHits) {
     const re = new RegExp(searchQ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-    return setHTML('#history', searchHits.length ? searchHits.map(h => `<div class="hit" data-hit="${h.chat_id}:${h.id}">
-      <div class="ht">${esc(h.title)}</div><div>${esc(label(h.sender))}：${esc(h.snippet).replace(re, '<mark>$&</mark>')}</div></div>`).join('')
-      : '<div class="group">没有找到匹配的讨论</div>');
+    return setHTML('#history', `<section class="pane">${pane('hist:search', '搜索结果', { count: searchHits.length, body: searchHits.length
+      ? `<div>${searchHits.map(h => `<div class="hit" data-hit="${h.chat_id}:${h.id}">
+      <div class="ht">${esc(h.title)}</div><div>${esc(label(h.sender))}：${esc(h.snippet).replace(re, '<mark>$&</mark>')}</div></div>`).join('')}</div>`
+      : '<div class="memempty">没有找到匹配的讨论</div>' })}</section>`);
   }
   const day = c => { const d = utc(c.last || c.created_at), t = new Date(); t.setHours(0, 0, 0, 0);
     return d >= t ? '今天' : d >= new Date(t - 864e5) ? '昨天' : d >= new Date(t - 6 * 864e5) ? '最近 7 天' : '更早'; };
-  // Grouped by recency, or by mode (newest first within each); by recency each row names its mode.
+  // Grouped by recency, or by mode (newest first within each); by recency each row names its mode. Each group is a
+  // section like the right panel's, folded the same way.
   const KINDS = Object.keys(MODE_LABEL), byKind = histGroup === 'kind';
   const rank = c => (c.kind ? KINDS.indexOf(c.kind) : KINDS.length);
   const chats = byKind ? [...S.chats].sort((x, y) => rank(x) - rank(y)) : S.chats;
-  let html = '', g = '';
+  const groups = new Map();
   for (const c of chats) {
     const gg = byKind ? MODE_LABEL[c.kind] || '未分类' : day(c);
-    if (gg !== g) { html += `<div class="group">${gg}</div>`; g = gg; }
-    html += `<div class="chat ${c.id === S.chatId ? 'on' : ''}" data-chat="${c.id}" title="${esc(c.title)}${c.preview ? `\n${esc(c.preview)}` : ''}\n${c.n} 条消息">
+    groups.set(gg, (groups.get(gg) || '') + `<div class="chat ${c.id === S.chatId ? 'on' : ''}" data-chat="${c.id}" title="${esc(c.title)}${c.preview ? `\n${esc(c.preview)}` : ''}\n${c.n} 条消息">
       <span class="t">${esc(c.title)}</span>${!byKind && c.kind ? `<span class="k">${MODE_LABEL[c.kind]}</span>` : ''}<span class="m">${when(c.last || c.created_at)}</span>
       <span class="acts"><span data-rename="${c.id}" title="重命名">${ICON.rename}</span><span data-export="${c.id}" title="导出 Markdown">${ICON.export}</span><span data-del="${c.id}" title="删除">${ICON.del}</span></span>
-    </div>`;
+    </div>`);
   }
-  setHTML('#history', html);
+  setHTML('#history', [...groups].map(([g, rows]) =>
+    `<section class="pane">${pane(`hist:${g}`, g, { count: rows.split('data-chat=').length - 1, body: `<div>${rows}</div>` })}</section>`).join(''));
 }
 let histGroup = localStorage.histGroup || 'time';
 $('#histGroup').value = histGroup;
