@@ -121,7 +121,7 @@ export function debateBrief(d, name, phase, motion, handle) {
 //   [NOTE add] text      [NOTE edit N3] text      [NOTE drop N3]
 // and "[JOB] shell command" lines (background jobs, at most 2 per reply), "[TASK] what to do" / "[TASK shared] what to do"
 // (a background coding session in the member's workspace / a worktree of the shared repo, at most 1 per reply).
-// Game mode: "[DM @handle] text" lines (a private message, at most 3 per reply) and "[ACT] order" lines (to the host).
+// Game mode: "[DM @handle] text" lines (a private message; at most 12 kept, the server allows players 3) and "[ACT] order" lines (to the host).
 // Returns {text, hand, stance: {t, c, l?} | null, notes: [{op, n?, text?}], jobs: [cmd], tasks: [{desc, shared}],
 // dms: [{to, text}], acts: [order]}; those markers are removed from the text.
 // Agents don't keep to the layout: markers come mid-line ("…对上。[STANCE 94%] …"), several on one line
@@ -141,7 +141,7 @@ export function parseReply(raw) {
   const hand = raw.search(HAND) >= 0;
   let text = raw.replace(HAND, '').replace(DM, (_, to, t) => {
     t = t.trim();
-    if (t && dms.length < 3) dms.push({ to, text: t.slice(0, 600) });
+    if (t && dms.length < 12) dms.push({ to, text: t.slice(0, 600) });
     return '';
   }).replace(ACT, (_, o) => (o.trim() && acts.push(o.trim().slice(0, 200)), '')).replace(JOB, (_, cmd) => {
     cmd = cmd.trim().replace(/^`+|`+$/g, '').trim();

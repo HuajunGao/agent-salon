@@ -102,6 +102,9 @@ async function server(t, slowFirst = 0) {
       const text = p.includes('STORY RELAY') ? h+' 的一段。'+(story++ ? '' : '\\n@opencode')+'\\n[NOTE add] '+h+' 登场'
         : p.includes('You are the judge') ? '评判：正方赢在定义。'
         : p.includes('reply with one line: [ACT]') ? '[ACT] 10\\n守约。'
+        : p.includes('You are the HOST') ? ['', '规则：猜数。\\n[DM @codex] 你的数字是 7\\n[DM @agy] 你的数字是 3\\n[PHASE talk]\\n[STATE]\\n回合 1',
+            '交指令。\\n[PHASE orders @codex]\\n[STATE]\\n回合 2', '结算：codex 赢。\\n[END]\\n[STATE]\\n结束'][+p.match(/this is turn (\\d+)/)[1]]
+        : p.includes('the host asks for your order') ? (o.onLive('🔧 Read /home/agent/.codex/sessions/x.jsonl'), '[ACT] 猜 5\\n凭直觉')
         : p.includes('the negotiation before round') ? h+' 公开。\\n[DM @codex] '+h+' 的私信' : h+' 发言。';
       const mate = p.includes('私信测试') && p.match(/Your teammates?: @(\\w+)/)?.[1]; // debate: a word to the teammate
       return {text: mate ? text+'\\n[DM @'+mate+'] '+h+' 的暗号' : text, sid:'s-'+h, ms:150}};`);
@@ -354,4 +357,30 @@ test('debate: teammates may coordinate by private message, unseen by the other s
   assert.ok(dms.every(m => m.dm !== m.sender && side(m.dm) === side(m.sender)));
   for (const x of turns()) for (const m of dms) if (x.p.includes(m.text)) assert.equal(x.h, m.dm); // only the addressee
   assert.ok(turns().some(x => x.p.includes('的暗号') && x.p.includes('(private message)')));
+});
+
+test('free game: a member hosts with a private ledger, DMs the setup, collects secret orders, ends; peeking is flagged', async t => {
+  const { post, init, until, turns } = await server(t);
+  const id = (await init()).state.chatId;
+  await post('/api/chat/mode', { id, mode: 'game' });
+  await post('/api/send', { text: '@claude 主持，我们玩个猜数游戏', chat_id: id });
+  const s = await until(async () => { const x = await init();
+    return x.state.game?.over && x.messages.filter(m => m.kind === 'agent' && !m.dm && m.text.endsWith('发言。')).length >= 7 && x; });
+  assert.deepEqual([s.state.game.host, s.state.game.over, s.state.game.ledger], ['claude', 'end', '结束']);
+  const tt = turns(), host = tt.filter(x => x.p.includes('You are the HOST'));
+  assert.equal(host.length, 3);
+  assert.ok(host[0].p.includes('This is your first turn') && host[1].p.includes('回合 1'));          // the ledger comes back
+  assert.ok(host[2].p.includes('secret order') && host[2].p.includes('[ACT] 猜 5'));                // the order reached the host
+  assert.ok(s.messages.every(m => !m.text.includes('[STATE]') && !m.text.includes('回合 1') && !m.text.includes('[PHASE')));
+  const dm = s.messages.find(m => m.text === '你的数字是 7');
+  assert.equal(dm.dm, 'codex');
+  assert.ok(tt.filter(x => x.h !== 'codex' && x.h !== 'claude').every(x => !x.p.includes('你的数字是 7')));
+  assert.ok(tt.some(x => x.h === 'codex' && x.p.includes('你的数字是 7')));
+  const talk = tt.filter(x => x.p.includes('Now: the table talks')), orders = tt.filter(x => x.p.includes('the host asks for your order'));
+  assert.deepEqual(talk.map(x => x.h).sort(), ['agy', 'codex', 'opencode']);
+  assert.deepEqual(orders.map(x => x.h), ['codex']);                                                // only who the host named
+  const order = s.messages.find(m => m.role === 'order');
+  assert.deepEqual([order.sender, order.dm], ['codex', 'claude']);
+  assert.ok(tt.filter(x => x.h !== 'claude').every(x => !x.p.includes('猜 5')));
+  assert.ok(s.messages.some(m => m.kind === 'moderator' && m.text.startsWith('🚨') && m.text.includes('.codex/sessions')));
 });

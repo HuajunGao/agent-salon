@@ -306,6 +306,7 @@
   /* debate: who argues which side */
   .seats { display:grid; grid-template-columns:auto minmax(0, 1fr); gap:3px var(--s3); margin:var(--s2) 0 var(--s3); font-size:var(--t-xs); color:var(--ink-2); overflow-wrap:anywhere; }
   .seats b { font-weight:500; color:var(--ink-3); }
+  .ledger { white-space:pre-wrap; max-height:240px; overflow:auto; margin:0 var(--s1) var(--s3); padding:var(--s2); font-size:var(--t-xs); color:var(--ink-2); border:1px dashed var(--hair); border-radius:6px; }
   /* the discussion's notes (resources, story setting, debate lines), kept by the members */
   .notelist { margin:0; padding:0 var(--s1); list-style:none; font-size:var(--t-sm); color:var(--ink-2); line-height:1.5; }
   .notelist li { position:relative; display:flex; gap:var(--s2); padding:3px 0; }
@@ -648,7 +649,8 @@ function renderMsg(m) {
   if (m.latency_ms) hd.push(`<span title="思考用时">想了 ${Math.round(m.latency_ms / 1000)}s</span>`);
   const st = m.stance && JSON.parse(m.stance);
   if (st) hd.push(`<span class="dim" title="立场：${esc(st.l ? `${st.l}：${st.t}` : st.t)}">${st.l ? `${esc(st.l)} ` : ''}${st.c}%</span>`);
-  if (m.dm) hd.unshift(`<span class="tag warn" title="私信：只有收信人看得到（你是主持人，全都看得到）">🔒 私信给 ${esc(label(m.dm))}</span>`);
+  if (m.dm) hd.unshift(m.role === 'order' ? `<span class="tag warn" title="秘密指令：只有主持人看得到">🔒 秘密指令给 ${esc(label(m.dm))}</span>`
+    : `<span class="tag warn" title="私信：只有收信人看得到（你全都看得到）">🔒 私信给 ${esc(label(m.dm))}</span>`);
   if (m.reply_to) hd.push(`<span class="tag">回复 ${ref(m.reply_to)}</span>`);
   if (m.based_on != null && between.length) hd.push(`<span class="dim" title="开始思考时看到的最后一条是 #${m.based_on}，之后又有 ${between.length} 条">基于 ${ref(m.based_on)} +${between.length}</span>`);
   if (m.stale) hd.push(`<span class="tag warn" title="这条回复写于你的新消息之前">写于你的新消息之前</span>`);
@@ -784,13 +786,17 @@ function flowText(schedulerText) {
   if (flow === 'relay') return '故事接力：一人一段，按顺序或 @ 交棒';
   if (flow === 'debate') return d ? `辩论：${PHASE_LABEL[d.phase] || '评判'}（第 ${d.step}/${d.steps} 步）` : '辩论：你发出辩题后抽签分持方';
   const g = S.game;
-  if (flow === 'game') return !g ? '博弈：发一条消息开局（如“开始，4 轮”，默认困难模式；带“经典”是固定翻倍、公开总数、固定轮数）'
-    : g.over ? '博弈已结束，自由聊' : `${g.label}${g.hard ? '（困难）' : ''}：第 ${g.round}${g.hard ? ` 轮（最多 ${g.rounds}）` : `/${g.rounds} 轮`} · ${g.phase === 'talk' ? '谈判' : `秘密下令（${g.ordered.length}/${g.players.length}）`}`;
+  if (flow === 'game') return !g ? '博弈：发“开始”玩捕鱼（默认困难，带“经典”是原规则）；或“@某人 主持，我们玩狼人杀”由它主持任意游戏'
+    : g.over ? '博弈已结束，自由聊'
+    : g.host ? `自由博弈 · ${esc(label(g.host))} 主持 · 第 ${g.round + 1} 回合 · ${{ host: '主持人结算', talk: '轮流发言', orders: `秘密行动（${g.ordered.length}/${g.waiting.length}）` }[g.phase]}` : `${g.label}${g.hard ? '（困难）' : ''}：第 ${g.round}${g.hard ? ` 轮（最多 ${g.rounds}）` : `/${g.rounds} 轮`} · ${g.phase === 'talk' ? '谈判' : `秘密下令（${g.ordered.length}/${g.players.length}）`}`;
   return (d?.done ? '辩论已结束，自由讨论；' : '') + schedulerText + (S.settings.autoStop ? '，收敛后自动收尾' : '');
 }
 function renderSeats() {
   const d = S.debate, g = S.game;
   const who = n => (n === 'user' ? '你' : `<span style="color:${color(n)}">${esc(label(n))}</span>`);
+  if (g?.host && S.discussionMode.rules.flow === 'game') return `<div class="seats"><b>主持</b><span>${who(g.host)}</span>`
+    + `<b>玩家</b><span>${g.players.map(who).join('、')}</span></div>`
+    + (g.ledger ? `<div class="ledger" title="主持人的私密账本，只有它和你看得到">${esc(g.ledger)}</div>` : '');
   if (g && S.discussionMode.rules.flow === 'game') return `<div class="seats"><b>湖</b><span>${g.pool} / ${g.cap} 吨</span>`
     + [...g.players].sort((x, y) => g.caught[y] - g.caught[x]).map(n => `<b>${who(n)}</b><span>${g.caught[n]} 吨</span>`).join('') + '</div>';
   if (!d) return '';

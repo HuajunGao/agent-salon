@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
 import { AGENTS, runTurn, listModels, runAs, spawnJob } from './agents.mjs';
 import { judge, novelty, classifyMode, stanceShift } from './moderator.mjs';
-import { commons, talkOrder, gameBrief } from './game.mjs';
+import { commons, talkOrder, gameBrief, parseHost, hostBrief, playerBrief, HOST_TURNS } from './game.mjs';
 import { MODES, rulesOf, relayNext, debateSetup, debateScript, debateBrief, seatOf, PHASES, parseReply, applyNotes } from './modes.mjs';
 import { curate } from './memory.mjs';
 import { validateMember, memberMentions, atToken } from './members.mjs';
@@ -203,7 +203,7 @@ const withStance = m => { const st = m.stance && JSON.parse(m.stance);
   return st ? `${m.text}\n[STANCE ${st.c}%] ${st.t}` : m.text; };
 const attached = m => { const fs = m.files && JSON.parse(m.files);
   return fs?.length ? `\n(Attached: ${fs.map(f => `${join(UPLOADS, f.file)} (${f.name}, ${f.type || 'file'}, ${Math.ceil(f.size / 1024)} KB)`).join('; ')})` : ''; };
-const fmt = m => `#${m.id} ${who(m.sender)}${m.dm ? ` → ${who(m.dm)} (private message)` : ''}${m.role === 'outsider' ? ' (outsider: a fresh session of this model that thought it through before reading the discussion)' : ''}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${withStance(m)}${attached(m)}`;
+const fmt = m => `#${m.id} ${who(m.sender)}${m.dm ? ` → ${who(m.dm)} (${m.role === 'order' ? 'secret order' : 'private message'})` : ''}${m.role === 'outsider' ? ' (outsider: a fresh session of this model that thought it through before reading the discussion)' : ''}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${withStance(m)}${attached(m)}`;
 const archiveFile = c => join(ARCHIVE, `${c}.md`);
 function writeTranscript(c) {
   const chat = q1('SELECT title, created_at FROM chats WHERE id=?', c);
@@ -390,17 +390,32 @@ function finishDebate(c) {
   for (const n of NAMES) raise(n, 1, 'after the debate');
 }
 
-// Game: the first message starts a game of the commons (game.mjs) with the enabled members ("…3 轮" sets the rounds,
-// hard mode unless it says "经典": random regrowth, only the lake size public, a random end with the rounds as a cap the players aren't told).
-// State in chats.state.game: the engine's state plus phase ('talk' | 'orders' | 'over'), the talk queue, step (talk
-// turns played, so a turn is counted once) and the orders in. Hands carry game: {round, phase, step}.
-// Talk turns follow one another; orders all start at once, are read only by the server and never posted to the members.
+// Game: the first message starts a game with the enabled members. With a member @mentioned as host ("@claude 主持，
+// 玩狼人杀") it is a free game run by that member (game.mjs hostBrief); else the commons ("…3 轮" sets the rounds; hard
+// mode unless it says "经典": random regrowth, only the lake size public, a random end, the rounds a cap the players
+// aren't told). State in chats.state.game: phase ('host' | 'talk' | 'orders' | 'over'), round, the talk queue, step (talk
+// turns played, so a turn is counted once), the orders in; the commons adds the engine's state, a free game host,
+// waiting (who owes an order) and the host's ledger. Hands carry game: {round, phase, step}.
+// Talk turns follow one another; orders all start at once. The commons reads orders itself (the user sees them as
+// notes); in a free game they go to the host as private messages (role 'order'), and the host resolves them.
+// Players' game turns are read-only and their tool calls are checked for peeking (audit).
 const LAPS = 2; // ponytail: each player speaks twice per round's negotiation; make it a setting if games drag
 const handle = x => `@${memberAt(x)}`;
 function gameOnUser(m) {
   const st = chatState(chatId);
   if (st.game?.over) { for (const n of NAMES) raise(n, 1, 'user message'); return; }
   if (!st.game) {
+    const host = /主持|host/i.test(m.text) && mentions(m.text).find(n => S.enabled[n]);
+    if (host) {
+      const players = enabledOrder().filter(n => n !== host);
+      if (players.length < 2) return note('🎲 自由博弈除了主持人至少还要 2 位参与成员。');
+      st.game = { host, players, phase: 'host', round: 0, step: 0, orders: {}, waiting: [], queue: [], ledger: '' };
+      saveState(chatId, st);
+      logDecision('game-start', null, { message_id: m.id, detail: { game: 'free', host, players } });
+      note(`🎲 自由博弈：${handle(host)} 主持，玩家 ${players.map(handle).join('、')}。主持人先公布规则、私信发身份或资源，`
+        + '再一个阶段一个阶段推进（轮流发言 / 秘密行动），每个阶段后由它结算。私信、秘密指令和它的私密账本你都看得到。');
+      return gameNext(chatId);
+    }
     const players = enabledOrder();
     if (players.length < 2) return note('🎣 博弈至少需要 2 位参与成员。');
     const hard = !/经典|简单|classic|easy/i.test(m.text), rounds = Math.min(20, +m.text.match(/(\d+)\s*轮/)?.[1] || (hard ? 10 : 6));
@@ -416,24 +431,31 @@ function gameOnUser(m) {
   }
   if (!busy() && !NAMES.some(n => rt[n].hand)) gameNext(chatId); // nothing scheduled (e.g. after a stop): carry on
 }
+const present = a => S.enabled[a] && rt[a];
 function gameNext(c) {
   if (c !== chatId) return;
   const st = chatState(c), g = st.game;
   if (!g || g.over) return;
   const hand = phase => ({ r: 50, since: Date.now(), why: 'game', game: { round: g.round, phase, step: g.step } });
   if (g.phase === 'talk') {
-    while (g.queue.length && !(S.enabled[g.queue[0]] && rt[g.queue[0]])) { g.queue.shift(); g.step++; }
+    while (g.queue.length && !present(g.queue[0])) { g.queue.shift(); g.step++; }
     if (g.queue.length) { rt[g.queue[0]].hand = hand('talk'); return saveState(c, st); }
-    g.phase = 'orders';
-    noteNext(`🎣 第 ${g.round} 轮谈判结束，大家秘密下令。`);
+    if (g.host) g.phase = 'host';
+    else { g.phase = 'orders'; noteNext(`🎣 第 ${g.round} 轮谈判结束，大家秘密下令。`); }
   }
-  for (const a of g.players) {
-    if (a in g.orders || rt[a]?.hand || rt[a]?.status === 'thinking') continue;
-    if (S.enabled[a] && rt[a]) rt[a].hand = hand('orders');
-    else g.orders[a] = { ...commons.idle, error: '没有参加' };
+  if (g.phase === 'orders') {
+    const who = g.host ? g.waiting : g.players;
+    for (const a of who) {
+      if (a in g.orders || rt[a]?.hand || rt[a]?.status === 'thinking') continue;
+      if (present(a)) rt[a].hand = hand('orders');
+      else g.orders[a] = g.host ? true : { ...commons.idle, error: '没有参加' };
+    }
+    if (who.some(a => !(a in g.orders))) return saveState(c, st);
+    if (!g.host) return (saveState(c, st), resolveRound(c));
+    g.phase = 'host';
   }
+  if (present(g.host) && !rt[g.host].hand && rt[g.host].status !== 'thinking') rt[g.host].hand = hand('host');
   saveState(c, st);
-  if (g.players.every(a => a in g.orders)) resolveRound(c);
 }
 function gameTalkDone(c, h) {
   const st = chatState(c), g = st.game;
@@ -442,11 +464,19 @@ function gameTalkDone(c, h) {
   saveState(c, st);
   gameNext(c);
 }
-// An order turn's reply: its last [ACT] line, checked by the engine; a missing or invalid order counts as idle.
+// An order turn's reply. The commons: its last [ACT] line, checked by the engine (a missing or invalid order counts as
+// idle). A free game: the reply goes to the host as a private message.
 function gameOrder(c, a, h, res) {
   const st = chatState(c), g = st.game;
   if (!g || g.over || g.phase !== 'orders' || g.round !== h.round || a in g.orders) return;
   const p = res.error ? null : parseReply(res.text), act = p?.acts.at(-1);
+  if (g.host) {
+    g.orders[a] = true; saveState(c, st);
+    insertMsg({ chat_id: c, sender: a, kind: 'agent', dm: g.host, role: 'order', mode: 'game', latency_ms: res.ms, model: S.models[a] || 'default',
+      text: p ? [...p.acts.map(x => `[ACT] ${x}`), p.text].filter(Boolean).join('\n') || '（空）' : `（这一回合出错了，没有指令：${res.error.slice(0, 80)}）` });
+    logDecision('game-order', a, { latency_ms: res.ms, detail: { round: g.round, act: act ?? null, error: res.error || null } });
+    return gameNext(c);
+  }
   const r = act == null ? { error: res.error ? `出错：${res.error.slice(0, 80)}` : '回复里没有 [ACT] 行' } : commons.act(g, a, act);
   g.orders[a] = r.error ? { ...commons.idle, error: r.error } : r.order;
   saveState(c, st);
@@ -468,6 +498,44 @@ function resolveRound(c) {
   jobNote(c, commons.final(g, handle));
   logDecision('game-over', null, { detail: { over: g.over, caught: g.caught } });
   if (c === chatId) for (const a of g.players) raise(a, 1, 'after the game');
+}
+// The host's turn is over (its public text and DMs are on their way): keep its ledger and start the phase it asked for.
+// h: null when the turn failed (it plays again after the user's next message).
+function hostDone(c, play, h) {
+  const st = chatState(c), g = st.game;
+  if (!g?.host || g.over || g.phase !== 'host' || g.round !== play.round) return;
+  if (!h) return void jobNote(c, '⚠ 主持人这一回合没成功，发一条消息让它再来一次。');
+  if (h.ledger != null) g.ledger = h.ledger;
+  g.round++;
+  const next = h.next || { kind: 'talk', laps: 1 };
+  if (next.kind === 'end' || g.round >= HOST_TURNS) {
+    Object.assign(g, { over: next.kind === 'end' ? 'end' : 'cap', phase: 'over' }); saveState(c, st);
+    logDecision('game-over', g.host, { detail: { over: g.over, turns: g.round } });
+    noteNext(g.over === 'end' ? '🏁 主持人宣布游戏结束。' : `🏁 主持人已经主持了 ${HOST_TURNS} 回合，游戏到此结束。`);
+    if (c === chatId) for (const a of [...g.players, g.host]) raise(a, 1, 'after the game');
+    return;
+  }
+  if (next.kind === 'talk') Object.assign(g, { phase: 'talk', queue: talkOrder(g.players, g.round, next.laps) });
+  else {
+    const who = mentions(next.who).filter(x => g.players.includes(x));
+    Object.assign(g, { phase: 'orders', waiting: who.length ? who : g.players, orders: {} });
+  }
+  saveState(c, st);
+  logDecision('game-phase', g.host, { detail: { round: g.round, ...next, waiting: g.waiting } });
+  noteNext(next.kind === 'talk' ? `🎲 轮流发言${next.laps > 1 ? `（每人 ${next.laps} 次）` : ''}。`
+    : `🎲 秘密行动：${g.waiting.map(handle).join('、')}，指令只交给主持人。`);
+  gameNext(c);
+}
+// Game turns are read-only, but every CLI runs as the same OS user: a player could still read other members'
+// workspaces (the host's program and files) or CLI session files (which hold their private messages). The turn's tool log
+// is checked for such paths; agy logs only tool names, so its reads can't be checked.
+const PEEK = /\.claude\/projects|\.codex\/sessions|\.gemini\/|opencode\/(storage|project)|chat\.db/;
+function audit(c, a, log) {
+  const hits = (log || '').split('\n').filter(l => l.startsWith('🔧')
+    && (PEEK.test(l) || NAMES.some(n => n !== a && (l.includes(wsOf(n)) || l.includes(`../${n}`)))));
+  if (!hits.length) return;
+  logDecision('game-audit', a, { detail: { hits } });
+  jobNote(c, `🚨 ${handle(a)} 这一回合碰了不该看的地方：\n${hits.slice(0, 3).map(l => `\`${l.slice(0, 160)}\``).join('\n')}`);
 }
 
 // ---------- the discussion's notes ----------
@@ -704,8 +772,8 @@ const STANCE_RULE = `\nEnd your message with one line: [STANCE n%] verdict: your
   + `short sentence. n = your confidence (0-100); verdict = 2-6 characters such as 支持 / 反对 / 条件支持 / 中立, or the `
   + `option you pick (e.g. 选 Go). Keep your position unless an argument or fact actually convinces you; when it `
   + `changes, say what convinced you (#N).`;
-function turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, role, play }) {
-  const tools = execOn() ? `You may run code in your workspace ${wsOf(a)} to check claims, or work in the shared repo ${SHARED}; keep it quick.`
+function turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, role, play, exec }) {
+  const tools = exec ? `You may run code in your workspace ${wsOf(a)} to check claims, or work in the shared repo ${SHARED}; keep it quick.`
     : memberConfigs[a].harness === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.';
   const roster = `\nCurrent participating members (${enabledOrder().length}): ${enabledOrder().map(describe).join(', ')}. `
     + 'This roster overrides earlier rosters. Use these exact @handles when addressing them.';
@@ -715,7 +783,10 @@ function turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, r
   let ask;
   const g = r.flow === 'game' && chatState(chat).game;
   if (r.flow === 'relay') ask = `\n\n(Your turn in the relay. Reply in ${S.language}. ${tools})\n${r.prompt}`;
-  else if (g) ask = `\n\n${gameBrief(commons, g, a, play?.phase || 'over', handle)}\n\n(Reply in ${S.language}. ${tools})\n${r.prompt}`;
+  else if (g) ask = `\n\n${!g.host ? gameBrief(commons, g, a, play?.phase || 'over', handle)
+    : a !== g.host ? playerBrief(g, a, play?.phase || 'over', handle)
+    : play?.phase === 'host' ? hostBrief(g, handle, exec, !g.round) : 'You hosted the game, which is over: talk about it in public.'}`
+    + `\n\n(Reply in ${S.language}. ${tools})\n${r.prompt}`;
   else if (r.flow === 'debate' && d && !d.skipped && seatOf(d, a)) {
     const motion = q1('SELECT text FROM messages WHERE id=?', d.motion)?.text || '';
     ask = `\n\n${debateBrief(d, a, phase || d.script[d.at]?.phase || 'free', motion, x => `@${atOf(x)}`)}\n(Reply in ${S.language}. ${tools})`;
@@ -754,13 +825,15 @@ async function startTurn(a, retried = false) {
   prompt += msgs.map(m => (m.sender === a && m.role !== 'outsider' ? `#${m.id} (you${m.dm ? ` → ${who(m.dm)}, private` : ''}): ${m.text}` : fmt(m))).join('\n\n') || '(no new messages)';
   const k = turnsSinceUser(a) + 1, n = msgs.filter(m => m.sender !== a).length;
   prompt += jobReport(a, chat);
-  prompt += turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, role, play });
+  // A player's game turns are read-only (no code, so no rules engine of its own and less to peek with); the host's aren't.
+  const exec = execOn() && !(play && play.phase !== 'host');
+  prompt += turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, role, play, exec });
   sendState();
 
   const model = S.models[a];
   rt[a].abort = new AbortController();
   const res = await runTurn(memberConfigs[a].harness, prompt, s.cli_session_id, {
-    cwd: wsOf(a), dataDir: DATA, shared: SHARED, model, exec: execOn(), member: memberConfigs[a] && { ...memberConfigs[a], model },
+    cwd: wsOf(a), dataDir: DATA, shared: SHARED, model, exec, member: memberConfigs[a] && { ...memberConfigs[a], model },
     onLive: log => { rt[a].live = log; sendStateSoon(); }, signal: rt[a].abort.signal,
   });
   rt[a].abort = null;
@@ -783,21 +856,25 @@ async function startTurn(a, retried = false) {
   run(`UPDATE agent_sessions SET cli_session_id=?, last_seen_id=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE chat_id=? AND agent=?`,
     res.error ? s.cli_session_id : res.sid || s.cli_session_id, basedOn, res.error ? 'error' : 'ok', chat, a);
   rt[a].status = 'idle';
+  if (play && play.phase !== 'host') audit(chat, a, rt[a].live);
   if (play?.phase === 'orders') return void (gameOrder(chat, a, play, res), pump()); // to the host only, never posted
-  let text = '';
+  let text = '', hostRes = null;
   if (res.error) {
     rt[a].error = res.error;
     logDecision('error', a, { based_on: basedOn, latency_ms: res.ms, detail: { error: res.error } });
     insertMsg({ chat_id: chat, sender: 'system', kind: 'system', text: `⚠ ${memberConfigs[a].label} 出错: ${res.error}`, based_on: basedOn, latency_ms: res.ms });
   } else {
-    const reply = parseReply(res.text), { hand, stance, notes } = reply, jobs = execOn() ? reply.jobs : [], todo = execOn() ? reply.tasks : [];
-    // private messages: in a game to another player, in a formal debate to a teammate
-    const cs = chatState(chat), players = r.flow === 'game' ? cs.game?.players || []
+    // the host's reply: its phase marker and ledger come off first
+    hostRes = play?.phase === 'host' ? parseHost(res.text) : null;
+    const reply = parseReply(hostRes ? hostRes.body : res.text), { hand, stance, notes } = reply, jobs = exec ? reply.jobs : [], todo = exec ? reply.tasks : [];
+    // private messages: in a game to another player (or the host), in a formal debate to a teammate; players 3 a turn
+    const cs = chatState(chat), gm = cs.game, players = r.flow === 'game' ? [...gm?.players || [], ...gm?.host ? [gm.host] : []]
       : r.flow === 'debate' && !cs.debate?.done ? [cs.debate?.pro, cs.debate?.con].find(s => s?.includes(a)) || [] : [];
-    const dms = reply.dms.map(x => ({ to: mentions(`@${x.to}`)[0], text: x.text })).filter(x => x.to !== a && players.includes(x.to));
+    const dms = reply.dms.map(x => ({ to: mentions(`@${x.to}`)[0], text: x.text })).filter(x => x.to !== a && players.includes(x.to))
+      .slice(0, play?.phase === 'host' ? 12 : 3);
     text = reply.text || (jobs.length || todo.length ? '（启动后台任务）' : '');
     if (dms.length && /^PASS[.。!！]?$/i.test(text)) text = '';
-    if (/^PASS[.。!！]?$/i.test(text) && !summary && !jobs.length && !todo.length) {
+    if ((/^PASS[.。!！]?$/i.test(text) || (!text && !dms.length)) && !summary && !jobs.length && !todo.length) {
       rt[a].note = 'PASS'; text = '';
       logDecision('pass', a, { based_on: basedOn, latency_ms: res.ms });
     } else {
@@ -813,6 +890,7 @@ async function startTurn(a, retried = false) {
   if (chat === chatId && rules(chat).flow === 'relay') relay(a, passed ? '' : text);
   if (slot != null) advanceDebate(chat, slot, !passed);
   if (play?.phase === 'talk') gameTalkDone(chat, play);
+  if (play?.phase === 'host') hostDone(chat, play, res.error ? null : hostRes);
   // A PASS or failure may have been the last thing the convergence check was waiting for.
   if (chat === chatId && passed && wrapRound !== lastUserId(chat)) checkConvergence();
   pump();
@@ -1460,7 +1538,8 @@ function state() {
       phase: d.script[d.at]?.phase || null, step: Math.min(d.at + 1, d.script.length), steps: d.script.length } : null)(chatState(chatId)),
     // the user hosts: the whole game state, catches included
     game: (({ game: g }) => g && { label: commons.label, round: g.round, rounds: g.rounds, hard: !!g.hard, phase: g.phase, pool: g.pool, cap: g.cap,
-      caught: g.caught, players: g.players, ordered: Object.keys(g.orders), over: g.over || null })(chatState(chatId)),
+      caught: g.caught, players: g.players, ordered: Object.keys(g.orders), over: g.over || null,
+      host: g.host || null, waiting: g.waiting, ledger: g.ledger })(chatState(chatId)),
     stances: stances(),
     arena: arena && { id: arena.id, chat: arena.chat, goal: arena.goal, until: arena.until, phase: arena.phase, referee: arena.referee,
       url: arenaURL(arena), probing, members: Object.entries(arena.members).map(([a, m]) => ({ name: a, rate: m.rate ?? null,
