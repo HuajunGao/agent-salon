@@ -43,8 +43,14 @@ export const MODES = {
       + 'user interjects, weave it into the story. Write the passage itself (up to about 300 Chinese characters), no '
       + 'commentary or summary, never PASS. You may end by @mentioning who takes the baton next.' + READ_ALOUD,
   },
+  // game: any game the user asks for, hosted by a member it names; fishing: the commons, run by a host program (game.mjs).
   game: {
-    label: '博弈', flow: 'game',
+    label: '博弈', flow: 'game', game: 'free',
+    notes: { title: '局势', keep: 'deals and promises made in public, and whether they were kept' },
+    prompt: 'Discussion mode: GAME. The members play a game the user asked for, hosted by a member.' + SPOKEN,
+  },
+  fishing: {
+    label: '经典捕鱼', flow: 'game', game: 'commons',
     notes: { title: '局势', keep: 'deals and promises made in public, and whether they were kept' },
     prompt: 'Discussion mode: GAME. The members play a game run by a host program; the rules come with each turn.' + SPOKEN,
   },

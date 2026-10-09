@@ -405,8 +405,9 @@ function gameOnUser(m) {
   const st = chatState(chatId);
   if (st.game?.over) { for (const n of NAMES) raise(n, 1, 'user message'); return; }
   if (!st.game) {
-    const host = /主持|host/i.test(m.text) && mentions(m.text).find(n => S.enabled[n]);
-    if (host) {
+    if (rules(chatId).game === 'free') {
+      const host = mentions(m.text).find(n => S.enabled[n]);
+      if (!host) return note('🎲 博弈要有人主持：@ 一位成员当主持人，再说说玩什么、规则是什么，比如“@claude 主持，我们玩狼人杀”。');
       const players = enabledOrder().filter(n => n !== host);
       if (players.length < 2) return note('🎲 自由博弈除了主持人至少还要 2 位参与成员。');
       st.game = { host, players, phase: 'host', round: 0, step: 0, orders: {}, waiting: [], queue: [], ledger: '' };
@@ -418,7 +419,7 @@ function gameOnUser(m) {
     }
     const players = enabledOrder();
     if (players.length < 2) return note('🎣 博弈至少需要 2 位参与成员。');
-    const hard = !/经典|简单|classic|easy/i.test(m.text), rounds = Math.min(20, +m.text.match(/(\d+)\s*轮/)?.[1] || (hard ? 10 : 6));
+    const hard = !/简单|easy/i.test(m.text), rounds = Math.min(20, +m.text.match(/(\d+)\s*轮/)?.[1] || (hard ? 10 : 6));
     st.game = { ...commons.setup(players, { rounds, hard }), laps: LAPS, phase: 'talk', step: 0, orders: {}, queue: talkOrder(players, 1, LAPS) };
     saveState(chatId, st);
     logDecision('game-start', null, { message_id: m.id, detail: { game: 'commons', players, rounds, hard } });
@@ -1535,7 +1536,7 @@ function state() {
     chats: listChats(),
     sandboxed: !!RUNAS,
     discussionMode: { ...chatMode(chatId), pending: modePending === chatId,
-      rules: (({ flow, stance, notes }) => ({ flow, stance: !!stance, notesTitle: notes.title }))(rules(chatId)) },
+      rules: (({ flow, stance, notes, game }) => ({ flow, stance: !!stance, notesTitle: notes.title, game }))(rules(chatId)) },
     notes: chatState(chatId).notes || [],
     debate: (({ debate: d }) => d && !d.skipped ? { pro: d.pro, con: d.con, judge: d.judge, done: d.done, motion: d.motion,
       phase: d.script[d.at]?.phase || null, step: Math.min(d.at + 1, d.script.length), steps: d.script.length } : null)(chatState(chatId)),

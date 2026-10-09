@@ -320,8 +320,8 @@ else:
 test('game mode: talk in turn with private messages, secret simultaneous orders, the host resolves the rounds', async t => {
   const { post, init, until, turns, root } = await server(t);
   const id = (await init()).state.chatId;
-  await post('/api/chat/mode', { id, mode: 'game' });
-  await post('/api/send', { text: '开始，2 轮，经典', chat_id: id });
+  await post('/api/chat/mode', { id, mode: 'fishing' });
+  await post('/api/send', { text: '开始，2 轮，简单', chat_id: id });
   const s = await until(async () => { const x = await init(), end = x.messages.find(m => m.text.startsWith('🏁'));
     return end && x.messages.filter(m => m.kind === 'agent' && m.id > end.id).length >= 4 && x; });
   const g = s.state.game;
@@ -365,6 +365,8 @@ test('free game: a member hosts with a private ledger, DMs the setup, collects s
   const { post, init, until, turns } = await server(t);
   const id = (await init()).state.chatId;
   await post('/api/chat/mode', { id, mode: 'game' });
+  await post('/api/send', { text: '我们玩个猜数游戏', chat_id: id });                                // no host named: asked for one
+  await until(async () => (await init()).messages.some(m => m.text.startsWith('🎲 博弈要有人主持')));
   await post('/api/send', { text: '@claude 主持，我们玩个猜数游戏', chat_id: id });
   const s = await until(async () => { const x = await init();
     return x.state.game?.over && x.messages.filter(m => m.kind === 'agent' && !m.dm && m.text.endsWith('发言。')).length >= 6 && x; });

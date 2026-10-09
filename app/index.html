@@ -786,7 +786,8 @@ function flowText(schedulerText) {
   if (flow === 'relay') return '故事接力：一人一段，按顺序或 @ 交棒';
   if (flow === 'debate') return d ? `辩论：${PHASE_LABEL[d.phase] || '评判'}（第 ${d.step}/${d.steps} 步）` : '辩论：你发出辩题后抽签分持方';
   const g = S.game;
-  if (flow === 'game') return !g ? '博弈：发“开始”玩捕鱼（默认困难，带“经典”是原规则）；或“@某人 主持，我们玩狼人杀”由它主持任意游戏'
+  if (flow === 'game') return !g ? (S.discussionMode.rules.game === 'free' ? '博弈：@ 一位成员当主持人，说说玩什么，如“@claude 主持，我们玩狼人杀”'
+      : '经典捕鱼：发“开始”开局（默认困难；带“简单”是固定翻倍、公开总数；“4 轮”设轮数）')
     : g.over ? '博弈已结束，自由聊'
     : g.host ? `自由博弈 · ${esc(label(g.host))} 主持 · 第 ${g.round + 1} 回合 · ${{ host: '主持人结算', talk: '轮流发言', orders: `秘密行动（${g.ordered.length}/${g.waiting.length}）` }[g.phase]}` : `${g.label}${g.hard ? '（困难）' : ''}：第 ${g.round}${g.hard ? ` 轮（最多 ${g.rounds}）` : `/${g.rounds} 轮`} · ${g.phase === 'talk' ? '谈判' : `秘密下令（${g.ordered.length}/${g.players.length}）`}`;
   return (d?.done ? '辩论已结束，自由讨论；' : '') + schedulerText + (S.settings.autoStop ? '，收敛后自动收尾' : '');
@@ -1280,7 +1281,7 @@ $('#share').onclick = async () => {
 };
 
 // Discussion mode: Auto shows what Jev chose; picking a mode overrides it from the next turn.
-const MODE_LABEL = { research: '研究', roundtable: '圆桌', debate: '辩论', story: '故事', game: '博弈' };
+const MODE_LABEL = { research: '研究', roundtable: '圆桌', debate: '辩论', story: '故事', game: '博弈', fishing: '经典捕鱼' };
 function renderMode() {
   const d = S.discussionMode;
   const auto = d.pending ? '自动 · 判断中…' : d.auto ? `自动 · ${MODE_LABEL[d.auto]}` : '自动';
