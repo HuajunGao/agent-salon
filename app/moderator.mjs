@@ -85,6 +85,8 @@ export async function classifyMode(question) {
         examples: ['A pill removes the need to sleep. Should society deploy it?', 'You receive life advice from yourself 30 years in the future. Do you read it?'] },
       story: { use_when: 'The user wants the group to write fiction together: a story, a relay, characters or a world to continue.',
         examples: ['我们来接龙写个故事：一个程序员在凌晨三点收到了自己发来的邮件。', 'Let\'s write a mystery together, one paragraph each.'] },
+      game: { use_when: 'The user wants the members to play a game against each other (rules, roles, bids, votes, turns), usually naming one of them as the host.',
+        examples: ['@glm 主持，玩密封竞拍：每人 100 金币，共 6 轮，同时秘密出价。', '@claude host a game of Werewolf for the rest of you.'] },
     } } });
   if (r.error) return r;
   return { mode: r.answers.mode.choice, probabilities: r.answers.mode.probabilities, ms: r.ms };

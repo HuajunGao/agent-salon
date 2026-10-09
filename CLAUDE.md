@@ -61,7 +61,7 @@ turn cap); debate draws sides at its first message (odd member count: one member
 turns start only when nothing else is thinking or queued, so each sees the previous reply. Every discussion keeps
 notes in `chats.state` (resources / setting / key lines): members change them with [NOTE add|edit|drop] lines, the
 user in the UI, and every turn's prompt includes them (`notesPrompt`) so long discussions and stories don't drift.
-Game (博弈, never picked by Auto; state in `chats.state.game`): any game the user describes, hosted by the member the
+Game (博弈; Auto picks it for a request to play, the room then asks for a host if none is @mentioned; state in `chats.state.game`): any game the user describes, hosted by the member the
 first message @mentions (none: the server asks for one). The host (game.mjs hostBrief, server hostDone) announces
 rules, DMs private setups, keeps a private ledger ([STATE], stored in the game state, shown to the user) and picks each
 next step ([PHASE talk n @b @a] / [PHASE orders @a @b] / [END]; listed handles set who speaks, in that order); orders
