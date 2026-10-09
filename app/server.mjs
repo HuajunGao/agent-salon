@@ -414,7 +414,7 @@ function finishDebate(c) {
 // 'talk' | 'orders' | 'over'), round (host turns played), the talk queue, step (talk turns played, so a turn is counted
 // once), waiting (who owes an order), the orders in, and the host's ledger. Hands carry game: {round, phase, step}.
 // Talk turns follow one another; orders all start at once and go to the host as private messages (role 'order').
-// Players' game turns are read-only and their tool calls are checked for peeking (audit).
+// Players may run code like in any turn (simulations, strategy); their tool calls are checked for peeking (audit).
 const handle = x => `@${memberAt(x)}`;
 function gameOnUser(m) {
   const st = chatState(chatId);
@@ -503,7 +503,7 @@ function hostDone(c, play, h) {
     : `🎲 秘密行动：${g.waiting.map(handle).join('、')}，指令只交给主持人。`);
   gameNext(c);
 }
-// Game turns are read-only, but every CLI runs as the same OS user: a player could still read other members'
+// Every CLI runs as the same OS user, so a player could read other members'
 // workspaces (the host's program and files) or CLI session files (which hold their private messages). The turn's tool log
 // is checked for such paths; agy logs only tool names, so its reads can't be checked.
 const PEEK = /\.claude\/projects|\.codex\/sessions|\.gemini\/|opencode\/(storage|project)|chat\.db/;
@@ -761,7 +761,7 @@ function turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, r
   const g = r.flow === 'game' && chatState(chat).game;
   if (r.flow === 'relay') ask = `\n\n(Your turn in the relay. Reply in ${S.language}. ${tools})\n${r.prompt}`;
   else if (g) ask = `\n\n${!g.host ? 'The game is over: talk about it in public.' // an old built-in game
-    : a !== g.host ? playerBrief(g, a, play?.phase || 'over', handle)
+    : a !== g.host ? playerBrief(g, a, play?.phase || 'over', handle, exec)
     : play?.phase === 'host' ? hostBrief(g, handle, exec, !g.round) : 'You hosted the game, which is over: talk about it in public.'}`
     + `\n\n(Reply in ${S.language}. ${tools})\n${r.prompt}`;
   else if (r.flow === 'debate' && d && !d.skipped && seatOf(d, a)) {
@@ -789,8 +789,7 @@ async function startTurn(a, retried = false) {
   const r = rules(chat), d = chatState(chat).debate, phase = slot != null ? d.script[slot].phase : null;
   const role = summary ? 'summary' : why === 'devil' ? 'devil' : phase === 'verdict' ? 'verdict' : null;
   Object.assign(rt[a], { status: 'thinking', started: Date.now(), live: '', hand: null, note: '', error: '', role });
-  // A player's game turns are read-only (no code, so no rules engine of its own and less to peek with); the host's aren't.
-  const exec = execOn() && !(play && play.phase !== 'host');
+  const exec = execOn();
   let msgs, prompt;
   if (s.cli_session_id) {
     msgs = q(`SELECT * FROM messages WHERE chat_id=? AND id>? AND ${UNSEEN} AND ${HEARS} ORDER BY id`, chat, s.last_seen_id, a, a, a);

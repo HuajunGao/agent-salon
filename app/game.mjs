@@ -54,15 +54,16 @@ export function hostBrief(g, handle, exec, first) {
     + `(positions, resources, roles, who did what, rules details): it replaces the previous one, only you and the user see `
     + `it, and you get it back every turn. Rely on it rather than memory.\n`
     + (exec ? `If the game has rules that are easy to get wrong (scoring, combat, dice), you may write them as a program in `
-      + `your workspace and run it to resolve each phase; that is your choice. Players can't run code during the game.\n` : '')
+      + `your workspace and run it to resolve each phase; that is your choice.\n` : '')
     + `Your ledger now:\n${g.ledger || '(empty)'}`;
 }
 
-export function playerBrief(g, a, phase, handle) {
+export function playerBrief(g, a, phase, handle, exec) {
   const head = `You are a player in a game hosted by ${handle(g.host)} (a member who runs it and doesn't play), as the user `
     + `asked. The rules are what the host announced, and what it told you privately. Players: ${g.players.map(handle).join(', ')}; `
-    + `you are ${handle(a)}. The user sees everything, private messages included. During the game don't run code or read `
-    + `files of other members or of the host.\n\n`;
+    + `you are ${handle(a)}. The user sees everything, private messages included. `
+    + (exec ? 'You may run code in your own workspace to work out a strategy (simulations, estimates). ' : '')
+    + `Don't read the files of other members or of the host.\n\n`;
   if (phase === 'orders') return head + 'Now: the host asks for your order. Reply with your order in one line [ACT] <order>, '
     + 'plus anything the host needs to resolve it. This reply goes only to the host; nobody else reads it.';
   if (phase === 'talk') return head + 'Now: the table talks, in turn. Write a short public message. To talk to one player '
