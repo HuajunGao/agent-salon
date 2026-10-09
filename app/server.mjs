@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
 import { AGENTS, runTurn, listModels, runAs, spawnJob } from './agents.mjs';
 import { judge, novelty, classifyMode, stanceShift } from './moderator.mjs';
+import { commons, talkOrder, gameBrief } from './game.mjs';
 import { MODES, rulesOf, relayNext, debateSetup, debateScript, debateBrief, seatOf, PHASES, parseReply, applyNotes } from './modes.mjs';
 import { curate } from './memory.mjs';
 import { validateMember, memberMentions, atToken } from './members.mjs';
@@ -87,7 +88,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS members(name TEXT PRIMARY KEY, config TEXT N
 // stance: JSON {t: position, c: confidence 0-100, changed?, evidence?: Jev's view of a change} from the reply's [STANCE] line.
 // seat: the speaker's part in a debate (正方一辩, 评委); note_ops: the notes this reply changed ([{op, n}]).
 // files: the user's attachments, JSON [{file: '<chat>/<stored name>', name, size, type}].
-for (const col of ['model', 'role', 'mode', 'stance', 'seat', 'note_ops', 'files'])
+// dm: a private message (game mode): the member it is addressed to; only it and the sender's session ever see it.
+for (const col of ['model', 'role', 'mode', 'stance', 'seat', 'note_ops', 'files', 'dm'])
   if (!db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === col)) db.exec(`ALTER TABLE messages ADD COLUMN ${col} TEXT`);
 // Discussion mode per chat: 'auto' (Jev classifies the first question into auto_mode) or a mode the user chose.
 // state: JSON {notes: [{n, text, by, msg}], debate: {pro, con, judge, motion, script, at, done}}.
@@ -180,10 +182,10 @@ function logDecision(event, agent, extra = {}) {
 }
 
 function insertMsg(m) {
-  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model, role, mode, stance, seat, note_ops, files)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
+  const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model, role, mode, stance, seat, note_ops, files, dm)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
     m.latency_ms ?? null, m.turn_no ?? null, m.stale ? 1 : 0, m.model ?? null, m.role ?? null, m.mode ?? null,
-    m.stance ? JSON.stringify(m.stance) : null, m.seat ?? null, m.note_ops ?? null, m.files?.length ? JSON.stringify(m.files) : null).lastInsertRowid);
+    m.stance ? JSON.stringify(m.stance) : null, m.seat ?? null, m.note_ops ?? null, m.files?.length ? JSON.stringify(m.files) : null, m.dm ?? null).lastInsertRowid);
   const msg = q1('SELECT * FROM messages WHERE id=?', id);
   writeTranscript(m.chat_id);
   if (m.chat_id === chatId) send({ type: 'msg', msg });
@@ -201,7 +203,7 @@ const withStance = m => { const st = m.stance && JSON.parse(m.stance);
   return st ? `${m.text}\n[STANCE ${st.c}%] ${st.t}` : m.text; };
 const attached = m => { const fs = m.files && JSON.parse(m.files);
   return fs?.length ? `\n(Attached: ${fs.map(f => `${join(UPLOADS, f.file)} (${f.name}, ${f.type || 'file'}, ${Math.ceil(f.size / 1024)} KB)`).join('; ')})` : ''; };
-const fmt = m => `#${m.id} ${who(m.sender)}${m.role === 'outsider' ? ' (outsider: a fresh session of this model that thought it through before reading the discussion)' : ''}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${withStance(m)}${attached(m)}`;
+const fmt = m => `#${m.id} ${who(m.sender)}${m.dm ? ` → ${who(m.dm)} (private message)` : ''}${m.role === 'outsider' ? ' (outsider: a fresh session of this model that thought it through before reading the discussion)' : ''}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${withStance(m)}${attached(m)}`;
 const archiveFile = c => join(ARCHIVE, `${c}.md`);
 function writeTranscript(c) {
   const chat = q1('SELECT title, created_at FROM chats WHERE id=?', c);
@@ -242,8 +244,10 @@ let wrapRound = 0;                      // round (= last user message id) alread
 // Moderator activity. devilAt / circledAt: the round in which devil's advocate / the circling pause already happened.
 const jev = { assessing: false, again: false, judging: false, ms: null, downAt: 0, idleNoted: 0, devilAt: 0, circledAt: 0, circlePaused: false };
 
-// Only user and agent messages are the discussion; system/moderator notes are for the UI.
-const TALK = `kind IN ('user','agent')`;
+// Only user and agent messages are the discussion; system/moderator notes are for the UI. Private messages (dm) are not
+// part of it: not archived, not judged by Jev, shown only to their sender and addressee (HEARS, bound to the member twice).
+const TALK = `kind IN ('user','agent') AND dm IS NULL`;
+const HEARS = `kind IN ('user','agent') AND (dm IS NULL OR dm=? OR sender=?)`;
 // What a member's chat session hasn't written itself: others' messages, and an outsider report sent under its name.
 const UNSEEN = `(sender<>? OR coalesce(role,'')='outsider')`;
 const lastTalkId = () => q1(`SELECT coalesce(max(id),0) m FROM messages WHERE chat_id=? AND ${TALK}`, chatId).m;
@@ -311,6 +315,7 @@ function wake(m) {
   const flow = rules(chatId).flow;
   if (flow === 'relay') return void (busy() || relay(lastAgent(), m.text)); // a busy relay hands on after its turn
   if (flow === 'debate') return debateOnUser(m);
+  if (flow === 'game') return gameOnUser(m);
   const at = mentions(m.text);
   const target = m.reply_to && q1('SELECT sender FROM messages WHERE id=?', m.reply_to)?.sender;
   // Hands left from the previous round (an @ by a member) would keep their old reason and count as follow-ups that
@@ -385,6 +390,82 @@ function finishDebate(c) {
   for (const n of NAMES) raise(n, 1, 'after the debate');
 }
 
+// Game: the first message starts a game of the commons (game.mjs) with the enabled members ("…3 轮" sets the rounds).
+// State in chats.state.game: the engine's state plus phase ('talk' | 'orders' | 'over'), the talk queue, step (talk
+// turns played, so a turn is counted once) and the orders in. Hands carry game: {round, phase, step}.
+// Talk turns follow one another; orders all start at once, are read only by the server and never posted to the members.
+const LAPS = 2; // ponytail: each player speaks twice per round's negotiation; make it a setting if games drag
+const handle = x => `@${memberAt(x)}`;
+function gameOnUser(m) {
+  const st = chatState(chatId);
+  if (st.game?.over) { for (const n of NAMES) raise(n, 1, 'user message'); return; }
+  if (!st.game) {
+    const players = enabledOrder();
+    if (players.length < 2) return note('🎣 博弈至少需要 2 位参与成员。');
+    const rounds = Math.min(20, +m.text.match(/(\d+)\s*轮/)?.[1] || 6);
+    st.game = { ...commons.setup(players, { rounds }), laps: LAPS, phase: 'talk', step: 0, orders: {}, queue: talkOrder(players, 1, LAPS) };
+    saveState(chatId, st);
+    logDecision('game-start', null, { message_id: m.id, detail: { game: 'commons', players, rounds } });
+    note(`🎣 博弈开始：${commons.label}，${players.map(handle).join('、')} 共 ${rounds} 轮。湖最多 ${st.game.cap} 吨鱼，每轮捕完剩下的翻倍（不超过上限），`
+      + `剩不到 5 吨就崩溃。每轮先轮流谈判（公开或私信，每人 ${LAPS} 次），再同时秘密下令。各人的渔获只有你看得到，成员们只知道总数。`);
+    return gameNext(chatId);
+  }
+  if (!busy() && !NAMES.some(n => rt[n].hand)) gameNext(chatId); // nothing scheduled (e.g. after a stop): carry on
+}
+function gameNext(c) {
+  if (c !== chatId) return;
+  const st = chatState(c), g = st.game;
+  if (!g || g.over) return;
+  const hand = phase => ({ r: 50, since: Date.now(), why: 'game', game: { round: g.round, phase, step: g.step } });
+  if (g.phase === 'talk') {
+    while (g.queue.length && !(S.enabled[g.queue[0]] && rt[g.queue[0]])) { g.queue.shift(); g.step++; }
+    if (g.queue.length) { rt[g.queue[0]].hand = hand('talk'); return saveState(c, st); }
+    g.phase = 'orders';
+    noteNext(`🎣 第 ${g.round} 轮谈判结束，大家秘密下令。`);
+  }
+  for (const a of g.players) {
+    if (a in g.orders || rt[a]?.hand || rt[a]?.status === 'thinking') continue;
+    if (S.enabled[a] && rt[a]) rt[a].hand = hand('orders');
+    else g.orders[a] = { ...commons.idle, error: '没有参加' };
+  }
+  saveState(c, st);
+  if (g.players.every(a => a in g.orders)) resolveRound(c);
+}
+function gameTalkDone(c, h) {
+  const st = chatState(c), g = st.game;
+  if (!g || g.over || g.phase !== 'talk' || g.round !== h.round || g.step !== h.step) return;
+  g.queue.shift(); g.step++;
+  saveState(c, st);
+  gameNext(c);
+}
+// An order turn's reply: its last [ACT] line, checked by the engine; a missing or invalid order counts as idle.
+function gameOrder(c, a, h, res) {
+  const st = chatState(c), g = st.game;
+  if (!g || g.over || g.phase !== 'orders' || g.round !== h.round || a in g.orders) return;
+  const p = res.error ? null : parseReply(res.text), act = p?.acts.at(-1);
+  const r = act == null ? { error: res.error ? `出错：${res.error.slice(0, 80)}` : '回复里没有 [ACT] 行' } : commons.act(g, a, act);
+  g.orders[a] = r.error ? { ...commons.idle, error: r.error } : r.order;
+  saveState(c, st);
+  logDecision('game-order', a, { latency_ms: res.ms, detail: { round: g.round, act: act ?? null, ...g.orders[a] } });
+  jobNote(c, `🔒 ${handle(a)} 下令${r.error ? `无效（${r.error}），按 ${commons.show(commons.idle)} 算` : `：${commons.show(r.order)}`}`
+    + `${p?.text ? `。${p.text.slice(0, 300)}` : ''}`);
+  if (g.players.every(x => x in g.orders)) resolveRound(c);
+}
+function resolveRound(c) {
+  const st = chatState(c), g = st.game;
+  const text = commons.resolve(g, g.orders, handle);
+  g.orders = {};
+  if (g.over) g.phase = 'over';
+  else Object.assign(g, { phase: 'talk', queue: talkOrder(g.players, g.round, g.laps) });
+  saveState(c, st);
+  logDecision('game-round', null, { detail: g.history.at(-1) });
+  jobNote(c, text);
+  if (!g.over) return gameNext(c);
+  jobNote(c, commons.final(g, handle));
+  logDecision('game-over', null, { detail: { over: g.over, caught: g.caught } });
+  if (c === chatId) for (const a of g.players) raise(a, 1, 'after the game');
+}
+
 // ---------- the discussion's notes ----------
 function notesPrompt(c) {
   const { notes = [] } = chatState(c), r = rules(c);
@@ -422,7 +503,7 @@ function score(a) {
     freshness: +freshness.toFixed(2), cooldown, sinceUser };
 }
 const turnsSinceUser = a => q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=? AND id>?', chatId, a, lastUserId(chatId)).n;
-const hasUnseen = a => !!q1(`SELECT 1 FROM messages WHERE chat_id=? AND id>? AND ${UNSEEN} AND ${TALK} LIMIT 1`, chatId, sess(chatId, a).last_seen_id, a);
+const hasUnseen = a => !!q1(`SELECT 1 FROM messages WHERE chat_id=? AND id>? AND ${UNSEEN} AND ${HEARS} LIMIT 1`, chatId, sess(chatId, a).last_seen_id, a, a, a);
 const inQueue = a => ready.some(r => r.chat === chatId && r.agent === a);
 
 function eligible(a) {
@@ -430,12 +511,14 @@ function eligible(a) {
   if (!h || !S.enabled[a] || rt[a].status !== 'idle' || inQueue(a)) return false;
   // The summary waits for slow agents still thinking: they get their say and the summary includes them.
   if (h.why === 'summary') return NAMES.every(n => rt[n].status !== 'thinking') && !ready.some(r => r.chat === chatId);
-  // Relay and debate turns follow one another: the next starts once the previous reply is published.
+  // A game's orders start together, once the last talk reply is out.
+  if (h.game?.phase === 'orders') return !ready.some(r => r.chat === chatId);
+  // Relay, debate and game turns follow one another: the next starts once the previous reply is published.
   if (rules(chatId).flow !== 'free' && busy()) return false;
   // Floor from the user, a debate slot, and the round after a debate (whatever was said during it) aren't capped.
   // Neither is a member woken by its finished background job (it must hear the result, whatever the turn count).
   // An outsider's report gets one answer from everyone too.
-  if (h.r >= 100 || h.slot != null || h.why === 'after the debate' || h.why === 'job' || h.why === 'outsider') return true;
+  if (h.r >= 100 || h.slot != null || h.game || ['after the debate', 'after the game', 'job', 'outsider'].includes(h.why)) return true;
   return turnsSinceUser(a) < S.turnCap && hasUnseen(a);
 }
 
@@ -448,10 +531,10 @@ function pump() {
     cands.sort(S.scheduler === 'broadcast' ? (x, y) => rt[x.a].hand.since - rt[y.a].hand.since : (x, y) => y.s - x.s);
     const blind = blindOpen(), free = rules(chatId).flow === 'free';
     for (const c of cands) {
-      if (!blind && inflight() >= S.maxThinkers) break;
+      if (!blind && rt[c.a].hand.game?.phase !== 'orders' && inflight() >= S.maxThinkers) break;
       // jev mode: follow-up hands wait for a fresh novelty judgment; the user's own wake-ups don't, and neither does
       // everyone's one turn after a debate (each says what they actually think, or passes).
-      const opening = c.why === 'user message' || c.why === 'after the debate' || c.why === 'job' || c.why === 'outsider';
+      const opening = ['user message', 'after the debate', 'after the game', 'job', 'outsider'].includes(c.why);
       const followUp = free && c.r < 10 && !opening;
       if (jevOn() && followUp && !novFresh(c.a)) {
         // a hand Jev won't judge (e.g. a member at the turn cap) is dropped, or it would ask Jev again every second
@@ -511,7 +594,7 @@ async function assess() {
 // When the room goes quiet without wrapping up, the moderator hands the floor back to the user (once per lull).
 let floorTimer;
 function floorBack() {
-  const quiet = () => !paused && !jev.assessing && !jev.judging && wrapRound !== lastUserId(chatId) && rules(chatId).flow !== 'debate'
+  const quiet = () => !paused && !jev.assessing && !jev.judging && wrapRound !== lastUserId(chatId) && !['debate', 'game'].includes(rules(chatId).flow)
     && NAMES.every(n => rt[n].status !== 'thinking' && !rt[n].hand) && !ready.some(r => r.chat === chatId)
     && q1(`SELECT kind FROM messages WHERE chat_id=? AND ${TALK} ORDER BY id DESC LIMIT 1`, chatId)?.kind === 'agent';
   if (!quiet() || jev.idleNoted === lastTalkId()) return;
@@ -617,7 +700,7 @@ const STANCE_RULE = `\nEnd your message with one line: [STANCE n%] verdict: your
   + `short sentence. n = your confidence (0-100); verdict = 2-6 characters such as 支持 / 反对 / 条件支持 / 中立, or the `
   + `option you pick (e.g. 选 Go). Keep your position unless an argument or fact actually convinces you; when it `
   + `changes, say what convinced you (#N).`;
-function turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, role }) {
+function turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, role, play }) {
   const tools = execOn() ? `You may run code in your workspace ${wsOf(a)} to check claims, or work in the shared repo ${SHARED}; keep it quick.`
     : memberConfigs[a].harness === 'codex' ? 'Read-only commands only.' : 'No shell commands: use web search, web pages and file reading only.';
   const roster = `\nCurrent participating members (${enabledOrder().length}): ${enabledOrder().map(describe).join(', ')}. `
@@ -626,7 +709,9 @@ function turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, r
   if (summary) return `\n\nThe moderator judged that the discussion has converged. Write a short summary for the user: `
     + `the conclusion, who agreed (cite #N), and caveats still open. No new arguments, no @mentions, no [HAND].\n\n${reply}${roster}`;
   let ask;
+  const g = r.flow === 'game' && chatState(chat).game;
   if (r.flow === 'relay') ask = `\n\n(Your turn in the relay. Reply in ${S.language}. ${tools})\n${r.prompt}`;
+  else if (g) ask = `\n\n${gameBrief(commons, g, a, play?.phase || 'over', handle)}\n\n(Reply in ${S.language}. ${tools})\n${r.prompt}`;
   else if (r.flow === 'debate' && d && !d.skipped && seatOf(d, a)) {
     const motion = q1('SELECT text FROM messages WHERE id=?', d.motion)?.text || '';
     ask = `\n\n${debateBrief(d, a, phase || d.script[d.at]?.phase || 'free', motion, x => `@${atOf(x)}`)}\n(Reply in ${S.language}. ${tools})`;
@@ -647,25 +732,25 @@ function turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, r
 
 async function startTurn(a, retried = false) {
   const chat = chatId, s = sess(chat, a), basedOn = maxId(chat);
-  const { why, blind, slot, seat } = rt[a].hand || {};
+  const hand0 = rt[a].hand, { why, blind, slot, seat, game: play } = hand0 || {};
   const floor = rt[a].hand?.r >= 100, summary = why === 'summary', invited = why === 'Jev';
   const r = rules(chat), d = chatState(chat).debate, phase = slot != null ? d.script[slot].phase : null;
   const role = summary ? 'summary' : why === 'devil' ? 'devil' : phase === 'verdict' ? 'verdict' : null;
   Object.assign(rt[a], { status: 'thinking', started: Date.now(), live: '', hand: null, note: '', error: '', role });
   let msgs, prompt;
   if (s.cli_session_id) {
-    msgs = q(`SELECT * FROM messages WHERE chat_id=? AND id>? AND ${UNSEEN} AND ${TALK} ORDER BY id`, chat, s.last_seen_id, a);
+    msgs = q(`SELECT * FROM messages WHERE chat_id=? AND id>? AND ${UNSEEN} AND ${HEARS} ORDER BY id`, chat, s.last_seen_id, a, a, a);
     prompt = `New messages since your last turn:\n\n`;
   } else {
     // New (or lost) session: seed with the recent history, trimmed to stay under the Windows command-line limit.
-    msgs = q(`SELECT * FROM messages WHERE chat_id=? AND ${TALK} ORDER BY id DESC LIMIT 40`, chat).reverse();
+    msgs = q(`SELECT * FROM messages WHERE chat_id=? AND ${HEARS} ORDER BY id DESC LIMIT 40`, chat, a, a).reverse();
     while (msgs.map(fmt).join('').length > 16000) msgs.shift();
     prompt = intro(a, chat) + `Conversation so far:\n\n`;
   }
-  prompt += msgs.map(m => (m.sender === a && m.role !== 'outsider' ? `#${m.id} (you): ${m.text}` : fmt(m))).join('\n\n') || '(no new messages)';
+  prompt += msgs.map(m => (m.sender === a && m.role !== 'outsider' ? `#${m.id} (you${m.dm ? ` → ${who(m.dm)}, private` : ''}): ${m.text}` : fmt(m))).join('\n\n') || '(no new messages)';
   const k = turnsSinceUser(a) + 1, n = msgs.filter(m => m.sender !== a).length;
   prompt += jobReport(a, chat);
-  prompt += turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, role });
+  prompt += turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, role, play });
   sendState();
 
   const model = S.models[a];
@@ -688,12 +773,13 @@ async function startTurn(a, retried = false) {
   if (res.error && s.cli_session_id && !retried && !/quota|auth/.test(res.error)) {
     run('UPDATE agent_sessions SET cli_session_id=NULL WHERE chat_id=? AND agent=?', chat, a);
     logDecision('resume-failed', a, { detail: { error: res.error } });
-    rt[a].hand = { r: floor ? 100 : 1, since: Date.now(), why: 'retry' };
+    rt[a].hand = { ...hand0, r: floor ? 100 : hand0?.r ?? 1, since: Date.now() }; // the same turn: debate slot, game phase
     return startTurn(a, true);
   }
   run(`UPDATE agent_sessions SET cli_session_id=?, last_seen_id=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE chat_id=? AND agent=?`,
     res.error ? s.cli_session_id : res.sid || s.cli_session_id, basedOn, res.error ? 'error' : 'ok', chat, a);
   rt[a].status = 'idle';
+  if (play?.phase === 'orders') return void (gameOrder(chat, a, play, res), pump()); // to the host only, never posted
   let text = '';
   if (res.error) {
     rt[a].error = res.error;
@@ -701,12 +787,16 @@ async function startTurn(a, retried = false) {
     insertMsg({ chat_id: chat, sender: 'system', kind: 'system', text: `⚠ ${memberConfigs[a].label} 出错: ${res.error}`, based_on: basedOn, latency_ms: res.ms });
   } else {
     const reply = parseReply(res.text), { hand, stance, notes } = reply, jobs = execOn() ? reply.jobs : [], todo = execOn() ? reply.tasks : [];
+    // private messages: game mode only, to another player of the game
+    const players = r.flow === 'game' ? chatState(chat).game?.players || [] : [];
+    const dms = reply.dms.map(x => ({ to: mentions(`@${x.to}`)[0], text: x.text })).filter(x => x.to !== a && players.includes(x.to));
     text = reply.text || (jobs.length || todo.length ? '（启动后台任务）' : '');
+    if (dms.length && /^PASS[.。!！]?$/i.test(text)) text = '';
     if (/^PASS[.。!！]?$/i.test(text) && !summary && !jobs.length && !todo.length) {
       rt[a].note = 'PASS'; text = '';
       logDecision('pass', a, { based_on: basedOn, latency_ms: res.ms });
     } else {
-      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, stance, notes, jobs, todo, seat, slot, model: model || 'default', role, done: Date.now() });
+      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, stance, notes, jobs, todo, dms, seat, slot, model: model || 'default', role, done: Date.now() });
       // A browser is reading aloud: synthesize while the reply waits in the queue, so it plays without delay.
       if (speechOn() && Date.now() - ttsActiveAt < 120e3) synth(spoken(a, text), voiceOf(a)).catch(() => {});
       logDecision('ready', a, { based_on: basedOn, latency_ms: res.ms, detail: { hand, chars: text.length } });
@@ -717,6 +807,7 @@ async function startTurn(a, retried = false) {
   const passed = !!res.error || rt[a].note === 'PASS';
   if (chat === chatId && rules(chat).flow === 'relay') relay(a, passed ? '' : text);
   if (slot != null) advanceDebate(chat, slot, !passed);
+  if (play?.phase === 'talk') gameTalkDone(chat, play);
   // A PASS or failure may have been the last thing the convergence check was waiting for.
   if (chat === chatId && passed && wrapRound !== lastUserId(chat)) checkConvergence();
   pump();
@@ -744,21 +835,24 @@ function publish(force = false) {
 }
 
 function publishOne(r) {
-  const turnNo = q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=?', r.chat, r.agent).n + 1;
+  const turnNo = q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=? AND dm IS NULL', r.chat, r.agent).n + 1;
   const stale = !!q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user' AND id>? LIMIT 1`, r.chat, r.basedOn);
   // The reply's [NOTE] lines update the discussion's notes; the message records what changed.
   const st = chatState(r.chat);
   const changed = r.notes?.length ? applyNotes(st.notes ??= [], r.notes, { by: r.agent }) : [];
-  const m = insertMsg({ chat_id: r.chat, sender: r.agent, kind: 'agent', text: r.text, based_on: r.basedOn,
-    latency_ms: r.ms, turn_no: turnNo, stale, model: r.model, role: r.role, mode: chatMode(r.chat).effective, stance: r.stance,
-    seat: r.seat, note_ops: changed.length ? JSON.stringify(changed) : null });
+  // A game reply may be only private messages (no public text): m is then the last of them.
+  const base = { chat_id: r.chat, sender: r.agent, kind: 'agent', based_on: r.basedOn, latency_ms: r.ms, model: r.model, mode: chatMode(r.chat).effective };
+  const pub = r.text || !r.dms?.length ? insertMsg({ ...base, text: r.text, turn_no: turnNo, stale, role: r.role, stance: r.stance,
+    seat: r.seat, note_ops: changed.length ? JSON.stringify(changed) : null }) : null;
+  let m = pub;
+  for (const d of r.dms || []) m = insertMsg({ ...base, text: d.text, dm: d.to });
   if (changed.length) {
     for (const x of st.notes) if (changed.some(o => o.n === x.n && o.op !== 'drop')) x.msg = m.id;
     saveState(r.chat, st);
   }
   for (const cmd of r.jobs || []) startJob(r.agent, r.chat, cmd, m.id);
   for (const t of r.todo || []) startTask(r.agent, r.chat, t, m.id);
-  if (r.stance && r.role !== 'devil' && r.role !== 'summary') checkShift(m);
+  if (pub && r.stance && r.role !== 'devil' && r.role !== 'summary') checkShift(pub);
   if (r.role === 'verdict') finishDebate(r.chat);
   run('UPDATE agent_sessions SET turns=turns+1 WHERE chat_id=? AND agent=?', r.chat, r.agent);
   logDecision('publish', r.agent, { based_on: r.basedOn, message_id: m.id, latency_ms: r.ms,
@@ -1359,6 +1453,9 @@ function state() {
     notes: chatState(chatId).notes || [],
     debate: (({ debate: d }) => d && !d.skipped ? { pro: d.pro, con: d.con, judge: d.judge, done: d.done, motion: d.motion,
       phase: d.script[d.at]?.phase || null, step: Math.min(d.at + 1, d.script.length), steps: d.script.length } : null)(chatState(chatId)),
+    // the user hosts: the whole game state, catches included
+    game: (({ game: g }) => g && { label: commons.label, round: g.round, rounds: g.rounds, phase: g.phase, pool: g.pool, cap: g.cap,
+      caught: g.caught, players: g.players, ordered: Object.keys(g.orders), over: g.over || null })(chatState(chatId)),
     stances: stances(),
     arena: arena && { id: arena.id, chat: arena.chat, goal: arena.goal, until: arena.until, phase: arena.phase, referee: arena.referee,
       url: arenaURL(arena), probing, members: Object.entries(arena.members).map(([a, m]) => ({ name: a, rate: m.rate ?? null,

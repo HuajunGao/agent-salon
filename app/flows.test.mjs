@@ -59,7 +59,7 @@ import net from 'node:net';
 async function server(t, slowFirst = 0) {
   const root = mkdtempSync(join(tmpdir(), 'agent-chat-flow-test-'));
   const app = join(root, 'app'); mkdirSync(app);
-  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
+  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'game.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
     copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
   const log = join(root, 'turns.jsonl');
   // Story turns: the first one passes the baton to @opencode; every turn adds a note. The judge gives a verdict.
@@ -82,7 +82,9 @@ async function server(t, slowFirst = 0) {
       await new Promise(r=>{ const t=setTimeout(r,ms); o.signal?.addEventListener('abort',()=>{ clearTimeout(t); r(); }); });
       if (o.signal?.aborted) return {error:'stopped', ms:1};
       const text = p.includes('STORY RELAY') ? h+' 的一段。'+(story++ ? '' : '\\n@opencode')+'\\n[NOTE add] '+h+' 登场'
-        : p.includes('You are the judge') ? '评判：正方赢在定义。' : h+' 发言。';
+        : p.includes('You are the judge') ? '评判：正方赢在定义。'
+        : p.includes('reply with one line: [ACT]') ? '[ACT] 10\\n守约。'
+        : p.includes('the negotiation before round') ? h+' 公开。\\n[DM @codex] '+h+' 的私信' : h+' 发言。';
       return {text, sid:'s-'+h, ms:150}};`);
   const srv = net.createServer(); srv.listen(0, '127.0.0.1'); await once(srv, 'listening');
   const port = srv.address().port; await new Promise(r => srv.close(r));
@@ -289,4 +291,35 @@ else:
   const meeting = turns().slice(12);
   assert.ok(meeting.every(x => x.p.includes('is over') && x.p.includes('试了 v1')));
   assert.ok(!(await post('/api/arena/start', { goal: 'x', minutes: 10, referee: 'nope' })).ok);
+});
+
+test('game mode: talk in turn with private messages, secret simultaneous orders, the host resolves the rounds', async t => {
+  const { post, init, until, turns, root } = await server(t);
+  const id = (await init()).state.chatId;
+  await post('/api/chat/mode', { id, mode: 'game' });
+  await post('/api/send', { text: '开始，2 轮', chat_id: id });
+  const s = await until(async () => { const x = await init(), end = x.messages.find(m => m.text.startsWith('🏁'));
+    return end && x.messages.filter(m => m.kind === 'agent' && m.id > end.id).length >= 4 && x; });
+  const g = s.state.game;
+  assert.equal(g.over, 'done');
+  assert.deepEqual(Object.values(g.caught), [20, 20, 20, 20]); // 10 each, twice: the lake refills to 100
+  // private messages: the others' to codex (codex's own to itself is dropped), 2 rounds × 2 laps
+  const dms = s.messages.filter(m => m.dm);
+  assert.equal(dms.length, 12);
+  assert.ok(dms.every(m => m.dm === 'codex' && m.sender !== 'codex' && m.text.endsWith('的私信')));
+  const tt = turns(), talk = tt.filter(x => x.p.includes('the negotiation before round')), orders = tt.filter(x => x.p.includes('[ACT] <tonnes>'));
+  assert.equal(talk.length, 16);
+  assert.equal(orders.length, 8);
+  for (let i = 1; i < talk.length; i++) assert.ok(talk[i].at - talk[i - 1].at >= 150, 'talk turns overlap');
+  assert.ok(orders[3].at - orders[0].at < 150, 'orders start together');
+  assert.ok(tt.filter(x => x.h !== 'codex').every(x => !x.p.includes('的私信')));            // only the addressee reads them
+  assert.ok(tt.some(x => x.h === 'codex' && x.p.includes('claude 的私信') && x.p.includes('(private message)')));
+  assert.ok(talk.slice(8).every(x => x.p.includes('Round 1: the lake had 100, 40 caught in total (you: 10)')));
+  assert.ok(talk.every(x => !x.p.includes('Everyone:')));                                    // catches stay secret
+  // orders go to the host only: the user sees them in notes, the members never
+  assert.ok(s.messages.filter(m => m.kind === 'agent').every(m => !m.text.includes('守约')));
+  assert.equal(s.messages.filter(m => m.kind === 'moderator' && m.text.startsWith('🔒')).length, 8);
+  assert.ok(!readFileSync(join(root, 'data', 'discussions', `${id}.md`), 'utf8').includes('的私信'));
+  const after = tt.slice(-4);
+  assert.ok(after.every(x => x.p.includes('The game is over') && x.p.includes('Everyone:')));
 });

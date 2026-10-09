@@ -648,6 +648,7 @@ function renderMsg(m) {
   if (m.latency_ms) hd.push(`<span title="思考用时">想了 ${Math.round(m.latency_ms / 1000)}s</span>`);
   const st = m.stance && JSON.parse(m.stance);
   if (st) hd.push(`<span class="dim" title="立场：${esc(st.l ? `${st.l}：${st.t}` : st.t)}">${st.l ? `${esc(st.l)} ` : ''}${st.c}%</span>`);
+  if (m.dm) hd.unshift(`<span class="tag warn" title="私信：只有收信人看得到（你是主持人，全都看得到）">🔒 私信给 ${esc(label(m.dm))}</span>`);
   if (m.reply_to) hd.push(`<span class="tag">回复 ${ref(m.reply_to)}</span>`);
   if (m.based_on != null && between.length) hd.push(`<span class="dim" title="开始思考时看到的最后一条是 #${m.based_on}，之后又有 ${between.length} 条">基于 ${ref(m.based_on)} +${between.length}</span>`);
   if (m.stale) hd.push(`<span class="tag warn" title="这条回复写于你的新消息之前">写于你的新消息之前</span>`);
@@ -782,12 +783,17 @@ function flowText(schedulerText) {
   const d = S.debate, flow = S.discussionMode.rules.flow;
   if (flow === 'relay') return '故事接力：一人一段，按顺序或 @ 交棒';
   if (flow === 'debate') return d ? `辩论：${PHASE_LABEL[d.phase] || '评判'}（第 ${d.step}/${d.steps} 步）` : '辩论：你发出辩题后抽签分持方';
+  const g = S.game;
+  if (flow === 'game') return !g ? '博弈：发一条消息开局（如“开始，4 轮”，默认 6 轮）'
+    : g.over ? '博弈已结束，自由聊' : `${g.label}：第 ${g.round}/${g.rounds} 轮 · ${g.phase === 'talk' ? '谈判' : `秘密下令（${g.ordered.length}/${g.players.length}）`}`;
   return (d?.done ? '辩论已结束，自由讨论；' : '') + schedulerText + (S.settings.autoStop ? '，收敛后自动收尾' : '');
 }
 function renderSeats() {
-  const d = S.debate;
-  if (!d) return '';
+  const d = S.debate, g = S.game;
   const who = n => (n === 'user' ? '你' : `<span style="color:${color(n)}">${esc(label(n))}</span>`);
+  if (g && S.discussionMode.rules.flow === 'game') return `<div class="seats"><b>湖</b><span>${g.pool} / ${g.cap} 吨</span>`
+    + [...g.players].sort((x, y) => g.caught[y] - g.caught[x]).map(n => `<b>${who(n)}</b><span>${g.caught[n]} 吨</span>`).join('') + '</div>';
+  if (!d) return '';
   return `<div class="seats"><b>正方</b><span>${d.pro.map(who).join('、')}</span><b>反方</b><span>${d.con.map(who).join('、')}</span>`
     + `<b>评委</b><span>${who(d.judge)}</span></div>`;
 }
@@ -1268,7 +1274,7 @@ $('#share').onclick = async () => {
 };
 
 // Discussion mode: Auto shows what Jev chose; picking a mode overrides it from the next turn.
-const MODE_LABEL = { research: '研究', roundtable: '圆桌', debate: '辩论', story: '故事' };
+const MODE_LABEL = { research: '研究', roundtable: '圆桌', debate: '辩论', story: '故事', game: '博弈' };
 function renderMode() {
   const d = S.discussionMode;
   const auto = d.pending ? '自动 · 判断中…' : d.auto ? `自动 · ${MODE_LABEL[d.auto]}` : '自动';

@@ -1,6 +1,6 @@
 // Discussion modes. Each mode is a small set of rules that server.mjs runs:
-//   flow       who speaks next: 'free' (raised hands, scored), 'relay' (one member after another) or 'debate'
-//              (sides and a fixed order of play)
+//   flow       who speaks next: 'free' (raised hands, scored), 'relay' (one member after another), 'debate'
+//              (sides and a fixed order of play) or 'game' (a resource game run by a host program, game.mjs)
 //   stance     replies end with a [STANCE] line (the stance table, Jev's check on changes)
 //   moderated  the moderator wraps up on convergence, calls a devil's advocate, pauses when circling
 //   notes      what the discussion's notes are for: a short numbered list the members keep themselves ([NOTE] lines)
@@ -42,6 +42,11 @@ export const MODES = {
       + 'from the latest passage, keep every established character, relationship and fact (see the notes), and when the '
       + 'user interjects, weave it into the story. Write the passage itself (up to about 300 Chinese characters), no '
       + 'commentary or summary, never PASS. You may end by @mentioning who takes the baton next.' + READ_ALOUD,
+  },
+  game: {
+    label: '博弈', flow: 'game',
+    notes: { title: '局势', keep: 'deals and promises made in public, and whether they were kept' },
+    prompt: 'Discussion mode: GAME. The members play a game run by a host program; the rules come with each turn.' + SPOKEN,
   },
 };
 
@@ -113,22 +118,29 @@ export function debateBrief(d, name, phase, motion, handle) {
 //   [NOTE add] text      [NOTE edit N3] text      [NOTE drop N3]
 // and "[JOB] shell command" lines (background jobs, at most 2 per reply), "[TASK] what to do" / "[TASK shared] what to do"
 // (a background coding session in the member's workspace / a worktree of the shared repo, at most 1 per reply).
-// Returns {text, hand, stance: {t, c, l?} | null, notes: [{op, n?, text?}], jobs: [cmd], tasks: [{desc, shared}]};
-// those markers are removed from the text.
+// Game mode: "[DM @handle] text" lines (a private message, at most 3 per reply) and "[ACT] order" lines (to the host).
+// Returns {text, hand, stance: {t, c, l?} | null, notes: [{op, n?, text?}], jobs: [cmd], tasks: [{desc, shared}],
+// dms: [{to, text}], acts: [order]}; those markers are removed from the text.
 // Agents don't keep to the layout: markers come mid-line ("…对上。[STANCE 94%] …"), several on one line
 // ("[HAND] [STANCE 70%] …"), or with more text after them (Claude appends "Sources:" after [HAND]). So a marker counts
 // anywhere except right after a backtick (`[HAND]` in code is talk about the protocol), and NOTE / STANCE / JOB take the
 // rest of their line. Except [JOB] and [TASK], which start real work: only at the start of their own line, since members
-// talk about "[JOB]" mid-sentence and the rest of such a sentence was run as a shell command.
+// talk about "[JOB]" mid-sentence and the rest of such a sentence was run as a shell command. [DM] and [ACT] likewise.
 const HAND = /(?<!`)[*_]*\[HAND\][*_]*/gi;
 const JOB = /^[ \t>*_-]*\[JOB\][*_]*[ \t]*(.*)$/gim;
 const TASK = /^[ \t>*_-]*\[TASK(\s+shared)?\][*_]*[ \t:：]*(.*)$/gim;
+const DM = /^[ 	>*_-]*\[DM\s+@?([^\]\s]+)\s*\][*_]*[ 	:：]*(.*)$/gim;
+const ACT = /^[ 	>*_-]*\[ACT\][*_]*[ 	:：]*(.*)$/gim;
 const STANCE = /(?<!`)[*_]*\[(?:STANCE|立场)\s*[:：]?\s*(\d{1,3})\s*%?\][ \t*_:：]*(.*)$/gim;
 const NOTE = /(?<!`)[*_]*\[NOTE\s+(add|edit|drop)(?:\s+N?(\d+))?\][ \t*_:：]*(.*)$/gim;
 export function parseReply(raw) {
-  const notes = [], jobs = [], tasks = [];
+  const notes = [], jobs = [], tasks = [], dms = [], acts = [];
   const hand = raw.search(HAND) >= 0;
-  let text = raw.replace(HAND, '').replace(JOB, (_, cmd) => {
+  let text = raw.replace(HAND, '').replace(DM, (_, to, t) => {
+    t = t.trim();
+    if (t && dms.length < 3) dms.push({ to, text: t.slice(0, 600) });
+    return '';
+  }).replace(ACT, (_, o) => (o.trim() && acts.push(o.trim().slice(0, 200)), '')).replace(JOB, (_, cmd) => {
     cmd = cmd.trim().replace(/^`+|`+$/g, '').trim();
     if (cmd && jobs.length < 2) jobs.push(cmd);
     return '';
@@ -152,7 +164,7 @@ export function parseReply(raw) {
   });
   // Agents sometimes write a reply and then a stray "PASS" on its own last line: drop it (a bare PASS stays a pass).
   text = text.replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim().replace(/\n\s*PASS[.。!！]?$/i, '').trim();
-  return { text, hand, stance, notes, jobs, tasks };
+  return { text, hand, stance, notes, jobs, tasks, dms, acts };
 }
 
 // Applies note ops to a list [{n, text, ...}]: returns the ops that changed something, with the numbers they got.

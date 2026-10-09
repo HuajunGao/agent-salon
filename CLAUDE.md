@@ -40,6 +40,8 @@ Restart the server only when no agent is thinking (check `/events` state) — th
 - **app/modes.mjs** — the discussion modes as rules plus pure functions: each mode's flow (`free` raised hands,
   `relay` for stories, `debate` with drawn sides and an order of play), whether replies carry a [STANCE] line, whether
   the moderator steers, and what its notes are for; also the reply protocol (`parseReply`: [NOTE]/[STANCE]/[HAND]).
+- **app/game.mjs** — game mode's host program (pure): the commons engine (setup/rules/view/act/resolve/final) and
+  each turn's brief. A program, not a model, keeps the state and resolves rounds.
 - **app/moderator.mjs** — Jev calls: `judge` (one request: convergence Score + stalling/debatable/challenged/circling
   Nouls) and `novelty` (one Noul per candidate: would it add something new?).
 - **app/memory.mjs** — `curate`: a configured active member folds the user's new messages into `data/memory.md` (or NO_CHANGE).
@@ -59,6 +61,11 @@ turn cap); debate draws sides at its first message (odd member count: one member
 turns start only when nothing else is thinking or queued, so each sees the previous reply. Every discussion keeps
 notes in `chats.state` (resources / setting / key lines): members change them with [NOTE add|edit|drop] lines, the
 user in the UI, and every turn's prompt includes them (`notesPrompt`) so long discussions and stories don't drift.
+Game (博弈, never picked by Auto): the first message starts the commons with the enabled members ("4 轮" sets rounds);
+state in `chats.state.game`. Each round the players talk in turn (twice each) in public or with `[DM @x]` lines, then
+all give `[ACT] n` at once in turns that are never posted (the user sees them as 🔒 notes), then the server resolves.
+Private messages are `messages.dm` (the addressee): `TALK` excludes them (archive, Jev), `HEARS` shows them only to
+sender and addressee. The members learn the public totals and their own catches from the brief, not from notes.
 
 Scheduling (free flow): score = relevance × fairness × freshness − cooldown (fairness modifies priority, it doesn't decide it);
 modes `broadcast` / `algorithm` / `jev`. Every scheduler event is written to the `decisions` table for later A/B

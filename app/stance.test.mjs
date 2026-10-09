@@ -11,11 +11,11 @@ import { parseReply } from './modes.mjs';
 
 test('parseReply takes the stance line and [HAND] off the reply', () => {
   assert.deepEqual(parseReply('用真实库更可靠，见 #3。\n[STANCE 70%] 集成测试用真实测试库'),
-    { text: '用真实库更可靠，见 #3。', hand: false, stance: { t: '集成测试用真实测试库', c: 70 }, notes: [], jobs: [], tasks: [] });
+    { text: '用真实库更可靠，见 #3。', hand: false, stance: { t: '集成测试用真实测试库', c: 70 }, notes: [], jobs: [], tasks: [], dms: [], acts: [] });
   assert.deepEqual(parseReply('同意。\n**[立场：85%]** 拆分要等团队变大 [HAND]'),
-    { text: '同意。', hand: true, stance: { t: '拆分要等团队变大', c: 85 }, notes: [], jobs: [], tasks: [] });
-  assert.deepEqual(parseReply('观点。\n[STANCE 60%] 先上单体\n[HAND]'), { text: '观点。', hand: true, stance: { t: '先上单体', c: 60 }, notes: [], jobs: [], tasks: [] });
-  assert.deepEqual(parseReply('没有立场行 [HAND]'), { text: '没有立场行', hand: true, stance: null, notes: [], jobs: [], tasks: [] });
+    { text: '同意。', hand: true, stance: { t: '拆分要等团队变大', c: 85 }, notes: [], jobs: [], tasks: [], dms: [], acts: [] });
+  assert.deepEqual(parseReply('观点。\n[STANCE 60%] 先上单体\n[HAND]'), { text: '观点。', hand: true, stance: { t: '先上单体', c: 60 }, notes: [], jobs: [], tasks: [], dms: [], acts: [] });
+  assert.deepEqual(parseReply('没有立场行 [HAND]'), { text: '没有立场行', hand: true, stance: null, notes: [], jobs: [], tasks: [], dms: [], acts: [] });
   assert.equal(parseReply('PASS').text, 'PASS');
   assert.equal(parseReply('[STANCE 250%] x').stance.c, 100);
   assert.deepEqual(parseReply('好。\n[STANCE 75%] 条件支持：小额、核实过再捐').stance, { t: '小额、核实过再捐', c: 75, l: '条件支持' });
@@ -25,15 +25,15 @@ test('parseReply takes the stance line and [HAND] off the reply', () => {
 // Markers that leaked into the chat on the server, as the members wrote them.
 test('parseReply finds markers mid-line, several on a line, and before more text', () => {
   assert.deepEqual(parseReply('谁接手都能对上。[STANCE 94%] verdict: 材料封箱，分叉交由双方对拍'),
-    { text: '谁接手都能对上。', hand: false, stance: { t: '材料封箱，分叉交由双方对拍', c: 94 }, notes: [], jobs: [], tasks: [] });
+    { text: '谁接手都能对上。', hand: false, stance: { t: '材料封箱，分叉交由双方对拍', c: 94 }, notes: [], jobs: [], tasks: [], dms: [], acts: [] });
   assert.deepEqual(parseReply('可以先排。 [HAND] [STANCE 80%] verdict: 先做一次短期独旅'),
-    { text: '可以先排。', hand: true, stance: { t: '先做一次短期独旅', c: 80 }, notes: [], jobs: [], tasks: [] });
+    { text: '可以先排。', hand: true, stance: { t: '先做一次短期独旅', c: 80 }, notes: [], jobs: [], tasks: [], dms: [], acts: [] });
   assert.deepEqual(parseReply('出错谁负责。\n\n\n\n[HAND]\n\n\nSources:\n- [newsGP](https://x.example)'),
-    { text: '出错谁负责。\n\nSources:\n- [newsGP](https://x.example)', hand: true, stance: null, notes: [], jobs: [], tasks: [] });
+    { text: '出错谁负责。\n\nSources:\n- [newsGP](https://x.example)', hand: true, stance: null, notes: [], jobs: [], tasks: [], dms: [], acts: [] });
   assert.deepEqual(parseReply('坑都在工程侧。[NOTE add] 需 --legacy-peer-deps\n[STANCE 90%] 能落地').notes, [{ op: 'add', text: '需 --legacy-peer-deps' }]);
   // talk about the protocol, in code, isn't a marker
   assert.deepEqual(parseReply('已有 `[NOTE]` 机制，结尾写 `[HAND]` 即可。'),
-    { text: '已有 `[NOTE]` 机制，结尾写 `[HAND]` 即可。', hand: false, stance: null, notes: [], jobs: [], tasks: [] });
+    { text: '已有 `[NOTE]` 机制，结尾写 `[HAND]` 即可。', hand: false, stance: null, notes: [], jobs: [], tasks: [], dms: [], acts: [] });
   assert.equal(parseReply('PASS [HAND]').text, 'PASS');
   assert.deepEqual(parseReply('开跑。\n[JOB] `cd /x && python run.py --resume` [HAND]\n[STANCE 90%] 好').jobs, ['cd /x && python run.py --resume']);
   assert.equal(parseReply('[JOB] a\n[JOB] b\n[JOB] c').jobs.length, 2);
@@ -54,7 +54,7 @@ test('parseReply finds markers mid-line, several on a line, and before more text
 test('research mode: everyone answers the question at once, stances reach the state', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agent-chat-stance-test-'));
   const app = join(root, 'app'); mkdirSync(app);
-  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
+  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'game.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
     copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
   const log = join(root, 'turns.jsonl');
   writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs, spawnJob } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
