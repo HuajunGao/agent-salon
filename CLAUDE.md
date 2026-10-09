@@ -139,7 +139,8 @@ The moderator model is supplied by TYPESAFE_MODEL in the service environment.
 - Codex reads files only via shell: in read-only mode it may use read-only commands; pass model and sandbox on every
   `exec resume` (resume ignores the original settings). Windows: use the Codex app's bundled `codex.exe`.
 - OpenCode 1.x vs 2.x differ (`--pure` vs `--standalone`, no `step_finish` in 2.x, version detected once). Bun-based
-  CLIs lose stdout written to a Node pipe on exit: one-shot commands capture stdout to a temp file (`out()`).
+  CLIs lose stdout written to a Node pipe on exit: one-shot commands capture stdout to a temp file (`out()`), and
+  OpenCode turns write to a temp file the server tails (`toFile`; a whole finished reply was lost once).
 - Set `PWD` to the turn's cwd (opencode 2 and agy take the project directory from it).
 - Cross-platform: Windows uses PATH lookup with `.exe`/`.cmd` and `taskkill`; Linux spawns detached and kills the process
   group. `.gitattributes` forces LF (CRLF broke the systemd unit).

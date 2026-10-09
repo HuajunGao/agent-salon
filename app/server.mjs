@@ -862,7 +862,7 @@ async function startTurn(a, retried = false) {
   if (res.error) {
     rt[a].error = res.error;
     logDecision('error', a, { based_on: basedOn, latency_ms: res.ms, detail: { error: res.error } });
-    insertMsg({ chat_id: chat, sender: 'system', kind: 'system', text: `⚠ ${memberConfigs[a].label} 出错: ${res.error}`, based_on: basedOn, latency_ms: res.ms });
+    insertMsg({ chat_id: chat, sender: 'system', kind: 'system', text: `⚠ @${atOf(a)} 出错: ${res.error}`, based_on: basedOn, latency_ms: res.ms });
   } else {
     // the host's reply: its phase marker and ledger come off first
     hostRes = play?.phase === 'host' ? parseHost(res.text) : null;

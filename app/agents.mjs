@@ -1,7 +1,8 @@
 // CLI adapters: one headless process per turn, resuming the agent's own CLI session.
 // Flags and pitfalls: see PLAN.md and ~/.claude/skills/delegate-agents/run-agent.sh.
 import { spawn, spawnSync } from 'node:child_process';
-import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, rmSync, openSync, closeSync } from 'node:fs';
+import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, rmSync, openSync, closeSync, readSync } from 'node:fs';
+import { StringDecoder } from 'node:string_decoder';
 import { homedir, tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { join, dirname, delimiter } from 'node:path';
@@ -186,7 +187,7 @@ export const AGENTS = {
     },
   },
   opencode: {
-    label: 'OpenCode', color: '#7c5cff', defaultModel: '',
+    label: 'OpenCode', color: '#7c5cff', defaultModel: '', toFile: true,
     cmd: (prompt, sid, o) => ({
       bin: opencodeBin(),
       // 32k default output cap truncates GLM. v1: --pure (oh-my-openagent hands work to background tasks that die with
@@ -262,7 +263,19 @@ export function runTurn(agent, prompt, sid, { cwd, dataDir, shared, model, exec,
     let raw = '', buf = '', killed = '';
     // On Linux the CLI gets its own process group so a timeout can kill everything it started.
     // PWD too: Node doesn't update it for cwd, and some CLIs (opencode 2, agy) take their project directory from it.
-    const p = spawn(bin, args, { cwd, env: { ...userEnv(env, keep), PWD: cwd }, ...asUser(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: !WIN });
+    // toFile: the CLI writes to a temp file the server tails, not to a pipe. opencode v2 (Bun) can lose what it writes to
+    // a pipe just before it exits: in discussion 37 a finished 77 s reply arrived as a bare step_start ("no reply").
+    const file = a.toFile && join(tmpdir(), `agent-chat-turn-${process.pid}-${randomUUID()}.jsonl`), fd = file && openSync(file, 'w');
+    const p = spawn(bin, args, { cwd, env: { ...userEnv(env, keep), PWD: cwd }, ...asUser(), stdio: ['ignore', fd || 'pipe', fd || 'pipe'], windowsHide: true, detached: !WIN });
+    let drain = () => {};
+    if (fd) {
+      closeSync(fd);
+      const rfd = openSync(file, 'r'), chunk = Buffer.alloc(65536), dec = new StringDecoder('utf8');
+      let pos = 0, n;
+      drain = () => { while ((n = readSync(rfd, chunk, 0, chunk.length, pos)) > 0) { pos += n; onData(dec.write(chunk.subarray(0, n))); } };
+      const tail = setInterval(drain, 300);
+      p.on('close', () => { clearInterval(tail); drain(); drain = () => {}; closeSync(rfd); rmSync(file, { force: true }); });
+    }
     const kill = why => {
       killed = why;
       if (WIN) spawn('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true });
@@ -273,7 +286,7 @@ export function runTurn(agent, prompt, sid, { cwd, dataDir, shared, model, exec,
     const total = setTimeout(() => kill('total timeout'), totalMs);
     const onData = d => {
       clearTimeout(idle); idle = setTimeout(() => kill('idle timeout'), idleMs);
-      const s = d.toString('utf8');
+      const s = typeof d === 'string' ? d : d.toString('utf8');
       raw = (raw + s).slice(-20000);
       buf += s;
       const lines = buf.split('\n'); buf = lines.pop();
@@ -283,9 +296,10 @@ export function runTurn(agent, prompt, sid, { cwd, dataDir, shared, model, exec,
       }
       if (st.sid && st.sid !== sid) onSid?.(sid = st.sid);
     };
-    p.stdout.on('data', onData);
-    p.stderr.on('data', onData);
+    p.stdout?.on('data', onData);
+    p.stderr?.on('data', onData);
     const done = code => {
+      drain();
       clearTimeout(idle); clearTimeout(total);
       if (buf.trim().startsWith('{')) try { a.parse(JSON.parse(buf), st); } catch {}
       let error = killed || st.error;
