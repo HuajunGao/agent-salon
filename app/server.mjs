@@ -489,10 +489,10 @@ function hostDone(c, play, h) {
     if (c === chatId) for (const a of [...g.players, g.host]) raise(a, 1, 'after the game');
     return;
   }
-  // the host's order (handles as listed, repeats allowed), else everyone, starting one seat later each time
+  // the host's order (handles as listed, repeats allowed), else everyone in a random order
   const order = (next.who || '').split(/\s+/).filter(t => t.startsWith('@')).map(t => mentions(t)[0]).filter(x => g.players.includes(x));
   if (next.kind === 'talk') Object.assign(g, { phase: 'talk',
-    queue: order.length ? Array.from({ length: next.laps }, () => order).flat() : talkOrder(g.players, g.round, next.laps) });
+    queue: order.length ? Array.from({ length: next.laps }, () => order).flat() : talkOrder(g.players, next.laps) });
   else {
     const who = mentions(next.who).filter(x => g.players.includes(x));
     Object.assign(g, { phase: 'orders', waiting: who.length ? who : g.players, orders: {} });

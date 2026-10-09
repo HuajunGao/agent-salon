@@ -6,10 +6,15 @@
 // program in its workspace and run it to resolve turns: its call, not ours. Everything here is pure; server.mjs runs it.
 // (A built-in commons game, discussions 36-37, was dropped: one member emptied the lake as soon as it paid, every game.)
 
-// Who speaks when the host doesn't say: everyone, `laps` times, starting one seat later each round.
-export function talkOrder(players, round, laps) {
-  const i = (round - 1) % players.length, o = [...players.slice(i), ...players.slice(0, i)];
-  return Array.from({ length: laps }, () => o).flat();
+// Who speaks when the host doesn't say: everyone, `laps` times, each lap in a fresh random order (a fixed rotation let
+// the same members always answer last, having heard everyone). Turns still follow one another: the order is this
+// queue, not who finishes thinking first.
+export function talkOrder(players, laps, rand = Math.random) {
+  return Array.from({ length: laps }, () => {
+    const o = [...players];
+    for (let i = o.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [o[i], o[j]] = [o[j], o[i]]; }
+    return o;
+  }).flat();
 }
 
 export const HOST_TURNS = 60; // ponytail: a cap on host turns so a game can't run forever; raise it if real games need more
@@ -38,7 +43,7 @@ export function hostBrief(g, handle, exec, first) {
       + 'cards, resources, goal) by DM, and start the first phase.\n' : '')
     + `Each of your turns: write what the whole table hears (short). Send private information with lines of their own: `
     + `[DM @player] text (only that player reads it). Then put exactly one of these on a line of its own:\n`
-    + `[PHASE talk] (the players speak in turn, once each; [PHASE talk 2]: twice; they may DM each other). To set who `
+    + `[PHASE talk] (the players speak one after another, once each, in a random order; [PHASE talk 2]: twice; they may DM each other). To set who `
     + `speaks and in what order, list them: [PHASE talk @c @a] (only those, in that order; name someone twice to let them `
     + `speak twice)\n`
     + `[PHASE orders] (every player secretly sends you an order at the same time) or [PHASE orders @a @b] (only those `

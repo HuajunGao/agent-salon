@@ -64,7 +64,7 @@ user in the UI, and every turn's prompt includes them (`notesPrompt`) so long di
 Game (博弈; Auto picks it for a request to play, the room then asks for a host if none is @mentioned; state in `chats.state.game`): any game the user describes, hosted by the member the
 first message @mentions (none: the server asks for one). The host (game.mjs hostBrief, server hostDone) announces
 rules, DMs private setups, keeps a private ledger ([STATE], stored in the game state, shown to the user) and picks each
-next step ([PHASE talk n @b @a] / [PHASE orders @a @b] / [END]; listed handles set who speaks, in that order); orders
+next step ([PHASE talk n @b @a] / [PHASE orders @a @b] / [END]; listed handles set who speaks, in that order; unlisted: a random order per lap, turns still one after another); orders
 reach it as `role='order'` DMs. The host may run code (a rules program if it wants). A built-in commons game (fishing,
 discussions 36-37) was removed: a member emptied the lake whenever it paid, so it taught nothing after the first game.
 Private messages are `messages.dm` (the addressee): `TALK` excludes them (archive, Jev), `HEARS` shows them only to

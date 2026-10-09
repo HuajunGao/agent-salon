@@ -352,3 +352,11 @@ test('Auto: the room waits a few seconds after the mode is picked; switching sta
   assert.ok(turns()[0].p.includes('STORY RELAY'));                                              // the first turn is in the new mode
   assert.equal((await init()).state.opening, null);
 });
+
+test('game: without the host\'s order the talk goes in a random order, everyone once per lap', async () => {
+  const { talkOrder } = await import('./game.mjs');
+  const q = talkOrder(['a', 'b', 'c'], 2, () => 0);                         // a fixed "random": each lap shuffled the same way
+  assert.deepEqual(q, ['b', 'c', 'a', 'b', 'c', 'a']);
+  const orders = new Set(Array.from({ length: 200 }, () => talkOrder(['a', 'b', 'c'], 1).join('')));
+  assert.equal(orders.size, 6);                                             // every order happens
+});
