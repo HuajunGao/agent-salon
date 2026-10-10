@@ -553,6 +553,7 @@
     </div>
     <div class="grp">
       <div class="gl">成员能力与记忆</div>
+      <label class="switch" title="下一局游戏开局时生效：你也是玩家，只看得到公开发言和发给你的私信；别人之间的私信、秘密指令、主持人账本和实时输出都等游戏结束后再显示">游戏里我也当玩家 <input id="s-userPlays" type="checkbox"></label>
       <label class="switch" id="execrow" title="成员可以在各自的工作目录里写文件、运行代码来验证观点；只在服务器以独立的普通用户运行成员时可用">允许执行代码 <input id="s-exec" type="checkbox"></label>
       <label class="switch" title="每轮结束后，把你说过的长期有用的信息整理进“关于你”，新讨论里的成员都会先读到">跨讨论记住我 <input id="s-memory" type="checkbox"></label>
     </div>
@@ -813,7 +814,8 @@ function flowText(schedulerText) {
   const g = S.game;
   if (flow === 'game') return !g ? '博弈：@ 一位成员当主持人，说说玩什么，如“@claude 主持，我们玩狼人杀”'
     : g.over ? '博弈已结束，自由聊；点“再开一局”在这里接着玩'
-    : `博弈 · ${esc(label(g.host))} 主持 · 第 ${g.round + 1} 回合 · ${{ host: '主持人结算', talk: '轮流发言', orders: `秘密行动（${g.ordered.length}/${g.waiting.length}）` }[g.phase]}`;
+    : `博弈 · ${esc(label(g.host))} 主持 · 第 ${g.round + 1} 回合 · ${{ host: '主持人结算', talk: '轮流发言', orders: `秘密行动（${g.ordered.length}/${g.waiting.length}）` }[g.phase]}`
+      + (g.turn === 'user' ? (g.phase === 'talk' ? ' · <b>轮到你发言</b>' : ' · <b>轮到你：下一条消息是只给主持人的秘密指令</b>') : '');
   return (d?.done ? '辩论已结束，自由讨论；' : '') + schedulerText + (S.settings.autoStop ? '，收敛后自动收尾' : '');
 }
 function renderSeats() {
@@ -821,6 +823,7 @@ function renderSeats() {
   const who = n => (n === 'user' ? '你' : `<span style="color:${color(n)}">${esc(label(n))}</span>`);
   if (g && S.discussionMode.rules.flow === 'game') return `<div class="seats"><b>主持</b><span>${who(g.host)}</span>`
     + `<b>玩家</b><span>${g.players.map(who).join('、')}</span></div>`
+    + (g.user && !g.over ? '<div class="form-help">你也在玩：别人之间的私信和主持人账本等游戏结束后再显示。私信某人：单独一行 [DM @某人]，后面写内容。</div>' : '')
     + (g.ledger ? `<div class="ledger" title="主持人的私密账本，只有它和你看得到">${esc(g.ledger)}</div>` : '')
     + (g.over ? '<button class="rowbtn" data-gamenew title="在这个讨论里接着玩：大家带着前面几局的记忆，你 @ 一位主持人说说玩什么">再开一局</button>' : '<button class="rowbtn" data-gameend title="主持人忘了宣布结束、或者不想玩了：这局到此为止，之后的消息是普通聊天">结束这局游戏</button>');
   if (!d) return '';
@@ -1066,7 +1069,7 @@ function renderState() {
   if (S.holding) info.push('你在输入，暂缓发布');
   else if (S.readLeft > 0 && S.queue.length) info.push(`阅读中，还剩 ${fmtSecs(S.readLeft)}`);
   $('#info').textContent = info.join('，');
-  for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind', 'outsider']) $('#s-' + k).checked = S.settings[k];
+  for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind', 'outsider', 'userPlays']) $('#s-' + k).checked = S.settings[k];
   for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin']) {
     const el = $('#s-' + k);
     if (document.activeElement !== el) el.value = S.settings[k];
@@ -1258,7 +1261,7 @@ document.addEventListener('change', e => {
     post('/api/settings', { models: { [d.model]: value } });
   }
 });
-for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind', 'outsider']) $('#s-' + k).onchange = e => post('/api/settings', { [k]: e.target.checked });
+for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind', 'outsider', 'userPlays']) $('#s-' + k).onchange = e => post('/api/settings', { [k]: e.target.checked });
 document.addEventListener('click', e => { if (e.target.closest('[data-gamenew]')) post('/api/game/new'); });
 document.addEventListener('click', e => { if (e.target.closest('[data-gameend]') && confirm('结束这局游戏？之后的消息就是普通聊天。')) post('/api/game/end'); });
 $('#outsider-now').onclick = async () => { const r = await post('/api/outsider'); if (!r.ok) alert((await r.json().catch(() => ({}))).error || '请求失败'); };

@@ -86,7 +86,9 @@ async function server(t, slowFirst = 0) {
         : p.includes('You are the judge') ? '评判：正方赢在定义。'
         : /暂停测试|程序修好了吗/.test(p) && p.includes('You are the HOST') ? (/this is turn 1\\)/.test(p)
             ? '程序校验失败，先停一下。\\n[PAUSE]\\n[STATE]\\n账本 A' : '修好了，结束。\\n[END]\\n[STATE]\\n账本 B')
-        : p.includes('You are the HOST') ? ['', '规则：猜数。\\n[DM @codex] 你的数字是 7\\n[DM @agy] 你的数字是 3\\n[PHASE talk @opencode @agy]\\n[STATE]\\n回合 1',
+        : p.includes('@user is the human user') && p.includes('You are the HOST') ? ['', '规则：猜数。\\n[DM @user] 你的数字是 9\\n[DM @codex] 你的数字是 7\\n[PHASE talk @user @agy]\\n[STATE]\\n账本 U1',
+            '交指令。\\n[PHASE orders @user @codex]\\n[STATE]\\n账本 U2', '结算：你赢。\\n[END]\\n[STATE]\\n账本 U3'][+p.match(/this is turn (\\d+)/)[1]]
+        : p.includes('You are the HOST') ? ['','规则：猜数。\\n[DM @codex] 你的数字是 7\\n[DM @agy] 你的数字是 3\\n[PHASE talk @opencode @agy]\\n[STATE]\\n回合 1',
             '交指令。\\n[PHASE orders @codex]\\n[STATE]\\n回合 2', '结算：codex 赢。\\n[END]\\n[STATE]\\n结束'][+p.match(/this is turn (\\d+)/)[1]]
         : p.includes('the host asks for your order') ? (o.onLive('🔧 Read /home/agent/.codex/sessions/x.jsonl'), '[ACT] 猜 5\\n凭直觉')
         : p.includes('取名测试') && h === 'claude' ? '我是老狐狸。\\n[NAME] 老狐狸\\n[NOTE add] 狐狸登场'
@@ -346,6 +348,34 @@ test('game mode: a member hosts with a private ledger, DMs the setup, collects s
   assert.ok(s.messages.some(m => m.kind === 'moderator' && m.text.startsWith('🚨') && m.text.includes('.codex/sessions')));
 });
 
+test('game: the user plays too; until it is over the user sees only public messages and its own DMs', async t => {
+  const { post, init, until, turns } = await server(t);
+  const id = (await init()).state.chatId;
+  await post('/api/settings', { userPlays: true });
+  await post('/api/chat/mode', { id, mode: 'game' });
+  await post('/api/send', { text: '@claude 主持，我们玩猜数', chat_id: id });
+  let s = await until(async () => { const x = await init(); return x.state.game?.turn === 'user' && x; });
+  assert.ok(s.state.game.players.includes('user') && s.state.game.user);
+  assert.equal(s.state.game.ledger, '');                                                            // no ledger for a player
+  assert.ok(s.messages.some(m => m.text === '你的数字是 9' && m.dm === 'user'));
+  assert.ok(!s.messages.some(m => m.text === '你的数字是 7'));                                       // another player's DM
+  assert.ok(s.messages.some(m => m.text === '🎲 轮到你发言了。'));
+  await post('/api/send', { text: '我猜大数\n[DM @codex] 我们联手', chat_id: id });                     // public + a DM, ends the turn
+  s = await until(async () => { const x = await init(); return x.state.game?.phase === 'orders' && x.state.game.turn === 'user' && x; });
+  assert.ok(s.messages.some(m => m.sender === 'user' && m.text === '我猜大数' && !m.dm));
+  assert.ok(s.messages.some(m => m.sender === 'user' && m.text === '我们联手' && m.dm === 'codex'));
+  await post('/api/send', { text: '猜 9', chat_id: id });                                            // the secret order
+  s = await until(async () => { const x = await init(); return x.state.game?.over && x; });
+  assert.equal(s.state.game.ledger, '账本 U3');                                                     // over: everything shown
+  assert.ok(s.messages.some(m => m.text === '你的数字是 7'));
+  const order = s.messages.find(m => m.role === 'order' && m.sender === 'user');
+  assert.deepEqual([order.text, order.dm], ['猜 9', 'claude']);
+  const tt = turns(), host = tt.filter(x => x.p.includes('You are the HOST'));
+  assert.ok(host[0].p.includes('@user is the human user') && host[2].p.includes('猜 9'));
+  assert.ok(tt.some(x => x.h === 'codex' && x.p.includes('我们联手')));
+  assert.ok(tt.filter(x => x.h === 'agy').every(x => !x.p.includes('我们联手') && !x.p.includes('猜 9')));
+  assert.deepEqual(tt.filter(x => x.p.includes('Now: the table talks')).map(x => x.h), ['agy']);   // the user's turn wasn't a member's
+});
 test('Auto: the room waits a few seconds after the mode is picked; switching starts it at once in the new mode', async t => {
   const { post, init, until, turns } = await server(t);
   const id = (await init()).state.chatId;

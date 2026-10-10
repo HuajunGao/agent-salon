@@ -38,9 +38,15 @@ export function parseHost(raw) {
   return { body, next, ledger };
 }
 
+// The user plays too (g.user): @user is a player like the others, but sees only part of the game until it is over.
+const USER_PLAYS = '@user is the human user, playing as one of the players: it sees only public messages and the '
+  + 'private messages sent to it ([DM @user]), not the others\' private messages, secret orders or the host\'s ledger, '
+  + 'until the game is over. ';
+
 export function hostBrief(g, handle, exec, first) {
   return `You are the HOST (主持人) of a game the user asked for in this chat; you don't play. Players: `
     + `${g.players.map(handle).join(', ')}. Run the game fairly, keep to the rules you announce, and keep it moving.\n`
+    + (g.user ? USER_PLAYS + '\n' : '')
     + (first ? 'This is your first turn: announce the rules briefly in public, send each player its private setup (role, '
       + 'cards, resources, goal) by DM, and start the first phase.\n' : '')
     + `Each of your turns: first write what the whole table hears (short). Then send private information: [DM @player] `
@@ -56,7 +62,7 @@ export function hostBrief(g, handle, exec, first) {
     + `A reply without one of these pauses the game too.\n`
     + `After every phase you get the turn back. Finish within ${HOST_TURNS} turns of yours (this is turn ${g.round + 1}).\n`
     + `Keep the game state in your private ledger: end every reply with a line [STATE] followed by the full current state `
-    + `(positions, resources, roles, who did what, rules details): it replaces the previous one, only you and the user see `
+    + `(positions, resources, roles, who did what, rules details): it replaces the previous one, only you${g.user ? '' : ' and the user'} see `
     + `it, and you get it back every turn. Rely on it rather than memory.\n`
     + (exec ? `If the game has rules that are easy to get wrong (scoring, combat, dice), you may write them as a program in `
       + `your workspace and run it to resolve each phase; that is your choice. Every member runs as the same OS user, so `
@@ -68,7 +74,7 @@ export function hostBrief(g, handle, exec, first) {
 export function playerBrief(g, a, phase, handle, exec) {
   const head = `You are a player in a game hosted by ${handle(g.host)} (a member who runs it and doesn't play), as the user `
     + `asked. The rules are what the host announced, and what it told you privately. Players: ${g.players.map(handle).join(', ')}; `
-    + `you are ${handle(a)}. The user sees everything, private messages included. `
+    + `you are ${handle(a)}. ${g.user ? USER_PLAYS : 'The user sees everything, private messages included. '}`
     + (exec ? 'You may run code in your own workspace to work out a strategy (simulations, estimates). ' : '')
     + `Don't read the files of other members or of the host.\n\n`;
   if (phase === 'orders') return head + 'Now: the host asks for your order. Reply with your order in one line [ACT] <order>, '

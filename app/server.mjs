@@ -161,7 +161,7 @@ for (const a of NAMES) {
   if (RUNAS) chownSync(wsOf(a), RUNAS.uid, RUNAS.gid);
 }
 
-const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true, memory: true, exec: false, blind: true, outsider: true,
+const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true, memory: true, exec: false, blind: true, outsider: true, userPlays: false,
   enabled: Object.fromEntries(NAMES.map(n => [n, true])), models: Object.fromEntries(NAMES.map(n => [n, memberConfigs[n].model])) };
 let S = { ...DEFAULTS, ...JSON.parse(q1(`SELECT value FROM settings WHERE key='s'`)?.value || '{}') };
 S.models = { ...DEFAULTS.models, ...S.models };
@@ -187,7 +187,7 @@ let paused = !!q1('SELECT paused FROM chats WHERE id=?', chatId).paused;
 const sess = (c, a) => q1('SELECT * FROM agent_sessions WHERE chat_id=? AND agent=?', c, a)
   || (run('INSERT INTO agent_sessions(chat_id, agent) VALUES(?,?)', c, a), sess(c, a));
 const maxId = c => q1('SELECT coalesce(max(id),0) m FROM messages WHERE chat_id=?', c).m;
-const lastUserId = c => q1(`SELECT coalesce(max(id),0) m FROM messages WHERE chat_id=? AND kind='user'`, c).m;
+const lastUserId = c => q1(`SELECT coalesce(max(id),0) m FROM messages WHERE chat_id=? AND kind='user' AND dm IS NULL`, c).m;
 
 function logDecision(event, agent, extra = {}) {
   run('INSERT INTO decisions(chat_id, mode, event, agent, score, detail, based_on, message_id, latency_ms) VALUES(?,?,?,?,?,?,?,?,?)',
@@ -195,6 +195,11 @@ function logDecision(event, agent, extra = {}) {
     extra.based_on ?? null, extra.message_id ?? null, extra.latency_ms ?? null);
 }
 
+// The user plays a game (setting userPlays when it started): until it is over the UI gets no private message or secret
+// order between others, no host ledger and no live output (it shows DMs being written); afterwards everything.
+const userPlays = c => { const g = chatState(c).game; return !!(g?.host && g.user && !g.over); };
+const secret = m => !!m.dm && m.dm !== 'user' && m.sender !== 'user';
+const visible = (c, msgs) => (userPlays(c) ? msgs.filter(m => !secret(m)) : msgs);
 function insertMsg(m) {
   const id = Number(run(`INSERT INTO messages(chat_id, sender, kind, text, based_on, reply_to, latency_ms, turn_no, stale, model, role, mode, stance, seat, note_ops, files, dm, nick)
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, m.chat_id, m.sender, m.kind, m.text, m.based_on ?? null, m.reply_to ?? null,
@@ -202,6 +207,7 @@ function insertMsg(m) {
     m.stance ? JSON.stringify(m.stance) : null, m.seat ?? null, m.note_ops ?? null, m.files?.length ? JSON.stringify(m.files) : null, m.dm ?? null, m.nick ?? null).lastInsertRowid);
   const msg = q1('SELECT * FROM messages WHERE id=?', id);
   writeTranscript(m.chat_id);
+  if (secret(msg) && userPlays(m.chat_id)) return msg;
   if (m.chat_id === chatId) send({ type: 'msg', msg });
   sendViewers(m.chat_id, { type: 'msg', msg });
   return msg;
@@ -453,19 +459,23 @@ function finishDebate(c) {
 // Talk turns follow one another; orders all start at once and go to the host as private messages (role 'order').
 // Players may run code like in any turn (simulations, strategy); their tool calls are checked for peeking (audit).
 const handle = x => `@${memberAt(x)}`;
+// A private message's addressee: a member (handle or name), or the user (@user, or the name set under 关于你).
+const dmTo = t => (/^(user|用户)$/i.test(t) || (S.userName && t === S.userName) ? 'user' : mentions(`@${t}`)[0]);
 function gameOnUser(m) {
   const st = chatState(chatId);
   if (st.game?.over) { for (const n of NAMES) raise(n, 1, 'user message'); return; }
   if (!st.game) {
     const host = mentions(m.text).find(n => S.enabled[n]);
     if (!host) return note('🎲 博弈要有人主持：@ 一位成员当主持人，再说说玩什么、规则是什么，比如“@claude 主持，我们玩狼人杀”。');
-    const players = enabledOrder().filter(n => n !== host);
-    if (players.length < 2) return note('🎲 博弈除了主持人至少还要 2 位参与成员。');
-    st.game = { host, players, phase: 'host', round: 0, step: 0, orders: {}, waiting: [], queue: [], ledger: '' };
+    const players = [...enabledOrder().filter(n => n !== host), ...S.userPlays ? ['user'] : []];
+    if (players.length < 2) return note('🎲 博弈除了主持人至少还要 2 位玩家。');
+    st.game = { host, players, phase: 'host', round: 0, step: 0, orders: {}, waiting: [], queue: [], ledger: '', ...S.userPlays && { user: true } };
     saveState(chatId, st);
     logDecision('game-start', null, { message_id: m.id, detail: { host, players } });
     note(`🎲 博弈开始：${handle(host)} 主持，玩家 ${players.map(handle).join('、')}。主持人先公布规则、私信发身份或资源，`
-      + '再一个阶段一个阶段推进（轮流发言 / 秘密行动），每个阶段后由它结算。私信、秘密指令和它的私密账本你都看得到。');
+      + '再一个阶段一个阶段推进（轮流发言 / 秘密行动），每个阶段后由它结算。'
+      + (S.userPlays ? '你也是玩家：只看得到公开发言和发给你的私信，游戏结束后再全部公开。私信某人：单独一行 [DM @某人]，后面写内容。'
+        : '私信、秘密指令和它的私密账本你都看得到。'));
     return gameNext(chatId);
   }
   if (!busy() && !NAMES.some(n => rt[n].hand)) gameNext(chatId); // nothing scheduled (e.g. after a stop): carry on
@@ -479,20 +489,45 @@ function gameNext(c) {
   if (!g?.host || g.over) return;
   const hand = phase => ({ r: 50, since: Date.now(), why: 'game', game: { round: g.round, phase, step: g.step } });
   if (g.phase === 'talk') {
-    while (g.queue.length && !present(g.queue[0])) { g.queue.shift(); g.step++; }
+    while (g.queue.length && g.queue[0] !== 'user' && !present(g.queue[0])) { g.queue.shift(); g.step++; }
+    if (g.queue[0] === 'user') return askUser(c, st, 'talk');
     if (g.queue.length) { rt[g.queue[0]].hand = hand('talk'); return saveState(c, st); }
     g.phase = 'host';
   }
   if (g.phase === 'orders') {
     for (const a of g.waiting) {
-      if (a in g.orders || rt[a]?.hand?.game || inGame(a)) continue;
+      if (a === 'user' || a in g.orders || rt[a]?.hand?.game || inGame(a)) continue;
       if (present(a)) rt[a].hand = hand('orders'); else g.orders[a] = true; // not taking part: nothing to wait for
     }
-    if (g.waiting.some(a => !(a in g.orders))) return saveState(c, st);
+    if (g.waiting.some(a => !(a in g.orders))) return g.waiting.includes('user') && !('user' in g.orders) ? askUser(c, st, 'orders') : saveState(c, st);
     g.phase = 'host';
   }
   if (present(g.host) && !rt[g.host].hand?.game && !inGame(g.host)) rt[g.host].hand = hand('host');
   saveState(c, st);
+}
+// The user's turn in a game the user plays: told once per turn; the user's next message plays it (userPlay).
+function askUser(c, st, phase) {
+  const g = st.game, at = `${g.round}.${phase === 'talk' ? g.step : 'o'}`;
+  if (g.asked !== at) { g.asked = at; noteNext(phase === 'talk' ? '🎲 轮到你发言了。' : '🎲 轮到你交秘密指令：你的下一条消息只发给主持人。', c); }
+  saveState(c, st);
+}
+function userPlay(text, files, reply_to) {
+  const st = chatState(chatId), g = st.game;
+  if (g.phase === 'orders' && g.waiting.includes('user') && !('user' in g.orders)) {
+    g.orders.user = true; saveState(chatId, st);
+    insertMsg({ chat_id: chatId, sender: 'user', kind: 'user', dm: g.host, role: 'order', mode: 'game', text, files });
+    logDecision('game-order', null, { detail: { round: g.round, user: true } });
+    return gameNext(chatId);
+  }
+  // [DM @x] lines go to x only (players and the host), as in the members' replies; the rest is public
+  const p = /\[DM\b/i.test(text) ? parseReply(text) : { text, dms: [] };
+  for (const d of p.dms) { const to = dmTo(d.to);
+    if (to !== 'user' && [...g.players, g.host].includes(to)) insertMsg({ chat_id: chatId, sender: 'user', kind: 'user', dm: to, mode: 'game', text: d.text }); }
+  if (!p.text && !files.length) return;
+  const m = insertMsg({ chat_id: chatId, sender: 'user', kind: 'user', text: p.text, reply_to: reply_to || null, files });
+  logDecision('user', null, { message_id: m.id, detail: { mentions: mentions(p.text), game: true } });
+  if (g.phase === 'talk' && g.queue[0] === 'user') return gameTalkDone(chatId, { round: g.round, step: g.step });
+  wake(m);
 }
 function gameTalkDone(c, h) {
   const st = chatState(c), g = st.game;
@@ -532,15 +567,15 @@ function hostDone(c, play, h) {
     Object.assign(g, { over: next.kind === 'end' ? 'end' : 'cap', phase: 'over' }); saveState(c, st);
     logDecision('game-over', g.host, { chat: c, detail: { over: g.over, turns: g.round } });
     noteNext(g.over === 'end' ? '🏁 主持人宣布游戏结束。' : `🏁 主持人已经主持了 ${HOST_TURNS} 回合，游戏到此结束。`, c);
-    if (c === chatId) for (const a of [...g.players, g.host]) raise(a, 1, 'after the game');
+    if (c === chatId) { for (const a of [...g.players, g.host]) if (a !== 'user') raise(a, 1, 'after the game'); if (g.user) send(init()); }
     return;
   }
   // the host's order (handles as listed, repeats allowed), else everyone in a random order
-  const order = (next.who || '').split(/\s+/).filter(t => t.startsWith('@')).map(t => mentions(t)[0]).filter(x => g.players.includes(x));
+  const order = (next.who || '').split(/\s+/).filter(t => t.startsWith('@')).map(t => dmTo(t.slice(1).replace(/[,，、。]+$/, ''))).filter(x => g.players.includes(x));
   if (next.kind === 'talk') Object.assign(g, { phase: 'talk',
     queue: order.length ? Array.from({ length: next.laps }, () => order).flat() : talkOrder(g.players, next.laps) });
   else {
-    const who = mentions(next.who).filter(x => g.players.includes(x));
+    const who = [...new Set(order)];
     Object.assign(g, { phase: 'orders', waiting: who.length ? who : g.players, orders: {} });
   }
   saveState(c, st);
@@ -710,7 +745,7 @@ const memoryAt = () => +(q1(`SELECT value FROM settings WHERE key='memoryAt'`)?.
 async function maybeCurate(force = false) {
   if (memo.curating || (!S.memory && !force) || (!force && Date.now() < memo.retryAt)) return;
   const pending = q(`SELECT m.id, m.text, m.created_at, c.title chat FROM messages m JOIN chats c ON c.id=m.chat_id
-    WHERE m.kind='user' AND m.id>? ORDER BY m.id DESC LIMIT 40`, memoryAt()).reverse();
+    WHERE m.kind='user' AND m.dm IS NULL AND m.id>? ORDER BY m.id DESC LIMIT 40`, memoryAt()).reverse();
   if (!pending.length) return;
   const quiet = NAMES.every(n => rt[n].status !== 'thinking') && !ready.length;
   if (!force && (!quiet || Date.now() - new Date(pending.at(-1).created_at.replace(' ', 'T') + 'Z') < 20e3)) return;
@@ -895,7 +930,7 @@ async function startTurn(a, retried = false) {
     // private messages: in a game to another player (or the host), in a formal debate to a teammate; players 3 a turn
     const cs = chatState(chat), gm = cs.game, players = r.flow === 'game' ? [...gm?.players || [], ...gm?.host ? [gm.host] : []]
       : r.flow === 'debate' && !cs.debate?.done ? [cs.debate?.pro, cs.debate?.con].find(s => s?.includes(a)) || [] : [];
-    const dms = reply.dms.map(x => ({ to: mentions(`@${x.to}`)[0], text: x.text })).filter(x => x.to !== a && players.includes(x.to))
+    const dms = reply.dms.map(x => ({ to: dmTo(x.to), text: x.text })).filter(x => x.to !== a && players.includes(x.to))
       .slice(0, play?.phase === 'host' ? 12 : 3);
     text = reply.text || (jobs.length || todo.length ? '（启动后台任务）' : '');
     if (dms.length && /^PASS[.。!！]?$/i.test(text)) text = '';
@@ -944,7 +979,7 @@ function publish(force = false) {
 
 function publishOne(r) {
   const turnNo = q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=? AND dm IS NULL', r.chat, r.agent).n + 1;
-  const stale = !!q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user' AND id>? LIMIT 1`, r.chat, r.basedOn);
+  const stale = !!q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user' AND dm IS NULL AND id>? LIMIT 1`, r.chat, r.basedOn);
   // The name first: setNick saves the state itself, and the notes below save the state read after it.
   if (r.nick) {
     const was = nickOf(r.agent, r.chat), why = setNick(r.chat, r.agent, r.nick);
@@ -1557,7 +1592,7 @@ const viewState = c => ({ type: 'state', now: Date.now(), chatId: c, title: q1('
   members: memberOrder().map(n => ({ name: n, label: aliasOf(n), color: memberConfigs[n].color, enabled: S.enabled[n],
     status: c === chatId ? rt[n].status : 'idle', started: rt[n].started })) });
 function state() {
-  const now = Date.now();
+  const now = Date.now(), hideLive = userPlays(chatId);
   return {
     type: 'state', now, profile: PROFILE, chatId, paused, mod, wrapped: !!wrapRound && wrapRound === lastUserId(chatId), settings: S, harnesses, runAs: RUNAS?.name || '', readLeft: Math.max(0, readUntil - now),
     holding: now - typingAt < 15e3, speaking: now - speakingAt < 20e3,
@@ -1572,7 +1607,8 @@ function state() {
       phase: d.script[d.at]?.phase || null, step: Math.min(d.at + 1, d.script.length), steps: d.script.length } : null)(chatState(chatId)),
     // the user hosts: the whole game state, catches included
     game: (({ game: g }) => g?.host && { host: g.host, players: g.players, round: g.round, phase: g.phase, waiting: g.waiting,
-      ordered: Object.keys(g.orders), ledger: g.ledger, over: g.over || null })(chatState(chatId)),
+      ordered: Object.keys(g.orders), ledger: g.user && !g.over ? '' : g.ledger, over: g.over || null, user: !!g.user,
+      turn: g.phase === 'talk' ? g.queue[0] : g.phase === 'orders' && g.waiting.includes('user') && !('user' in g.orders) ? 'user' : null })(chatState(chatId)),
     stances: stances(),
     arena: arena && { id: arena.id, chat: arena.chat, goal: arena.goal, until: arena.until, phase: arena.phase, referee: arena.referee,
       url: arenaURL(arena), probing, members: Object.entries(arena.members).map(([a, m]) => ({ name: a, rate: m.rate ?? null,
@@ -1586,7 +1622,7 @@ function state() {
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
     members: memberOrder().map(n => ({
       name: n, label: aliasOf(n), at: atOf(n), nick: nickOf(n), alias: memberConfigs[n].label || '', defaultAlias: defaultAlias(n), color: memberConfigs[n].color, ...rt[n], enabled: S.enabled[n], model: S.models[n],
-      configurable: memberConfigs[n].harness === 'opencode', harness: memberConfigs[n].harness, installed: harnesses[memberConfigs[n].harness]?.installed ?? true,
+      configurable: memberConfigs[n].harness === 'opencode', harness: memberConfigs[n].harness, installed: harnesses[memberConfigs[n].harness]?.installed ?? true, live: hideLive ? '' : rt[n].live,
       harnessLabel: AGENTS[memberConfigs[n].harness].label,
       config: { baseURL: memberConfigs[n].baseURL || '',
         protocol: memberConfigs[n].protocol || 'responses', persona: memberConfigs[n].persona || '', hasKey: !!memberConfigs[n].apiKey },
@@ -1683,6 +1719,7 @@ const routes = {
     const c = q1('SELECT title FROM chats WHERE id=?', chatId);
     if (/^讨论 \d+$/.test(c.title) && !q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user'`, chatId))
       run('UPDATE chats SET title=? WHERE id=?', (text || files[0].name).replace(/\s+/g, ' ').slice(0, 30), chatId);
+    if (userPlays(chatId) && rules(chatId).flow === 'game') return userPlay(text, files, reply_to);
     const m = insertMsg({ chat_id: chatId, sender: 'user', kind: 'user', text, reply_to: reply_to || null, files });
     logDecision('user', null, { message_id: m.id, detail: { mentions: mentions(text), reply_to: reply_to || null } });
     const cm = chatMode(chatId);
@@ -1724,6 +1761,7 @@ const routes = {
     Object.assign(g, { over: 'user', phase: 'over' }); saveState(chatId, st);
     logDecision('game-over', null, { detail: { over: 'user', turns: g.round } });
     note('🏁 你结束了这局游戏。之后的消息就是普通聊天。');
+    if (g.user) send(init());
   },
   // Another game in the same discussion: everyone keeps what happened (it's all in their sessions). The finished game is
   // kept in st.games; the user's next message starts the new one (@ a host) as in a new discussion.
@@ -1743,7 +1781,7 @@ const routes = {
   'POST /api/settings'(body) {
     for (const k of ['language', 'scheduler']) if (typeof body[k] === 'string' && body[k]) S[k] = body[k];
     if (typeof body.userName === 'string') S.userName = body.userName.trim().slice(0, 20); // '' = 用户
-    for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind', 'outsider']) if (typeof body[k] === 'boolean') S[k] = body[k];
+    for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind', 'outsider', 'userPlays']) if (typeof body[k] === 'boolean') S[k] = body[k];
     for (const k of ['turnCap', 'readSpeed', 'maxThinkers', 'convergeAt', 'noveltyMin']) if (+body[k] > 0) S[k] = +body[k];
     if (body.enabled) S.enabled = { ...S.enabled, ...body.enabled };
     // Read-aloud voice per member: a TTS model id from the gateway catalog, '' = default.
@@ -1853,7 +1891,7 @@ function switchChat(id) {
 }
 const prompts = () => JSON.parse(q1(`SELECT value FROM settings WHERE key='prompts'`)?.value || '[]');
 const savePrompts = list => { run(`INSERT OR REPLACE INTO settings VALUES('prompts', ?)`, JSON.stringify(list)); logDecision('prompts', null, { detail: { n: list.length } }); send(init()); };
-const init = () => ({ type: 'init', messages: q('SELECT * FROM messages WHERE chat_id=? ORDER BY id', chatId), state: state(), modelLists, prompts: prompts() });
+const init = () => ({ type: 'init', messages: visible(chatId, q('SELECT * FROM messages WHERE chat_id=? ORDER BY id', chatId)), state: state(), modelLists, prompts: prompts() });
 
 http.createServer((req, res) => {
   const key = `${req.method} ${req.url.split('?')[0]}`;
@@ -1887,7 +1925,7 @@ a:hover{background:#f3f3f3}</style><h2 style="text-align:center;font-weight:500"
     const view = code ? q1('SELECT id FROM chats WHERE share=?', code)?.id ?? -1 : null; // -1: no such link
     clients.set(res, view); req.on('close', () => clients.delete(res));
     return res.write(data(view == null ? init() : { type: 'init', state: view < 0 ? { ...viewState(view), title: '这个分享链接已失效' } : viewState(view),
-      messages: q('SELECT * FROM messages WHERE chat_id=? ORDER BY id', view) }));
+      messages: visible(view, q('SELECT * FROM messages WHERE chat_id=? ORDER BY id', view)) }));
   }
   const url = new URL(req.url, 'http://x');
   if (req.method === 'GET' && getRoutes[url.pathname]) {
