@@ -326,16 +326,40 @@ const out = (bin, args) => new Promise(res => {
   p.on('close', () => { clearTimeout(t); res(read()); }); p.on('error', () => { clearTimeout(t); res(read()); });
 });
 const lines = s => s.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+// Claude Code has no list command, but its first stream-json event (init) names the model an alias resolves to, before
+// any request: the probe is killed there. '' = the CLI's own default. (Output to a file: it's a Bun binary, see out().)
+const CLAUDE_ALIASES = ['', 'opus', 'sonnet', 'haiku', 'fable'];
+const claudeModel = alias => new Promise(res => {
+  const f = join(tmpdir(), `agent-chat-probe-${process.pid}-${randomUUID()}`), fd = openSync(f, 'w');
+  const p = spawn(exe('claude'), ['-p', 'x', '--output-format', 'stream-json', '--verbose', '--setting-sources', 'project',
+    '--strict-mcp-config', '--tools', '', ...(alias ? ['--model', alias] : [])],
+  { cwd: tmpdir(), env: userEnv(cleanEnv()), ...asUser(), stdio: ['ignore', fd, 'ignore'], windowsHide: true });
+  closeSync(fd);
+  let model = null;
+  const end = () => { clearInterval(poll); clearTimeout(t); p.kill('SIGKILL'); rmSync(f, { force: true }); res(model); };
+  const poll = setInterval(() => {
+    const l = readFileSync(f, 'utf8').split('\n').find(x => x.includes('"subtype":"init"'));
+    if (l) { try { model = JSON.parse(l).model || null; } catch {} end(); }
+  }, 100);
+  const t = setTimeout(end, 30e3);
+  p.on('error', end);
+});
+async function claudeModels() {
+  const got = await Promise.all(CLAUDE_ALIASES.map(claudeModel));
+  const list = CLAUDE_ALIASES.map((a, i) => ({ id: a, name: a ? `${a}（跟随最新，现为 ${got[i] || '?'}）` : `CLI 默认：${got[i] || '未知'}` }));
+  // the resolved IDs too, to pin a model that won't change when the CLI updates
+  for (const m of new Set(got.filter(Boolean))) list.push({ id: m, name: m });
+  return list;
+}
 
 // Returns {agent: [{id, name}]}; id '' = the CLI's own default.
 export async function listModels() {
-  const [codex, agy, oc] = await Promise.all([
-    out(codexBin(), ['debug', 'models']), out(exe('agy'), ['models']), out(opencodeBin(), ['models'])]);
+  const [codex, agy, oc, claude] = await Promise.all([
+    out(codexBin(), ['debug', 'models']), out(exe('agy'), ['models']), out(opencodeBin(), ['models']), claudeModels()]);
   let codexList = [];
   try { codexList = JSON.parse(codex).models.filter(m => m.visibility === 'list').map(m => ({ id: m.slug, name: m.display_name })); } catch {}
   return {
-    // Claude Code has no list command: aliases resolve to the latest model of each family.
-    claude: [{ id: '', name: 'CLI 默认模型（可手动填写模型）' }],
+    claude,
     codex: codexList,
     agy: lines(agy).filter(l => l.includes('\t')).map(l => { const [id, name] = l.split('\t'); return { id, name }; }),
     opencode: lines(oc).filter(l => /^[\w.-]+\/\S+$/.test(l)).map(id => ({ id, name: id })),
