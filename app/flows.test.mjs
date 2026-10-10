@@ -66,6 +66,7 @@ async function server(t, slowFirst = 0) {
   writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs, spawnJob } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
     import {appendFileSync, writeFileSync} from 'node:fs';
     let story = 0;
+    export const installed = () => true;
     export async function listModels(){return {}};
     let calls = 0;
     export async function runTurn(h,p,s,o){appendFileSync(${JSON.stringify(log)},JSON.stringify({h,at:Date.now(),p,s})+'\\n');

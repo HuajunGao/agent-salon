@@ -971,7 +971,7 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-mem-edit]')) {
     memEditing = true;
     $('#memory').innerHTML = `<div class="ph"><span class="memtoggle">关于你</span><span class="pa"><button data-mem-save>保存</button><button data-mem-cancel>取消</button></span></div>
-      <textarea id="memedit" placeholder="每行一条，比如：- 在家用 Proxmox 自托管服务"></textarea>`;
+      <textarea id="memedit" placeholder="每行一条，比如：- 主要写 Python"></textarea>`;
     $('#memedit').value = S.memory.text || ''; $('#memedit').focus();
   }
   if (e.target.closest('[data-mem-save]')) { post('/api/memory', { text: $('#memedit').value }); memEditing = false; delete lastHTML['#memory']; }

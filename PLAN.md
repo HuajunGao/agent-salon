@@ -207,15 +207,15 @@ request once sat for an hour); keep logs outside anything an agent might clean u
 `node app/server.mjs`, then open http://localhost:3517 (set PORT to change it). The standalone `claude` CLI must be
 logged in once (`claude auth login`); the desktop app's own login isn't usable by child processes.
 
-## Home server (Proxmox LXC, 2026-10-03)
+## Server (Linux container, 2026-10-03)
 
-- Ubuntu 24.04 unprivileged LXC `agent-chat` at server.lan (8 cores, 8 GB, 10 GB disk; 2 GB was too small:
+- Ubuntu 24.04 unprivileged LXC (8 cores, 8 GB, 10 GB disk; 2 GB was too small:
   CLI self-updates download ~200 MB each). Runs as root (dedicated container; CLIs were installed under /root).
 - Node 24 from the official tarball in /opt/node (Ubuntu's node is too old for `node:sqlite`); app in /opt/agent-chat,
   systemd unit `agent-chat@<name>` (deploy/agent-chat@.service: HOST=0.0.0.0, PATH incl. ~/.local/bin and ~/.opencode/bin,
-  secrets in /etc/agent-chat.env, mode 600). Update with `deploy/push.sh` (git archive HEAD → restart).
+  secrets in /etc/agent-chat.env, mode 600). Update: git archive HEAD → untar → restart.
 - Logins (done once by the user over SSH): `claude auth login` (not setup-token: the adapter strips CLAUDE_CODE_*
-  env vars), `codex login --device-auth`, `opencode auth login` (Z.AI Coding Plan key), `agy` (Google sign-in).
+  env vars), `codex login --device-auth`, `opencode auth login`, `agy` (Google sign-in).
 - Linux differences handled in code: PATH lookup instead of where.exe, process-group kill instead of taskkill,
   `.gitattributes` forces LF (CRLF broke the systemd unit). OpenCode on the server is 2.x: `--pure` is gone, `run`
   uses a shared background service unless `--standalone` (used, so per-run env applies), no `step_finish` event, and
@@ -228,16 +228,16 @@ logged in once (`claude auth login`); the desktop app's own login isn't usable b
   workspace (opencode 2 and agy take the project directory from PWD, not the real cwd). Each member has
   workspace/<member> (agent-owned, read/write/execute); chat.db is mode 600 (root only); the archive and memory are
   readable; /root, /etc/agent-chat.env and the app are out of reach — all verified as agent.
-- "允许执行代码" (setting `exec`, on by default, only effective with AGENT_USER): Claude gets Bash/Edit/Write,
+- "允许执行代码" (setting `exec`, off by default since the public release, only effective with AGENT_USER): Claude gets Bash/Edit/Write,
   Codex `danger-full-access` (its workspace-write sandbox kept `.git` read-only, so it could not commit to the shared repo `workspace/_shared`), agy
   drops plan mode for `--dangerously-skip-permissions`, OpenCode uses the build agent with `--auto`. Verified in a
   real discussion: all four wrote and ran benchmarks in their own workspaces and checked each other's numbers.
 - The app has no login: keep it on the LAN (or Tailscale / a reverse proxy with auth), never port-forward it.
-- **Family (2026-10-07): one instance per person** rather than users inside one server, because the scheduler and the
-  current discussion are global (two people chatting at once would fight over them). `agent-chat@alice` (3517, data/,
-  workspace/) and `agent-chat@bob` (3518, data-bob/, workspace-bob/; its chat.db started as a copy of Alice's with
-  discussions, sessions, decisions and memoryAt removed, so members and settings carried over). `/who` lists
-  `PROFILES` to pick from; the UI shows the profile top left, linking back. Same CLI logins and quota for both.
+- **One instance per person (2026-10-07)** rather than users inside one server, because the scheduler and the
+  current discussion are global (two people chatting at once would fight over them). Each `agent-chat@<name>` has its
+  own PORT, DATA_DIR and WORK_DIR; a new person's chat.db can start as a copy of another's with discussions, sessions,
+  decisions and memoryAt removed, so members and settings carry over. `/who` lists `PROFILES` to pick from; the UI
+  shows the profile top left, linking back. All share the CLI logins and quota.
 
 ## Discussion modes (2026-10-03, experiment)
 

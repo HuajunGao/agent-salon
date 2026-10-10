@@ -59,6 +59,7 @@ test('research mode: everyone answers the question at once, stances reach the st
   const log = join(root, 'turns.jsonl');
   writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs, spawnJob } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
     import {appendFileSync} from 'node:fs';
+    export const installed = () => true;
     export async function listModels(){return {}};
     export async function runTurn(h,p,s,o){appendFileSync(${JSON.stringify(log)},JSON.stringify({at:Date.now(),p})+'\\n');
       await new Promise(r=>setTimeout(r,400));

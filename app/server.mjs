@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { join, resolve, sep, dirname } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
-import { AGENTS, runTurn, listModels, runAs, spawnJob } from './agents.mjs';
+import { AGENTS, runTurn, listModels, runAs, spawnJob, installed } from './agents.mjs';
 import { judge, novelty, classifyMode, stanceShift } from './moderator.mjs';
 import { talkOrder, parseHost, hostBrief, playerBrief, HOST_TURNS } from './game.mjs';
 import { MODES, rulesOf, relayNext, debateSetup, debateScript, debateBrief, seatOf, PHASES, parseReply, applyNotes } from './modes.mjs';
@@ -98,7 +98,7 @@ for (const col of ['model', 'role', 'mode', 'stance', 'seat', 'note_ops', 'files
 for (const [col, def] of [['mode', "TEXT DEFAULT 'auto'"], ['auto_mode', 'TEXT'], ['state', 'TEXT'], ['share', 'TEXT']])
   if (!db.prepare('PRAGMA table_info(chats)').all().some(c => c.name === col)) db.exec(`ALTER TABLE chats ADD COLUMN ${col} ${def}`);
 // Ids are never handed out again: deleting the newest discussion let a new one reuse its chat and message ids, and marks
-// kept by message id (the round already wrapped up) then ended the new discussion after one round (discussion 52).
+// kept by message id (the round already wrapped up) then ended the new discussion after one round.
 for (const t of ['chats', 'messages']) {
   const { sql } = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name=?`).get(t);
   if (/AUTOINCREMENT/i.test(sql)) continue;
@@ -109,10 +109,10 @@ const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
 const run = (sql, ...a) => db.prepare(sql).run(...a);
 const memberConfigs = Object.create(null);
-// Seed once; from then on the database, rather than adapter names, defines membership.
+// Seed once, one member per installed CLI; from then on the database, rather than adapter names, defines membership.
 if (!q1("SELECT 1 FROM settings WHERE key='members-seeded'")) {
   for (const [harness, adapter] of Object.entries(AGENTS)) {
-    if (adapter.optional) continue;
+    if (adapter.optional || !installed(harness)) continue;
     const legacy = harness === 'opencode' && q1("SELECT 1 FROM messages WHERE sender='opencode' LIMIT 1");
     const name = legacy ? 'glm' : harness;
     const m = { name, harness, label: '',
@@ -161,7 +161,7 @@ for (const a of NAMES) {
   if (RUNAS) chownSync(wsOf(a), RUNAS.uid, RUNAS.gid);
 }
 
-const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true, memory: true, exec: true, blind: true, outsider: true,
+const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true, memory: true, exec: false, blind: true, outsider: true,
   enabled: Object.fromEntries(NAMES.map(n => [n, true])), models: Object.fromEntries(NAMES.map(n => [n, memberConfigs[n].model])) };
 let S = { ...DEFAULTS, ...JSON.parse(q1(`SELECT value FROM settings WHERE key='s'`)?.value || '{}') };
 S.models = { ...DEFAULTS.models, ...S.models };
@@ -1365,7 +1365,7 @@ async function rankArena(A) {
 }
 
 // ---------- outsider: a fresh look from someone who hasn't read the discussion ----------
-// Groups anchor, and so does a moderator that reads everything: in discussion 28 the members spent days on a wall that
+// Groups anchor, and so does a moderator that reads everything: once the members spent days on a wall that
 // each of their own models, asked cold with only the problem and the source code, saw past in minutes. So one member,
 // rotating, gets a fresh read-only CLI session with only the user's own messages and the shared files; it thinks first,
 // then reads the archive and reports only what the group hasn't tried. Its report is a candidate, not a conclusion.

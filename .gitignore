@@ -1,3 +1,6 @@
 data/
 workspace/
 reports/
+.serena/
+deploy/push.sh
+DEPLOY.local.md

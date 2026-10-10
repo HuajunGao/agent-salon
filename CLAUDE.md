@@ -20,8 +20,8 @@ raw HTML in messages is escaped and only http(s)/mailto links are kept). Node �
   `node -e 'import("./app/agents.mjs").then(async m => console.log(await m.runTurn("codex", "1+1?", null, {cwd: "workspace", dataDir: "data", onLive(){}})))'`
   (a second call with the returned `sid` checks session resume). `moderator.mjs` `judge`/`novelty` and `memory.mjs`
   `curate` can be exercised the same way; Jev needs `TYPESAFE_API_KEY`.
-- Deploy committed HEAD to the home server (Proxmox LXC, root@server.lan) and restart: `bash deploy/push.sh`
-- Server logs: `ssh root@server.lan journalctl -u agent-chat@alice -f` (or `@bob`)
+- Deploying, server logs, instances: read `DEPLOY.local.md` if it exists (the maintainer's own server; untracked,
+  like `deploy/push.sh`). The generic steps are in README.md.
 
 Testing against the live app posts real messages: create your own discussion first and confirm it is the current one
 (the current discussion is server-wide, shared by every browser window); turn the `memory` setting off during tests and
@@ -68,8 +68,8 @@ next step ([PHASE talk n @b @a] / [PHASE orders @a @b] / [PAUSE] / [END]; no mar
 reach it as `role='order'` DMs. The user can end a game (`/api/game/end`, a button in the moderator pane):
 a host that never wrote [END] once kept the talk going for 17 rounds. After a game, "再开一局" (`/api/game/new`) keeps
 the finished one in `chats.state.games` and the next message starts another in the same discussion, so everyone remembers
-the earlier games. Games follow the current discussion only: switching back (or a restart) resumes a talk/orders phase. The host may run code (a rules program if it wants). A built-in commons game (fishing,
-discussions 36-37) was removed: a member emptied the lake whenever it paid, so it taught nothing after the first game.
+the earlier games. Games follow the current discussion only: switching back (or a restart) resumes a talk/orders phase. The host may run code (a rules program if it wants). A built-in commons game (fishing)
+was removed: a member emptied the lake whenever it paid, so it taught nothing after the first game.
 Private messages are `messages.dm` (the addressee): `TALK` excludes them (archive, Jev), `HEARS` shows them only to
 sender and addressee; a DM runs over lines up to the next marker line (hosts DM whole tables); in a formal debate
 teammates may DM each other. Players run code like in any turn (simulations,
@@ -85,7 +85,7 @@ Every reply ends with `[STANCE n%] position`: `parseReply` moves it into `messag
 Moderator notes are `kind='moderator'` messages: shown in the UI,
 never sent to agents or Jev (`TALK` filter).
 
-Outsider (setting `outsider`, research/roundtable): groups anchor, and so does Jev, which reads everything (discussion 28:
+Outsider (setting `outsider`, research/roundtable): groups anchor, and so does Jev, which reads everything (in one discussion:
 days stuck on a wall that each member's own model, asked cold, saw past in minutes). Every 40 members' messages, when
 Jev sees circling (≥15 since the last), or on the user's button, one member (rotating: least outsider runs, then least
 active lately) gets a fresh read-only session with only the user's messages and the shared files. Phase 1 thinks
@@ -130,7 +130,7 @@ and can't be taken; clashes (incl. prefixes) refused, at most 6 per member, refu
 
 Saved prompts (★ by the input): settings key `prompts`, [{id, title, text, mode}], sent with `init` only (never to a
 shared link); using one fills the input (and sets its mode in an empty discussion, or in a new one via "新讨论").
-The history list shows each discussion's id, the number the archive uses ("讨论 36").
+The history list shows each discussion's id, the number the archive uses ("讨论 12").
 
 Agents' context: a new CLI session gets `intro()` (rules, members, archive location, the user memory) plus recent
 history; resumed sessions get only unseen messages plus a per-turn footer. Discussions are archived as
@@ -157,7 +157,7 @@ The moderator model is supplied by TYPESAFE_MODEL in the service environment.
 - Cross-platform: Windows uses PATH lookup with `.exe`/`.cmd` and `taskkill`; Linux spawns detached and kills the process
   group. `.gitattributes` forces LF (CRLF broke the systemd unit).
 
-## Home server
+## Server deployment
 
 `AGENT_USER=agent` (in `/etc/agent-chat.env`, with `TYPESAFE_API_KEY`) makes the root service spawn every CLI as the
 unprivileged `agent` user, each in `workspace/<member>`; `chat.db` is mode 600, the archive and memory are readable.
@@ -165,7 +165,7 @@ Only then does the `exec` setting take effect (Claude Bash/Edit/Write, Codex `da
 plan mode, OpenCode build agent `--auto`). The CLI logins live in `/home/agent` (copied from root by
 `deploy/setup-agent-user.sh`); use `su - agent` to run them by hand. The app has no login: LAN only.
 
-One instance per person (systemd template `agent-chat@<name>`, settings in `/etc/agent-chat-<name>.env`): alice on
-3517 with the default `data/` and `workspace/`, bob on 3518 with `DATA_DIR=data-bob`, `WORK_DIR=workspace-bob`, so
-discussions, memory and workspaces never mix (both run as `agent`: separated by paths, not permissions). `/who` is the
+One instance per person (systemd template `agent-chat@<name>`, settings in `/etc/agent-chat-<name>.env`): the first
+with the default `data/` and `workspace/`, the others with their own `PORT`, `DATA_DIR` and `WORK_DIR`, so
+discussions, memory and workspaces never mix (all run as `agent`: separated by paths, not permissions). `/who` is the
 entry page (`PROFILES` in `/etc/agent-chat.env`). agy needs each WORK_DIR in its trustedWorkspaces.

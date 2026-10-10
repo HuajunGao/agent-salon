@@ -4,7 +4,7 @@
 // once. After every phase the host gets the turn back. It keeps the state in a private ledger the server stores and hands
 // back every turn, so a lost CLI session doesn't lose the game. With code execution on it may write the rules as a
 // program in its workspace and run it to resolve turns: its call, not ours. Everything here is pure; server.mjs runs it.
-// (A built-in commons game, discussions 36-37, was dropped: one member emptied the lake as soon as it paid, every game.)
+// (A built-in commons game was dropped: one member emptied the lake as soon as it paid, every game.)
 
 // Who speaks when the host doesn't say: everyone, `laps` times, each lap in a fresh random order (a fixed rotation let
 // the same members always answer last, having heard everyone). Turns still follow one another: the order is this

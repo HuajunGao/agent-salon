@@ -71,6 +71,9 @@ function opencodeBin() {
   const bin = cmd && join(dirname(cmd), 'node_modules/opencode-ai/bin/opencode.exe');
   return bin && existsSync(bin) ? bin : exe('opencode');
 }
+// Whether a harness's CLI is installed (on the agent user's PATH); Hermes is an HTTP API, always "installed".
+export const installed = h => h === 'hermes'
+  || existsSync({ claude: exe('claude'), codex: codexBin(), agy: exe('agy'), opencode: opencodeBin() }[h] || '');
 
 const cleanEnv = () => {
   // Inside the Claude desktop app these override the CLI's own login (401 / "Not logged in").
@@ -264,7 +267,7 @@ export function runTurn(agent, prompt, sid, { cwd, dataDir, shared, model, exec,
     // On Linux the CLI gets its own process group so a timeout can kill everything it started.
     // PWD too: Node doesn't update it for cwd, and some CLIs (opencode 2, agy) take their project directory from it.
     // toFile: the CLI writes to a temp file the server tails, not to a pipe. opencode v2 (Bun) can lose what it writes to
-    // a pipe just before it exits: in discussion 37 a finished 77 s reply arrived as a bare step_start ("no reply").
+    // a pipe just before it exits: once a finished 77 s reply arrived as a bare step_start ("no reply").
     const file = a.toFile && join(tmpdir(), `agent-chat-turn-${process.pid}-${randomUUID()}.jsonl`), fd = file && openSync(file, 'w');
     const p = spawn(bin, args, { cwd, env: { ...userEnv(env, keep), PWD: cwd }, ...asUser(), stdio: ['ignore', fd || 'pipe', fd || 'pipe'], windowsHide: true, detached: !WIN });
     let drain = () => {};
