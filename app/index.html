@@ -420,6 +420,7 @@
   .settings input:not([type=checkbox]), .settings select { height:24px; border:1px solid transparent; border-radius:var(--r-sm); background:var(--surface);
     padding:0 6px; font-size:var(--t-sm); color:var(--ink); box-shadow:0 0 0 1px var(--hair); }
   .settings input[type=number] { width:64px; text-align:right; }
+  .langsel { display:flex; align-items:center; gap:2px; color:var(--ink-3); flex:none; }
   .settings #s-language { display:block; width:150px; margin:2px var(--s1) 4px auto; }
   .settings #s-language[hidden] { display:none; }
   .settings select { max-width:150px; }
@@ -497,6 +498,7 @@
       <button id="stop" title="停止：终止正在思考的成员，丢弃还没发布的回复，停止朗读；讨论进度保留，发新消息接着进行" aria-label="停止"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg></button>
       <button id="next" title="读完了，放下一条" aria-label="下一条"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 5 9 7-9 7Z" fill="currentColor"/><path d="M18 5v14"/></svg></button>
     </div>
+    <label class="langsel" title="界面语言"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><select id="s-uiLang" class="modesel" aria-label="界面语言"><option value="">自动</option><option value="zh">中文</option><option value="en">English</option></select></label>
     <button class="icon" data-toggle-room title="房间状态面板" aria-label="房间状态面板"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></svg></button>
     <div class="convline off" id="convline" title="观点收敛度（刻度是收尾阈值）"><i></i><b></b></div>
   </div>
@@ -533,7 +535,6 @@
   <div class="settings" id="settings-body">
     <div class="grp">
       <div class="gl">节奏</div>
-      <label>界面语言 <select id="s-uiLang"><option value="">自动</option><option value="zh">中文</option><option value="en">English</option></select></label>
       <label title="成员回复用的语言">讨论语言 <select id="s-langpick"></select></label>
       <input id="s-language" hidden aria-label="讨论语言">
       <label title="自你上一条消息起，每人最多发言几次">每人每轮发言上限 <input id="s-turnCap" type="number" min="1"></label>
@@ -1313,6 +1314,7 @@ document.addEventListener('click', e => { if (e.target.closest('[data-gameend]')
 $('#outsider-now').onclick = async () => { const r = await post('/api/outsider'); if (!r.ok) alert((await r.json().catch(() => ({}))).error || tx('请求失败')); };
 for (const k of ['turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin'])
   $('#s-' + k).addEventListener('change', e => post('/api/settings', { [k]: e.target.value }));
+$('#s-uiLang').options[0].textContent = LANG === 'en' ? 'Auto (English)' : '自动（中文）'; // which one Auto gave this browser
 $('#s-uiLang').onchange = async e => { await post('/api/settings', { uiLang: e.target.value }); location.reload(); };
 
 function setReply(id) {
