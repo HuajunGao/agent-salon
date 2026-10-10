@@ -88,7 +88,7 @@ async function server(t, slowFirst = 0) {
         : p.includes('You are the HOST') ? ['', '规则：猜数。\\n[DM @codex] 你的数字是 7\\n[DM @agy] 你的数字是 3\\n[PHASE talk @opencode @agy]\\n[STATE]\\n回合 1',
             '交指令。\\n[PHASE orders @codex]\\n[STATE]\\n回合 2', '结算：codex 赢。\\n[END]\\n[STATE]\\n结束'][+p.match(/this is turn (\\d+)/)[1]]
         : p.includes('the host asks for your order') ? (o.onLive('🔧 Read /home/agent/.codex/sessions/x.jsonl'), '[ACT] 猜 5\\n凭直觉')
-        : p.includes('取名测试') && h === 'claude' ? '我是老狐狸。\\n[NAME] 老狐狸'
+        : p.includes('取名测试') && h === 'claude' ? '我是老狐狸。\\n[NAME] 老狐狸\\n[NOTE add] 狐狸登场'
         : p.includes('取名测试') && h === 'codex' ? '我也取一个。\\n[NAME] claude2'
         : p.includes('改名吧') ? '好。\\n[NAME] 黑猫'
         : h+' 发言。';
@@ -445,7 +445,8 @@ test('names: a member names itself with [NAME], shown on its messages; @name rea
   assert.deepEqual([fox.text, fox.nick], ['我是老狐狸。', '老狐狸']);
   assert.equal(s.messages.find(m => m.sender === 'codex').nick, null);                    // too close to @claude: refused
   assert.ok(s.messages.some(m => m.kind === 'moderator' && m.text === '🏷 @claude 给自己取名「老狐狸」'));
-  assert.equal(s.state.members.find(m => m.name === 'claude').nick, '老狐狸');
+  assert.equal(s.state.members.find(m => m.name === 'claude').nick, '老狐狸');           // kept with a [NOTE] in the same reply
+  assert.deepEqual(s.state.notes.map(x => x.text), ['狐狸登场']);
 
   const n = turns().length;
   await post('/api/send', { text: '@老狐狸 改名吧', chat_id: id });                        // @name reaches its member
@@ -465,4 +466,23 @@ test('names: a member names itself with [NAME], shown on its messages; @name rea
   await post('/api/send', { text: '@codex 你呢', chat_id: id });
   await until(async () => turns().length > j);
   assert.ok(turns()[j].h === 'codex' && turns()[j].p.includes('Your name "claude2" was not taken'));
+});
+
+test('deleting the newest discussion: its ids are not reused, so a new discussion is not taken as already wrapped up', async t => {
+  const { post, init, until } = await server(t);
+  await post('/api/settings', { turnCap: 2 });
+  const id = (await init()).state.chatId;
+  await post('/api/chat/mode', { id, mode: 'roundtable' });
+  await post('/api/send', { text: '第一个问题', chat_id: id });
+  await until(async () => (await init()).messages.some(m => m.kind === 'agent'));
+  await post('/api/stop');                                   // the round is wrapped up (kept by its user message id)
+  const old = Math.max(...(await init()).messages.map(m => m.id));
+  await post('/api/chat/delete', { id });
+  const { id: id2 } = await (await post('/api/chat/new')).json();
+  assert.ok(id2 > id);
+  await post('/api/chat/mode', { id: id2, mode: 'roundtable' });
+  await post('/api/send', { text: '第二个问题', chat_id: id2 });
+  const s = await until(async () => { const x = await init(); return x.messages.some(m => m.kind === 'agent') && x; });
+  assert.ok(s.messages.every(m => m.id > old));
+  assert.equal(s.state.wrapped, false);
 });

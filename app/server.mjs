@@ -67,8 +67,8 @@ const NAMES = [];
 const db = new DatabaseSync(join(DATA, 'chat.db'));
 if (RUNAS) chmodSync(join(DATA, 'chat.db'), 0o600); // agents can't read the database (incl. other discussions' sessions)
 db.exec(`
-CREATE TABLE IF NOT EXISTS chats(id INTEGER PRIMARY KEY, title TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, paused INTEGER DEFAULT 0);
-CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, chat_id INTEGER, sender TEXT, kind TEXT, text TEXT,
+CREATE TABLE IF NOT EXISTS chats(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, paused INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER, sender TEXT, kind TEXT, text TEXT,
   based_on INTEGER, reply_to INTEGER, latency_ms INTEGER, turn_no INTEGER, stale INTEGER DEFAULT 0,
   collapsed INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS agent_sessions(chat_id INTEGER, agent TEXT, cli_session_id TEXT, last_seen_id INTEGER DEFAULT 0,
@@ -97,6 +97,14 @@ for (const col of ['model', 'role', 'mode', 'stance', 'seat', 'note_ops', 'files
 // share: the code of the discussion's read-only link (/s/<share>), made when the user first shares it.
 for (const [col, def] of [['mode', "TEXT DEFAULT 'auto'"], ['auto_mode', 'TEXT'], ['state', 'TEXT'], ['share', 'TEXT']])
   if (!db.prepare('PRAGMA table_info(chats)').all().some(c => c.name === col)) db.exec(`ALTER TABLE chats ADD COLUMN ${col} ${def}`);
+// Ids are never handed out again: deleting the newest discussion let a new one reuse its chat and message ids, and marks
+// kept by message id (the round already wrapped up) then ended the new discussion after one round (discussion 52).
+for (const t of ['chats', 'messages']) {
+  const { sql } = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name=?`).get(t);
+  if (/AUTOINCREMENT/i.test(sql)) continue;
+  const def = sql.replace(/^CREATE TABLE "?\w+"?/, `CREATE TABLE ${t}_new`).replace('id INTEGER PRIMARY KEY', 'id INTEGER PRIMARY KEY AUTOINCREMENT');
+  db.exec(`BEGIN; ${def}; INSERT INTO ${t}_new SELECT * FROM ${t}; DROP TABLE ${t}; ALTER TABLE ${t}_new RENAME TO ${t}; COMMIT;`);
+}
 const q = (sql, ...a) => db.prepare(sql).all(...a);
 const q1 = (sql, ...a) => db.prepare(sql).get(...a);
 const run = (sql, ...a) => db.prepare(sql).run(...a);
@@ -930,15 +938,16 @@ function publish(force = false) {
 function publishOne(r) {
   const turnNo = q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=? AND dm IS NULL', r.chat, r.agent).n + 1;
   const stale = !!q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user' AND id>? LIMIT 1`, r.chat, r.basedOn);
-  // The reply's [NOTE] lines update the discussion's notes; the message records what changed.
-  const st = chatState(r.chat);
-  const changed = r.notes?.length ? applyNotes(st.notes ??= [], r.notes, { by: r.agent }) : [];
+  // The name first: setNick saves the state itself, and the notes below save the state read after it.
   if (r.nick) {
     const was = nickOf(r.agent, r.chat), why = setNick(r.chat, r.agent, r.nick);
     logDecision('nick', r.agent, { detail: { nick: r.nick, was, refused: why } });
     if (why) (rt[r.agent].jobs ??= []).push({ kind: 'note', chat: r.chat, summary: `Your name "${r.nick}" was not taken: ${why}.` });
     else if (was !== r.nick) jobNote(r.chat, `🏷 @${atOf(r.agent)} ${was ? `把名字从「${was}」改成` : '给自己取名'}「${r.nick}」`);
   }
+  // The reply's [NOTE] lines update the discussion's notes; the message records what changed.
+  const st = chatState(r.chat);
+  const changed = r.notes?.length ? applyNotes(st.notes ??= [], r.notes, { by: r.agent }) : [];
   // A game reply may be only private messages (no public text): m is then the last of them.
   const base = { chat_id: r.chat, sender: r.agent, kind: 'agent', based_on: r.basedOn, latency_ms: r.ms, model: r.model, mode: chatMode(r.chat).effective,
     nick: nickOf(r.agent, r.chat) };
