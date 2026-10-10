@@ -66,7 +66,9 @@ first message @mentions (none: the server asks for one). The host (game.mjs host
 rules, DMs private setups, keeps a private ledger ([STATE], stored in the game state, shown to the user) and picks each
 next step ([PHASE talk n @b @a] / [PHASE orders @a @b] / [PAUSE] / [END]; no marker pauses too; listed handles set who speaks, in that order; unlisted: a random order per lap, turns still one after another); orders
 reach it as `role='order'` DMs. The user can end a game (`/api/game/end`, a button in the moderator pane):
-a host that never wrote [END] once kept the talk going for 17 rounds. The host may run code (a rules program if it wants). A built-in commons game (fishing,
+a host that never wrote [END] once kept the talk going for 17 rounds. After a game, "再开一局" (`/api/game/new`) keeps
+the finished one in `chats.state.games` and the next message starts another in the same discussion, so everyone remembers
+the earlier games. Games follow the current discussion only: switching back (or a restart) resumes a talk/orders phase. The host may run code (a rules program if it wants). A built-in commons game (fishing,
 discussions 36-37) was removed: a member emptied the lake whenever it paid, so it taught nothing after the first game.
 Private messages are `messages.dm` (the addressee): `TALK` excludes them (archive, Jev), `HEARS` shows them only to
 sender and addressee; a DM runs over lines up to the next marker line (hosts DM whole tables); in a formal debate

@@ -420,6 +420,24 @@ test('game: the user can end a game the host never ended; the next message is fr
   assert.ok(!turns().slice(1).some(x => x.p.includes('You are the HOST')));          // no host turn after the end
 });
 
+test('game: another game in the same discussion after one is over; the finished one is kept', async t => {
+  const { post, init, until, turns } = await server(t);
+  const id = (await init()).state.chatId;
+  await post('/api/chat/mode', { id, mode: 'game' });
+  await post('/api/game/new');                                                    // nothing to restart yet
+  await post('/api/send', { text: '@claude 主持，我们玩个猜数游戏', chat_id: id });
+  await until(async () => (await init()).state.game?.over);
+  await post('/api/game/new');
+  assert.equal((await init()).state.game, undefined);
+  await until(async () => (await init()).messages.some(m => m.text.startsWith('🎲 再开一局（这个讨论的第 2 局')));
+  const n = turns().filter(x => x.p.includes('You are the HOST')).length;
+  await post('/api/send', { text: '@codex 主持，再来一局', chat_id: id });
+  const s = await until(async () => { const x = await init(); return x.state.game?.over && x.state.game.host === 'codex' && x; });
+  const host = turns().filter(x => x.p.includes('You are the HOST')).slice(n);
+  assert.ok(host[0].h === 'codex' && host[0].p.includes('This is your first turn'));
+  assert.ok(s.state.game.players.includes('claude'));
+});
+
 test('game: the user leaves while the host plays its turn; its notes stay in the game, which carries on when the user is back', async t => {
   const { post, init, until, turns } = await server(t, 1);                        // the host's first turn is slow
   const id = (await init()).state.chatId;

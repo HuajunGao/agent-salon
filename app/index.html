@@ -811,7 +811,7 @@ function flowText(schedulerText) {
   if (flow === 'debate') return d ? `辩论：${PHASE_LABEL[d.phase] || '评判'}（第 ${d.step}/${d.steps} 步）` : '辩论：你发出辩题后抽签分持方';
   const g = S.game;
   if (flow === 'game') return !g ? '博弈：@ 一位成员当主持人，说说玩什么，如“@claude 主持，我们玩狼人杀”'
-    : g.over ? '博弈已结束，自由聊'
+    : g.over ? '博弈已结束，自由聊；点“再开一局”在这里接着玩'
     : `博弈 · ${esc(label(g.host))} 主持 · 第 ${g.round + 1} 回合 · ${{ host: '主持人结算', talk: '轮流发言', orders: `秘密行动（${g.ordered.length}/${g.waiting.length}）` }[g.phase]}`;
   return (d?.done ? '辩论已结束，自由讨论；' : '') + schedulerText + (S.settings.autoStop ? '，收敛后自动收尾' : '');
 }
@@ -821,7 +821,7 @@ function renderSeats() {
   if (g && S.discussionMode.rules.flow === 'game') return `<div class="seats"><b>主持</b><span>${who(g.host)}</span>`
     + `<b>玩家</b><span>${g.players.map(who).join('、')}</span></div>`
     + (g.ledger ? `<div class="ledger" title="主持人的私密账本，只有它和你看得到">${esc(g.ledger)}</div>` : '')
-    + (g.over ? '' : '<button class="rowbtn" data-gameend title="主持人忘了宣布结束、或者不想玩了：这局到此为止，之后的消息是普通聊天">结束这局游戏</button>');
+    + (g.over ? '<button class="rowbtn" data-gamenew title="在这个讨论里接着玩：大家带着前面几局的记忆，你 @ 一位主持人说说玩什么">再开一局</button>' : '<button class="rowbtn" data-gameend title="主持人忘了宣布结束、或者不想玩了：这局到此为止，之后的消息是普通聊天">结束这局游戏</button>');
   if (!d) return '';
   return `<div class="seats"><b>正方</b><span>${d.pro.map(who).join('、')}</span><b>反方</b><span>${d.con.map(who).join('、')}</span>`
     + `<b>评委</b><span>${who(d.judge)}</span></div>`;
@@ -1227,6 +1227,7 @@ document.addEventListener('change', e => {
   }
 });
 for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind', 'outsider']) $('#s-' + k).onchange = e => post('/api/settings', { [k]: e.target.checked });
+document.addEventListener('click', e => { if (e.target.closest('[data-gamenew]')) post('/api/game/new'); });
 document.addEventListener('click', e => { if (e.target.closest('[data-gameend]') && confirm('结束这局游戏？之后的消息就是普通聊天。')) post('/api/game/end'); });
 $('#outsider-now').onclick = async () => { const r = await post('/api/outsider'); if (!r.ok) alert((await r.json().catch(() => ({}))).error || '请求失败'); };
 for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin'])

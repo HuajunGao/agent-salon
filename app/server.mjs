@@ -466,6 +466,8 @@ function gameOnUser(m) {
   if (!busy() && !NAMES.some(n => rt[n].hand)) gameNext(chatId); // nothing scheduled (e.g. after a stop): carry on
 }
 const present = a => S.enabled[a] && rt[a];
+// Playing a game turn now. A member still in an ordinary turn (talk after the last game) gets its game turn after it.
+const inGame = a => rt[a]?.status === 'thinking' && rt[a].play;
 function gameNext(c) {
   if (c !== chatId) return;
   const st = chatState(c), g = st.game;
@@ -478,13 +480,13 @@ function gameNext(c) {
   }
   if (g.phase === 'orders') {
     for (const a of g.waiting) {
-      if (a in g.orders || rt[a]?.hand || rt[a]?.status === 'thinking') continue;
+      if (a in g.orders || rt[a]?.hand?.game || inGame(a)) continue;
       if (present(a)) rt[a].hand = hand('orders'); else g.orders[a] = true; // not taking part: nothing to wait for
     }
     if (g.waiting.some(a => !(a in g.orders))) return saveState(c, st);
     g.phase = 'host';
   }
-  if (present(g.host) && !rt[g.host].hand && rt[g.host].status !== 'thinking') rt[g.host].hand = hand('host');
+  if (present(g.host) && !rt[g.host].hand?.game && !inGame(g.host)) rt[g.host].hand = hand('host');
   saveState(c, st);
 }
 function gameTalkDone(c, h) {
@@ -830,7 +832,7 @@ async function startTurn(a, retried = false) {
   const floor = rt[a].hand?.r >= 100, summary = why === 'summary', invited = why === 'Jev';
   const r = rules(chat), d = chatState(chat).debate, phase = slot != null ? d.script[slot].phase : null;
   const role = summary ? 'summary' : why === 'devil' ? 'devil' : phase === 'verdict' ? 'verdict' : null;
-  Object.assign(rt[a], { status: 'thinking', started: Date.now(), live: '', hand: null, note: '', error: '', role });
+  Object.assign(rt[a], { status: 'thinking', started: Date.now(), live: '', hand: null, note: '', error: '', role, play });
   const exec = execOn();
   let msgs, prompt;
   if (s.cli_session_id) {
@@ -1716,6 +1718,16 @@ const routes = {
     Object.assign(g, { over: 'user', phase: 'over' }); saveState(chatId, st);
     logDecision('game-over', null, { detail: { over: 'user', turns: g.round } });
     note('🏁 你结束了这局游戏。之后的消息就是普通聊天。');
+  },
+  // Another game in the same discussion: everyone keeps what happened (it's all in their sessions). The finished game is
+  // kept in st.games; the user's next message starts the new one (@ a host) as in a new discussion.
+  'POST /api/game/new'() {
+    const st = chatState(chatId);
+    if (!st.game?.over) return;
+    (st.games ??= []).push(st.game); delete st.game; saveState(chatId, st);
+    for (const n of NAMES) rt[n].hand = null;
+    logDecision('game-new', null, { detail: { games: st.games.length } });
+    note(`🎲 再开一局（这个讨论的第 ${st.games.length + 1} 局，大家都记得前面的）：@ 一位成员当主持人，说说玩什么。`);
   },
   'POST /api/arena/start'(body) { startArena(chatId, body); },
   'POST /api/arena/stop'() { if (arena?.phase === 'work') endWork('user'); else ranking?.kill?.(); },
