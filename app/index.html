@@ -204,6 +204,7 @@
   .empty .ideas { display:flex; flex-direction:column; gap:6px; }
   .empty .idea { text-align:left; padding:10px var(--s3); border-radius:var(--r-md); color:var(--ink-2); font-size:var(--t-md);
     background:rgba(15,17,20,.028); }
+  .empty .idea-mode { display:inline-block; min-width:3.2em; margin-right:var(--s2); font-size:var(--t-xs); color:var(--ink-3); }
   .empty .idea:hover { background:var(--hover); color:var(--ink); }
 
   /* composer */
@@ -741,14 +742,23 @@ function renderMsg(m) {
   return el;
 }
 
-const IDEAS = ['单元测试应该 mock 数据库，还是连真实的测试库？', '三个人做内部工具，后端选 Node 还是 Go？', '什么时候值得把单体应用拆成微服务？'].map(s => tx(s));
+// One example per mode; picking one fills the input and switches the (empty) discussion to its mode.
+// {host}: the game's host, the first enabled member.
+const IDEAS = [
+  ['research', '章鱼真的有九个“大脑”吗？查查资料，给出处。'],
+  ['roundtable', '如果从明天起人人每周只上四天班，世界会变好还是更乱？'],
+  ['debate', '辩题：AI 写的小说也应该能拿文学奖。'],
+  ['story', '接龙：2049 年，最后一家人工咖啡馆的店长收到一封来自未来的差评。'],
+  ['game', '{host} 主持一局“谁是卧底”，其他人都来玩。'],
+];
 function emptyState() {
   const names = S?.members.filter(m => m.enabled).map(m => m.name) || [];
   return `<div class="empty">
     <div class="members">${names.map(av).join('')}</div>
     <h1>${tx('开一场讨论')}</h1>
     <p>${names.length ? tx('提一个问题，{n} 位参与成员会各自给出观点、互相补充和反驳；主持人安排发言顺序，观点收敛时请人总结。你随时可以插话。', { n: names.length }) : tx('添加或启用一位成员，开始讨论。')}</p>
-    <div class="ideas">${IDEAS.map(t => `<button class="idea" data-idea="${esc(t)}">${esc(t)}</button>`).join('')}</div>
+    <div class="ideas">${names.length ? IDEAS.map(([mode, t]) => { t = tx(t, { host: `@${member(names[0]).at}` });
+      return `<button class="idea" data-idea="${esc(t)}" data-idea-mode="${mode}"><span class="idea-mode">${MODE_LABEL[mode]}</span>${esc(t)}</button>`; }).join('') : ''}</div>
   </div>`;
 }
 const thinkingEl = Object.assign(document.createElement('div'), { id: 'thinking' });
@@ -1193,7 +1203,10 @@ document.addEventListener('click', e => {
     if (phone()) closeDrawers();
     return;
   }
-  if (d.idea) { const i = $('#input'); i.value = d.idea; i.focus(); grow(); typing(); return; }
+  if (d.idea) {
+    if (!messages.length && S.discussionMode.mode !== d.ideaMode) post('/api/chat/mode', { id: S.chatId, mode: d.ideaMode });
+    const i = $('#input'); i.value = d.idea; i.focus(); grow(); typing(); return;
+  }
   if (d.expand) { openMem.has(d.expand) ? openMem.delete(d.expand) : openMem.add(d.expand); delete lastHTML['#members']; return renderState(); }
   if (d.id) flash(d.id);
   if (d.reply) setReply(+d.reply);
