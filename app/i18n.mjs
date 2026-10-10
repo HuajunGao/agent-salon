@@ -135,7 +135,7 @@ export const EN = {
   '讨论模式：自动由 Jev 按问题判断，也可以随时指定': 'Discussion mode: Auto lets Jev pick one from the question; you can set one any time',
   '讨论模式': 'Discussion mode',
   '分享这场讨论：复制一个只读链接，打开的人只能看、不能发言': 'Share this discussion: copies a read-only link; whoever opens it can watch but not speak',
-  '分享': 'Share', '朗读': 'Read aloud',
+  '分享': 'Share', '朗读': 'Read aloud', '更多': 'More',
   '朗读新发言（局域网语音服务）；朗读时暂缓发布下一条': 'Read new messages aloud (LAN speech service); the next message waits while one is read',
   '停止：终止正在思考的成员，丢弃还没发布的回复，停止朗读；讨论进度保留，发新消息接着进行':
     'Stop: end the members\' thinking, drop unpublished replies, stop reading aloud; the discussion stays, and a new message carries on',
