@@ -225,6 +225,9 @@
   .att-chip button { width:20px; height:20px; flex:none; border-radius:4px; color:var(--ink-3); }
   .att-chip button:hover { background:var(--selected); color:var(--ink); }
   .msg .atts { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+  .msg .gut .av { width:28px; height:28px; border-radius:9px; margin-bottom:4px; }
+  img.av { object-fit:cover; background:var(--hover); }
+  .msg .tx img.inl { display:block; max-width:min(320px, 100%); max-height:240px; border-radius:var(--r-md); border:1px solid var(--hair); }
   .msg .atts img { display:block; max-width:min(320px, 100%); max-height:240px; border-radius:var(--r-md); border:1px solid var(--hair); }
   .att-file { display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:var(--r-sm); background:var(--sunk);
     color:var(--ink); font-size:var(--t-sm); text-decoration:none; }
@@ -657,7 +660,10 @@ const member = n => S?.members.find(m => m.name === n);
 const label = n => n === 'user' ? tx('我') : n === 'system' ? tx('系统') : n === 'moderator' ? tx('主持人') : (member(n)?.label || n);
 // Agent accents: used only for avatars, the message rail and mini-bars.
 const color = n => member(n)?.color || 'var(--ink-3)';
-const av = n => `<span class="av" style="--c:${color(n)}">${esc(label(n).slice(0, 2))}</span>`;
+// a member's avatar (its workspace's avatar.png, ?v = its mtime) or its initials
+const avURL = n => `/avatar/${encodeURIComponent(n)}?v=${member(n).avatar}`;
+const av = n => member(n)?.avatar ? `<a href="${avURL(n)}" target="_blank" rel="noopener" title="${tx('看大图')}"><img class="av" src="${avURL(n)}" alt="${esc(label(n))}"></a>`
+  : `<span class="av" style="--c:${color(n)}">${esc(label(n).slice(0, 2))}</span>`;
 const utc = s => new Date(s.replace(' ', 'T') + 'Z');
 const hm = s => utc(s).toTimeString().slice(0, 5);
 const when = s => { if (!s) return ''; const d = utc(s), now = new Date();
@@ -680,7 +686,10 @@ window.marked?.use({ gfm: true, breaks: true, renderer: {
   html: ({ text }) => esc(text),
   link({ href, title, tokens }) { const t = this.parser.parseInline(tokens);
     return safeHref(href) ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer"${title ? ` title="${esc(title)}"` : ''}>${t}</a>` : t; },
-  image: ({ href, text }) => safeHref(href) ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(text || href)}</a>` : esc(text),
+  // images from this server (/w/, /files/) show inline; others stay links (loading them would tell a third party who reads)
+  image: ({ href, text }, u = URL.parse(href, location.href)) => u?.origin === location.origin && /^\/(w|files|avatar)\//.test(u.pathname)
+    ? `<a href="${esc(href)}" target="_blank" rel="noopener"><img class="inl" src="${esc(href)}" alt="${esc(text)}" loading="lazy"></a>`
+    : safeHref(href) ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(text || href)}</a>` : esc(text),
 } });
 function md(t) {
   if (!window.marked) return linkRefs(t);
@@ -716,7 +725,7 @@ function renderMsg(m) {
   const talk = messages.filter(x => x.kind === 'user' || x.kind === 'agent');
   const idx = talk.findIndex(x => x.id === m.id);
   const between = m.based_on != null ? talk.slice(0, idx).filter(x => x.id > m.based_on) : [];
-  const gut = `<div class="gut"><span class="who">${esc(label(m.sender))}</span>
+  const gut = `<div class="gut">${m.kind === 'agent' ? av(m.sender) : ''}<span class="who">${esc(label(m.sender))}</span>
     <small>${hm(m.created_at)} <span class="num" title="${tx('消息编号，正文里的 #{id} 指的就是这条', { id: m.id })}">#${m.id}</span></small></div>`;
   const hd = [];
   // the name the member gave itself in this discussion: click to @ it

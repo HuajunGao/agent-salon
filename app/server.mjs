@@ -1,9 +1,9 @@
 // agent-chat server: SQLite + SSE + scheduler + reading-pace publish queue. No npm dependencies.
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, rmSync, existsSync, statSync, chmodSync, chownSync, openSync, closeSync, fchownSync, cpSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, rmSync, existsSync, statSync, realpathSync, copyFileSync, chmodSync, chownSync, openSync, closeSync, fchownSync, cpSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { join, resolve, sep, dirname } from 'node:path';
+import { join, resolve, sep, dirname, basename } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
 import { AGENTS, runTurn, listModels, runAs, spawnJob, installed } from './agents.mjs';
@@ -38,6 +38,16 @@ const wsOf = a => join(WORK, a);
 const SHARED = join(WORK, '_shared'), PUBLIC = join(SHARED, 'public'), JOBS = join(WORK, '_jobs'), TASKS = join(WORK, '_tasks');
 const jobLog = (id, kind = 'job') => join(JOBS, `${kind === 'task' ? 'T' : 'J'}${id}.log`);
 mkdirSync(PUBLIC, { recursive: true }); mkdirSync(JOBS, { recursive: true }); mkdirSync(TASKS, { recursive: true });
+// A file the agents wrote, if it really is under WORK (through symlinks: the server runs as root, and an agent could link
+// avatar.png to the database or the env file).
+const REAL_WORK = realpathSync(WORK);
+const inWork = p => { try { p = realpathSync(p); return p.startsWith(REAL_WORK + sep) && statSync(p).isFile() ? p : null; } catch { return null; } };
+const MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf',
+  txt: 'text/plain', md: 'text/plain', csv: 'text/plain', json: 'text/plain' };
+const extOf = p => p.split('.').pop().toLowerCase();
+// A member's avatar: avatar.png / .jpg / .webp / .gif in its workspace (members draw or generate their own), at /avatar/<name>.
+const avatarOf = a => ['png', 'jpg', 'jpeg', 'webp', 'gif'].map(e => inWork(join(wsOf(a), `avatar.${e}`))).find(Boolean);
+const avatarV = a => { const p = avatarOf(a); return p ? Math.round(statSync(p).mtimeMs) : 0; };
 // The shared Python environment and caches stay out of the repo the server commits.
 const IGNORE = join(SHARED, '.gitignore');
 const ignored = existsSync(IGNORE) ? readFileSync(IGNORE, 'utf8').split('\n') : [];
@@ -227,6 +237,20 @@ const describe = a => `@${atOf(a)}${nickOf(a) ? ` called 「${nickOf(a)}」 here
 // Members (and Jev) see each other's stated stance and confidence, as in ReConcile's round table.
 const withStance = m => { const st = m.stance && JSON.parse(m.stance);
   return st ? `${m.text}\n[STANCE ${st.c}%] ${st.t}` : m.text; };
+// A member's [FILE] lines: files under WORK copied into the discussion's uploads, like the user's attachments.
+function attachFiles(a, chat, paths) {
+  const files = [], bad = [];
+  for (const f of paths) {
+    const p = inWork(resolve(wsOf(a), f)), size = p ? statSync(p).size : 0;
+    if (!p || size > 20e6) { bad.push(f); continue; }
+    const dir = join(UPLOADS, String(chat)), name = basename(p), stored = `${Date.now().toString(36)}-${name.replace(/[^\p{L}\p{N}._-]+/gu, '_')}`;
+    mkdirSync(dir, { recursive: true });
+    copyFileSync(p, join(dir, stored));
+    files.push({ file: `${chat}/${stored}`, name, size, type: MIME[extOf(name)] || '' });
+  }
+  if (bad.length) (rt[a].jobs ??= []).push({ kind: 'note', chat, summary: `Not attached (no such file under ${WORK}, or over 20 MB): ${bad.join(', ')}.` });
+  return files;
+}
 const attached = m => { const fs = m.files && JSON.parse(m.files);
   return fs?.length ? `\n(Attached: ${fs.map(f => `${join(UPLOADS, f.file)} (${f.name}, ${f.type || 'file'}, ${Math.ceil(f.size / 1024)} KB)`).join('; ')})` : ''; };
 const fmt = m => `#${m.id} ${who(m.sender)}${m.nick ? `「${m.nick}」` : ''}${m.dm ? ` → ${who(m.dm)} (${m.role === 'order' ? 'secret order' : 'private message'})` : ''}${m.role === 'outsider' ? ' (outsider: a fresh session of this model that thought it through before reading the discussion)' : ''}${m.reply_to ? ` (回复 #${m.reply_to})` : ''}: ${withStance(m)}${attached(m)}`;
@@ -824,6 +848,11 @@ Rules:
 - You may search the web, read web pages and read files to inform the discussion. ${toolRule(a, exec)}
 - The user may attach files or images; their paths come with the message. Open them with your file tools (images too,
   if you can see images); if you can't open one, say so rather than guess what it contains.
+- To attach a file or image to your message (the user sees images inline, the others get its path), put \`[FILE] <path>\`
+  on a line of its own: a file under ${WORK}, absolute or relative to your workspace; up to 4, 20 MB each.
+- Avatars: each member's avatar, shown next to its messages, is avatar.png (or .jpg / .webp / .gif) in its workspace:
+  ${memberOrder().filter(n => S.enabled[n]).map(n => `@${atOf(n)} ${avatarOf(n) || `${join(wsOf(n), 'avatar.png')} (none yet)`}`).join(', ')}.
+  ${exec ? 'You may draw or generate your own (square, about 256-512 px) and save it there; leave the others\' alone.' : 'You can\'t change yours in a read-only discussion.'}
 - This discussion's full transcript is ${archiveFile(chat)}. Earlier discussions are archived in ${ARCHIVE}: index.md lists
   them with their conclusions, <id>.md is one discussion. When the user refers to something discussed before, look it up
   there (read / search the files) instead of guessing.
@@ -938,13 +967,14 @@ async function startTurn(a, retried = false) {
       : r.flow === 'debate' && !cs.debate?.done ? [cs.debate?.pro, cs.debate?.con].find(s => s?.includes(a)) || [] : [];
     const dms = reply.dms.map(x => ({ to: dmTo(x.to), text: x.text })).filter(x => x.to !== a && players.includes(x.to))
       .slice(0, play?.phase === 'host' ? 12 : 3);
+    const files = attachFiles(a, chat, reply.files);
     text = reply.text || (jobs.length || todo.length ? '（启动后台任务）' : '');
     if (dms.length && /^PASS[.。!！]?$/i.test(text)) text = '';
-    if ((/^PASS[.。!！]?$/i.test(text) || (!text && !dms.length)) && !summary && !jobs.length && !todo.length) {
+    if ((/^PASS[.。!！]?$/i.test(text) || (!text && !dms.length && !files.length)) && !summary && !jobs.length && !todo.length) {
       rt[a].note = 'PASS'; text = '';
       logDecision('pass', a, { based_on: basedOn, latency_ms: res.ms });
     } else {
-      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, stance, notes, jobs, todo, dms, nick: reply.nick, seat, slot, model: model || 'default', role, done: Date.now() });
+      ready.push({ chat, agent: a, text, basedOn, ms: res.ms, hand, stance, notes, jobs, todo, dms, files, nick: reply.nick, seat, slot, model: model || 'default', role, done: Date.now() });
       // A browser is reading aloud: synthesize while the reply waits in the queue, so it plays without delay.
       if (speechOn() && Date.now() - ttsActiveAt < 120e3) synth(spoken(a, text), voiceOf(a)).catch(() => {});
       logDecision('ready', a, { based_on: basedOn, latency_ms: res.ms, detail: { hand, chars: text.length } });
@@ -999,7 +1029,7 @@ function publishOne(r) {
   // A game reply may be only private messages (no public text): m is then the last of them.
   const base = { chat_id: r.chat, sender: r.agent, kind: 'agent', based_on: r.basedOn, latency_ms: r.ms, model: r.model, mode: chatMode(r.chat).effective,
     nick: nickOf(r.agent, r.chat) };
-  const pub = r.text || !r.dms?.length ? insertMsg({ ...base, text: r.text, turn_no: turnNo, stale, role: r.role, stance: r.stance,
+  const pub = r.text || r.files?.length || !r.dms?.length ? insertMsg({ ...base, text: r.text, files: r.files, turn_no: turnNo, stale, role: r.role, stance: r.stance,
     seat: r.seat, note_ops: changed.length ? JSON.stringify(changed) : null }) : null;
   let m = pub;
   for (const d of r.dms || []) m = insertMsg({ ...base, text: d.text, dm: d.to });
@@ -1596,7 +1626,7 @@ function sendViewers(chat, ev) {
 }
 // All a shared page gets: the discussion's title and who is talking. No memory, settings or other discussions.
 const viewState = c => ({ type: 'state', now: Date.now(), chatId: c, title: q1('SELECT title FROM chats WHERE id=?', c)?.title || '',
-  members: memberOrder().map(n => ({ name: n, label: aliasOf(n), color: memberConfigs[n].color, enabled: S.enabled[n],
+  members: memberOrder().map(n => ({ name: n, label: aliasOf(n), color: memberConfigs[n].color, avatar: avatarV(n), enabled: S.enabled[n],
     status: c === chatId ? rt[n].status : 'idle', started: rt[n].started })) });
 function state() {
   const now = Date.now(), hideLive = userPlays(chatId);
@@ -1628,7 +1658,7 @@ function state() {
     jev: { on: jevOn(), assessing: jev.assessing, judging: jev.judging, ms: jev.ms, down: S.scheduler === 'jev' && !jevOn() },
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
     members: memberOrder().map(n => ({
-      name: n, label: aliasOf(n), at: atOf(n), nick: nickOf(n), alias: memberConfigs[n].label || '', defaultAlias: defaultAlias(n), color: memberConfigs[n].color, ...rt[n], enabled: S.enabled[n], model: S.models[n],
+      name: n, label: aliasOf(n), at: atOf(n), nick: nickOf(n), alias: memberConfigs[n].label || '', defaultAlias: defaultAlias(n), color: memberConfigs[n].color, avatar: avatarV(n), ...rt[n], enabled: S.enabled[n], model: S.models[n],
       configurable: memberConfigs[n].harness === 'opencode', harness: memberConfigs[n].harness, installed: harnesses[memberConfigs[n].harness]?.installed ?? true, live: hideLive ? '' : rt[n].live,
       harnessLabel: AGENTS[memberConfigs[n].harness].label,
       config: { baseURL: memberConfigs[n].baseURL || '',
@@ -1994,6 +2024,13 @@ a:hover{background:#f3f3f3}</style><h2 style="text-align:center;font-weight:500"
       svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', txt: 'text/plain', md: 'text/plain' }[p.split('.').pop().toLowerCase()];
     res.writeHead(200, { 'content-type': type ? `${type}; charset=utf-8` : 'application/octet-stream', 'cache-control': 'no-store',
       'content-security-policy': 'sandbox allow-scripts', 'access-control-allow-origin': '*', 'x-content-type-options': 'nosniff' });
+    return res.end(readFileSync(p));
+  }
+  const am = req.method === 'GET' && url.pathname.match(/^\/avatar\/([^/]+)$/);
+  if (am) {
+    const a = decodeURIComponent(am[1]), p = memberConfigs[a] && avatarOf(a);
+    if (!p) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { 'content-type': MIME[extOf(p)], 'content-security-policy': 'sandbox', 'x-content-type-options': 'nosniff', 'cache-control': 'max-age=86400' });
     return res.end(readFileSync(p));
   }
   const fm = req.method === 'GET' && url.pathname.match(/^\/files\/(\d+)\/([^/]+)$/);

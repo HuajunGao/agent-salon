@@ -207,7 +207,7 @@ export const EN = {
     'A fresh session of this member\'s model: it saw only your questions and the shared files, thought on its own first, then read the discussion and brought back only untried directions',
   '局外人': 'outsider', '这条发言更新了本场讨论的笔记': 'This message updated the discussion\'s notes', '笔记': 'notes',
   '本讨论中的第 {n} 次发言': 'Its message no. {n} in this discussion', '第 {n} 次': 'turn {n}',
-  '引用回复 #{id}': 'Reply quoting #{id}', '回复': 'Reply',
+  '引用回复 #{id}': 'Reply quoting #{id}', '回复': 'Reply', '看大图': 'View full size',
   '章鱼真的有九个“大脑”吗？查查资料，给出处。': 'Do octopuses really have nine "brains"? Look it up and cite your sources.',
   '如果从明天起人人每周只上四天班，世界会变好还是更乱？': 'If everyone worked a four-day week starting tomorrow, would the world get better or messier?',
   '辩题：AI 写的小说也应该能拿文学奖。': 'Motion: a novel written by AI should be allowed to win a literary prize.',

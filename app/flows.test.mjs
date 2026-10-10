@@ -47,6 +47,12 @@ test('notes: members keep them with [NOTE] lines', () => {
   assert.deepEqual(parseReply('观点。\n[NOTE add] 来源：RBA 9 月声明\n[STANCE 60%] 支持：会加息').stance, { t: '会加息', c: 60, l: '支持' });
 });
 
+test('[FILE] lines: a file to attach, taken off the text', () => {
+  const r = parseReply('画好了。\n[FILE] `out/pic.png`\n- [FILE] /tmp/a.txt\n别把 [FILE] x 当成附件');
+  assert.deepEqual(r.files, ['out/pic.png', '/tmp/a.txt']);
+  assert.equal(r.text, '画好了。\n\n别把 [FILE] x 当成附件');
+});
+
 // ---------- the flows on a real server (SQLite, fake harness that records each turn; no Jev key) ----------
 import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -94,6 +100,8 @@ async function server(t, slowFirst = 0) {
         : p.includes('取名测试') && h === 'claude' ? '我是老狐狸。\\n[NAME] 老狐狸\\n[NOTE add] 狐狸登场'
         : p.includes('取名测试') && h === 'codex' ? '我也取一个。\\n[NAME] claude2'
         : p.includes('改名吧') ? '好。\\n[NAME] 黑猫'
+        : p.includes('附件测试') && h === 'claude' ? (writeFileSync(o.cwd+'/pic.png', 'png'), writeFileSync(o.cwd+'/avatar.png', 'av'),
+            '画好了。\\n[FILE] pic.png\\n[FILE] ../../app/server.mjs')
         : h+' 发言。';
       const mate = p.includes('私信测试') && p.match(/Your teammates?: @(\\w+)/)?.[1]; // debate: a word to the teammate
       return {text: mate ? text+'\\n[DM @'+mate+'] '+h+' 的暗号' : text, sid:'s-'+h, ms:150}};`);
@@ -534,4 +542,18 @@ test('deleting the newest discussion: its ids are not reused, so a new discussio
   const s = await until(async () => { const x = await init(); return x.messages.some(m => m.kind === 'agent') && x; });
   assert.ok(s.messages.every(m => m.id > old));
   assert.equal(s.state.wrapped, false);
+});
+
+test('members attach files from the workspaces and have avatars', async t => {
+  const { post, init, until, url, turns } = await server(t);
+  await post('/api/send', { text: '附件测试 @claude' });
+  const m = await until(async () => (await init()).messages.find(x => x.sender === 'claude'));
+  assert.equal(m.text, '画好了。');
+  const fs = JSON.parse(m.files);
+  assert.deepEqual(fs.map(f => [f.name, f.type, f.size]), [['pic.png', 'image/png', 3]]); // nothing from outside the workspaces
+  assert.equal(await (await fetch(`${url}/files/${fs[0].file}`)).text(), 'png');
+  assert.equal(await (await fetch(`${url}/avatar/claude`)).text(), 'av');
+  assert.equal((await fetch(`${url}/avatar/codex`)).status, 404);
+  assert.ok((await init()).state.members.find(x => x.name === 'claude').avatar > 0);
+  assert.ok(turns()[0].p.includes('avatar.png'));
 });

@@ -103,7 +103,7 @@ that member with `role='outsider'` (its own chat session sees it too, `UNSEEN`),
 turn cap and Jev's filter. Don't feed it the notes: they hold the group's conclusions.
 Reply markers [HAND], [NOTE], [STANCE] count anywhere in a reply except inside backticks: agents put them mid-line,
 several on one line, or before appended text (Claude's "Sources:"); line-anchored parsing leaked them into the chat.
-[JOB] and [TASK] start real work, so they only count at the start of their own line (mid-sentence mentions of [JOB]
+[JOB], [TASK] and [FILE] act on files or start real work, so they only count at the start of their own line (mid-sentence mentions of [JOB]
 were run as shell commands). If markers keep multiplying, the next step is our own MCP server (actions as tool calls).
 
 Shared work (exec mode only): `WORK/_shared` is the members' git repo, its `public/` served at `/w/`; after every turn,
@@ -136,6 +136,12 @@ Names ([NAME] 老狐狸, any mode): a member names itself for one discussion, in
 ...former]}, stored on each message (`messages.nick`, shown as a tag that @-mentions it). Names are only resolved by
 `mentions` (@ and DM addressees): everything kept uses handles, so renames can't break state; former names keep working
 and can't be taken; clashes (incl. prefixes) refused, at most 6 per member, refusals told in the next turn.
+
+Members' files and avatars: a `[FILE] <path>` line attaches a file under WORK (resolved through symlinks: the server is
+root) to the message, copied into `data/uploads/<chat>/` like the user's attachments (`attachFiles`, at most 4, 20 MB).
+Each member's avatar is `avatar.png|jpg|webp|gif` in its workspace (`avatarOf`, served at `/avatar/<name>`, `members[].avatar`
+= its mtime); `intro()` lists everyone's avatar path. Markdown images show inline only from this server (`/w/`, `/files/`,
+`/avatar/`); other image URLs stay links.
 
 Saved prompts (★ by the input): settings key `prompts`, [{id, title, text, mode}], sent with `init` only (never to a
 shared link); using one fills the input (and sets its mode in an empty discussion, or in a new one via "新讨论").

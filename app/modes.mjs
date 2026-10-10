@@ -121,12 +121,13 @@ export function debateBrief(d, name, phase, motion, handle) {
 // A reply may end with note lines, then "[STANCE 70%] verdict: position" (confidence 0-100), then [HAND]:
 //   [NOTE add] text      [NOTE edit N3] text      [NOTE drop N3]
 // and "[JOB] shell command" lines (background jobs, at most 2 per reply), "[TASK] what to do" / "[TASK shared] what to do"
-// (a background coding session in the member's workspace / a worktree of the shared repo, at most 1 per reply).
+// (a background coding session in the member's workspace / a worktree of the shared repo, at most 1 per reply),
+// "[FILE] path" lines (a file from the workspaces attached to the message, at most 4).
 // Game mode: "[DM @handle] text" (a private message, which runs over the following lines up to the next marker line or
 // the end of the reply: a host DMs whole tables; at most 12 kept, the server allows players 3) and "[ACT] order" lines
 // (to the host).
 // Returns {text, hand, stance: {t, c, l?} | null, notes: [{op, n?, text?}], jobs: [cmd], tasks: [{desc, shared}],
-// dms: [{to, text}], acts: [order], nick: string | null}; those markers are removed from the text.
+// dms: [{to, text}], acts: [order], files: [path], nick: string | null}; those markers are removed from the text.
 // Agents don't keep to the layout: markers come mid-line ("…对上。[STANCE 94%] …"), several on one line
 // ("[HAND] [STANCE 70%] …"), or with more text after them (Claude appends "Sources:" after [HAND]). So a marker counts
 // anywhere except right after a backtick (`[HAND]` in code is talk about the protocol), and NOTE / STANCE / JOB take the
@@ -137,15 +138,16 @@ const JOB = /^[ \t>*_-]*\[JOB\][*_]*[ \t]*(.*)$/gim;
 const TASK = /^[ \t>*_-]*\[TASK(\s+shared)?\][*_]*[ \t:：]*(.*)$/gim;
 const MARK = String.raw`^[ \t>*_-]*\[`; // a marker at the start of a line
 const DM = new RegExp(MARK + String.raw`DM\s+@?([^\]\s]+)\s*\][*_]*[ \t:：]*([\s\S]*?)(?=` + MARK
-  + String.raw`(?:DM|ACT|PHASE|STATE|END|NOTE|STANCE|立场|HAND|JOB|TASK|NAME)\b|(?![\s\S]))`, 'gim');
+  + String.raw`(?:DM|ACT|PHASE|STATE|END|NOTE|STANCE|立场|HAND|JOB|TASK|NAME|FILE)\b|(?![\s\S]))`, 'gim');
 // "[NAME] 老狐狸": the name the member gives itself in this discussion (the last one counts). Also "[NAME 老狐狸]"
 // (deepseek wrote that and it showed as text).
 const NAME = /^[ \t>*_-]*\[NAME(?:[ \t:：]+([^\]\n]*))?\][*_]*[ \t:：]*(.*)$/gim;
 const ACT = /^[ \t>*_-]*\[ACT\][*_]*[ \t:：]*(.*)$/gim;
+const FILE = /^[ \t>*_-]*\[FILE\][*_]*[ \t:：]*(.*)$/gim;
 const STANCE = /(?<!`)[*_]*\[(?:STANCE|立场)\s*[:：]?\s*(\d{1,3})\s*%?\][ \t*_:：]*(.*)$/gim;
 const NOTE = /(?<!`)[*_]*\[NOTE\s+(add|edit|drop)(?:\s+N?(\d+))?\][ \t*_:：]*(.*)$/gim;
 export function parseReply(raw) {
-  const notes = [], jobs = [], tasks = [], dms = [], acts = [];
+  const notes = [], jobs = [], tasks = [], dms = [], acts = [], files = [];
   let nick = null;
   const hand = raw.search(HAND) >= 0;
   let text = raw.replace(HAND, '').replace(DM, (_, to, t) => {
@@ -155,6 +157,10 @@ export function parseReply(raw) {
   }).replace(NAME, (_, inner, n) => ((n = (inner?.trim() || n).trim().replace(/^["“「『']+|["”」』']+$/g, '').trim()) && (nick = n), '')).replace(ACT, (_, o) => (o.trim() && acts.push(o.trim().slice(0, 200)), '')).replace(JOB, (_, cmd) => {
     cmd = cmd.trim().replace(/^`+|`+$/g, '').trim();
     if (cmd && jobs.length < 2) jobs.push(cmd);
+    return '';
+  }).replace(FILE, (_, f) => {
+    f = f.trim().replace(/^[`"']+|[`"']+$/g, '').trim();
+    if (f && files.length < 4) files.push(f);
     return '';
   }).replace(TASK, (_, shared, desc) => {
     desc = desc.trim();
@@ -176,7 +182,7 @@ export function parseReply(raw) {
   });
   // Agents sometimes write a reply and then a stray "PASS" on its own last line: drop it (a bare PASS stays a pass).
   text = text.replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim().replace(/\n\s*PASS[.。!！]?$/i, '').trim();
-  return { text, hand, stance, notes, jobs, tasks, dms, acts, nick };
+  return { text, hand, stance, notes, jobs, tasks, dms, acts, files, nick };
 }
 
 // Applies note ops to a list [{n, text, ...}]: returns the ops that changed something, with the numbers they got.
