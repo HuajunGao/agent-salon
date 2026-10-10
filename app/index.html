@@ -566,7 +566,8 @@
         <label class="field">别名<input name="label" maxlength="60" placeholder="使用默认别名"><small id="alias-help">聊天中显示和 @ 用的名字（含空格时 @ 仍用标识），留空使用默认。</small></label>
         <label class="field" data-connection>@ 标识<input name="name" required pattern="[a-z][a-z0-9_]{0,31}" placeholder="例如 gpt"><small>用 @ 标识点名，创建后保持不变。</small></label>
       </div>
-      <div class="form-section" data-connection>
+      <label class="field" id="harness-field">运行工具<select name="harness"></select><small id="harness-help"></small></label>
+      <div class="form-section" data-connection id="opencode-section">
         <h3>模型连接 · OpenCode</h3>
         <label class="field">模型<select id="member-model-select" required><option value="">选择模型</option></select></label>
         <div class="form-help"><span id="model-list-status">选择 OpenCode 可用模型，或填写自定义模型。</span> <button type="button" id="refresh-models" style="color:var(--link)">刷新列表</button></div>
@@ -981,6 +982,21 @@ document.addEventListener('click', e => {
 // ---------- members ----------
 const openLive = new Set(), openMem = new Set();
 let orderingMembers = false, savingMemberOrder = false;
+// How to fix a member whose CLI is missing or logged out (the server runs CLIs as S.runAs when set).
+const CLI_HELP = {
+  claude: { install: 'npm install -g @anthropic-ai/claude-code', login: 'claude auth login' },
+  codex: { install: 'npm install -g @openai/codex', login: 'codex login --device-auth' },
+  agy: { install: '安装 Google Antigravity（自带 agy 命令）', login: 'agy' },
+  opencode: { install: 'npm install -g opencode-ai', login: 'opencode auth login' },
+};
+function cliHelp(m) {
+  const h = CLI_HELP[m.harness], as = S.runAs ? `（以 ${esc(S.runAs)} 用户：<code>su - ${esc(S.runAs)}</code>）` : '';
+  if (h && !m.installed) return `没有找到 ${esc(m.harnessLabel)} 的 CLI。在服务器上安装：<code>${esc(h.install)}</code>，一分钟内自动识别。`;
+  if (h && m.error === 'auth') return `${esc(m.harnessLabel)} 没有登录。在服务器终端${as}运行 <code>${esc(h.login)}</code>，然后点"请发言"重试。`;
+  if (m.error === 'quota') return '额度用完了：等额度恢复，或换一个模型。';
+  if (m.error === 'bad-model') return '这个模型用不了：在上面换一个模型。';
+  return esc(m.error);
+}
 function renderMembers() {
   return S.members.map((m, i) => {
     const qi = S.queue.findIndex(x => x.agent === m.name);
@@ -989,7 +1005,8 @@ function renderMembers() {
     else if (m.status === 'thinking') { st = `<span class="pulse">思考中</span> <span data-since="${m.started}"></span>`; cls = 'busy'; }
     else if (qi >= 0) { st = `已写好，排第 ${qi + 1}`; cls = 'busy'; }
     else if (m.hand) { st = `举手：${esc(m.hand.why)}`; cls = 'busy'; }
-    else if (m.error) { st = '出错'; cls = 'err'; }
+    else if (!m.installed) { st = '未安装'; cls = 'err'; }
+    else if (m.error) { st = m.error === 'auth' ? '未登录' : '出错'; cls = 'err'; }
     else if (m.note) st = esc(m.note);
     const right = S.settings.scheduler === 'jev' && m.nov != null
       ? `<span title="Jev 判断的新意 ${pct(m.nov)}（刻度是阈值）">${mini(m.nov, S.settings.noveltyMin, color(m.name))}</span>`
@@ -1010,7 +1027,7 @@ function renderMembers() {
           <span>本轮 ${m.sinceUser}/${S.settings.turnCap}</span><span>共 ${m.turns} 次</span>
           <span title="${esc(m.sid || '')}">会话 ${m.sid ? esc(m.sid.slice(0, 8)) : '未开始'}</span>
         </div>
-        ${m.error ? `<div class="err">${esc(m.error)}</div>` : ''}
+        ${!m.installed || m.error ? `<div class="err">${cliHelp(m)}</div>` : ''}
         ${m.live ? `<details data-live="${m.name}" ${openLive.has(m.name) ? 'open' : ''}><summary>实时输出</summary><pre>${esc(m.live)}</pre></details>` : ''}
         <button class="member-remove" data-member-delete="${m.name}">移除成员</button>
       </div>
@@ -1157,8 +1174,17 @@ $('#refresh-models').onclick = async () => {
   } catch (err) { $('#model-list-status').textContent = err.message; }
   finally { b.disabled = false; b.textContent = '刷新列表'; }
 };
+// A new member on another CLI uses its own login and default model (changed later from the member card).
+function syncHarness() {
+  const oc = aliasOnly || memberForm.elements.harness.value === 'opencode' || $('#harness-field').hidden;
+  $('#opencode-section').hidden = aliasOnly || !oc;
+  $('#harness-help').textContent = oc ? '' : '用这个 CLI 自己的登录和默认模型；添加后可在成员卡片里换模型。';
+  syncMemberModel();
+}
+memberForm.elements.harness.onchange = syncHarness;
 function syncMemberModel() {
   const custom = modelSelect.value === '__custom__';
+  if ($('#opencode-section').hidden) { modelSelect.required = memberForm.elements.model.required = false; memberForm.elements.model.value = ''; return; }
   $('#custom-model-field').hidden = aliasOnly || !custom;
   modelSelect.required = !aliasOnly;
   memberForm.elements.model.required = !aliasOnly && custom;
@@ -1180,6 +1206,12 @@ function editMember(name, onlyAlias = false) {
   memberForm.querySelector('details').open = false;
   for (const key of ['baseURL', 'protocol', 'persona']) memberForm.elements[key].value = m?.config?.[key] || (key === 'protocol' ? 'responses' : '');
   memberForm.elements.name.readOnly = !!m;
+  $('#harness-field').hidden = onlyAlias || !!m;
+  memberForm.elements.harness.innerHTML = Object.entries(S.harnesses || {}).filter(([, x]) => x.installed)
+    .map(([h, x]) => `<option value="${h}">${esc(x.label)}${h === 'opencode' ? '（任意模型和 API Key）' : '（用它自己的登录）'}</option>`).join('')
+    || '<option value="opencode">OpenCode</option>';
+  memberForm.elements.harness.value = m?.harness || (S.harnesses?.opencode?.installed ? 'opencode' : memberForm.elements.harness.value);
+  syncHarness();
   memberForm.elements.apiKey.placeholder = m?.config?.hasKey ? '已配置；留空保留，输入新 Key 替换' : '留空使用 OpenCode 已有凭据';
   $('#member-title').textContent = onlyAlias ? '编辑别名' : m ? '配置成员' : '邀请新成员';
   $('#member-subtitle').textContent = onlyAlias ? `给 @${m.name} 起个熟悉的名字。` : m ? `@${m.name} · OpenCode` : '给它一个名字，让新的视角加入讨论。';

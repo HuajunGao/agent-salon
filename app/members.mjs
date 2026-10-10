@@ -4,7 +4,15 @@ export function validateMember(body, previous = {}) {
   if (!/^[a-z][a-z0-9_]{0,31}$/.test(name) || ['user', 'system', 'moderator', '__proto__', 'constructor', 'prototype'].includes(name))
     throw new Error('标识须为小写字母开头的字母、数字或下划线（最多32位），且不能使用保留名称');
   const label = String(body.label || '').trim().slice(0, 60);
+  // The harness is chosen when the member is created: OpenCode (any provider, own endpoint and key) or another CLI
+  // with its own login, where an empty model means the CLI's default.
+  const harness = previous.harness || (['claude', 'codex', 'agy'].includes(body.harness) ? body.harness : 'opencode');
   const model = String(body.model || '').trim();
+  const color = /^#[\da-f]{6}$/i.test(body.color || '') ? body.color : '#7c5cff', persona = String(body.persona || '').slice(0, 4000);
+  if (harness !== 'opencode') {
+    if (!/^[\w.:/-]*$/.test(model)) throw new Error('模型 ID 格式不对');
+    return { name, label, model, baseURL: '', protocol: 'responses', apiKey: '', harness, color, persona };
+  }
   if (!/^[\w.-]+\/\S+$/.test(model)) throw new Error('模型须为 provider/model 格式');
   const baseURL = String(body.baseURL || '').trim();
   if (baseURL) {
@@ -14,9 +22,7 @@ export function validateMember(body, previous = {}) {
   const protocol = body.protocol || 'responses';
   if (!['responses', 'chat'].includes(protocol)) throw new Error('未知 API 协议');
   const apiKey = body.clearKey ? '' : String(body.apiKey || previous.apiKey || '');
-  return { name, label, model, baseURL, protocol, apiKey, harness: previous.harness || 'opencode',
-    color: /^#[\da-f]{6}$/i.test(body.color || '') ? body.color : '#7c5cff',
-    persona: String(body.persona || '').slice(0, 4000) };
+  return { name, label, model, baseURL, protocol, apiKey, harness, color, persona };
 }
 
 export function providerConfig(member, v2) {

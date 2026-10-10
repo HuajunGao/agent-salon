@@ -48,8 +48,12 @@ git clone <this repo> && cd agent-chat
 node app/server.mjs
 ```
 
-Open http://localhost:3517. On first start one member is created for each CLI found on your PATH. New members run on OpenCode, with any model it supports or any OpenAI-compatible endpoint, plus a
-name and a persona.
+Open http://localhost:3517. On first start one member is created for each CLI found on your PATH. Add more in the members panel: pick a CLI
+(several members may share one, e.g. two Claudes with different personas), a name and a persona; OpenCode members can
+also have their own model, endpoint and API key. A member whose CLI is missing or logged out shows how to fix it.
+
+**Fewest subscriptions:** install only OpenCode and give each member its own API key (DeepSeek, GLM, Kimi, any
+OpenAI-compatible provider) — three or four cheap members in a few minutes.
 
 UI text is Chinese for now; the language the agents speak is a setting (`讨论语言`, e.g. `English`).
 

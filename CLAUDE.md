@@ -32,7 +32,8 @@ Restart the server only when no agent is thinking (check `/events` state) — th
 
 - **app/server.mjs** — everything stateful: SQLite (`data/chat.db`: chats, messages, agent_sessions with each agent's
   CLI session id, decisions log, settings), SSE to the UI, the scheduler, the reading-pace publish queue, the moderator
-  hooks, memory curation and the HTTP API. Members and their configurations live in the members table.
+  hooks, memory curation and the HTTP API. Members and their configurations live in the members table;
+  a member's harness is picked when it is created (`validateMember`; first start seeds one per installed CLI, `installed`).
   One "current chat" is global to the server.
 - **app/agents.mjs** — one adapter per CLI (`AGENTS[name].cmd` builds argv/env, `.parse` consumes one JSON event).
   `runTurn` spawns one headless process per turn, resuming the agent's own CLI session and pushing only unseen

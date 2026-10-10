@@ -20,6 +20,13 @@ test('mentions follow configured identities, never assume a harness or model nam
   assert.equal(atToken('codex', 'GPT 6'), 'codex');
   assert.equal(atToken('codex', ''), 'codex');
 });
+test('a new member picks its CLI once; other CLIs use their own login and default model', () => {
+  const c = validateMember({ name: 'c2', harness: 'claude', model: '', apiKey: 'k', baseURL: 'https://x.example' });
+  assert.deepEqual([c.harness, c.model, c.apiKey, c.baseURL], ['claude', '', '', '']);
+  assert.equal(validateMember({ name: 'x', harness: 'hermes', model: 'a/b' }).harness, 'opencode');
+  assert.equal(validateMember({ name: 'c2', harness: 'opencode', model: 'a/b' }, { harness: 'claude' }).harness, 'claude');
+  assert.throws(() => validateMember({ name: 'x', model: '' }));
+});
 test('member validation preserves, replaces and clears credentials', () => {
   const body = { name: 'gpt', model: 'openai/example', baseURL: 'https://example.com/v1' };
   assert.equal(validateMember(body, { apiKey: 'secret' }).apiKey, 'secret');

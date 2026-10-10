@@ -172,6 +172,11 @@ if (NAMES.includes('glm') && !NAMES.includes('opencode')) {
 }
 const modelOf = a => S.models[a] || 'default';
 let modelLists = {};  // read once from each CLI at startup
+// Which CLIs are installed (the UI offers them for new members and shows how to install the missing ones).
+const harnessList = () => Object.fromEntries(Object.entries(AGENTS).filter(([, x]) => !x.optional)
+  .map(([h, x]) => [h, { label: x.label, installed: installed(h) }]));
+let harnesses = harnessList();
+setInterval(() => { harnesses = harnessList(); }, 60e3).unref(); // a CLI installed while running shows up within a minute
 listModels().then(l => { modelLists = l; send(init()); });
 const saveSettings = () => run(`INSERT OR REPLACE INTO settings VALUES('s', ?)`, JSON.stringify(S));
 const memberOrder = () => [...new Set([...(Array.isArray(S.memberOrder) ? S.memberOrder : []), ...NAMES])].filter(n => NAMES.includes(n));
@@ -1554,7 +1559,7 @@ const viewState = c => ({ type: 'state', now: Date.now(), chatId: c, title: q1('
 function state() {
   const now = Date.now();
   return {
-    type: 'state', now, profile: PROFILE, chatId, paused, mod, wrapped: !!wrapRound && wrapRound === lastUserId(chatId), settings: S, readLeft: Math.max(0, readUntil - now),
+    type: 'state', now, profile: PROFILE, chatId, paused, mod, wrapped: !!wrapRound && wrapRound === lastUserId(chatId), settings: S, harnesses, runAs: RUNAS?.name || '', readLeft: Math.max(0, readUntil - now),
     holding: now - typingAt < 15e3, speaking: now - speakingAt < 20e3,
     speech: { on: speechOn(), models: ttsModels(), defaults: Object.fromEntries(NAMES.map(n => [n, defaultVoice(NAMES.indexOf(n))])) },
     chats: listChats(),
@@ -1581,7 +1586,7 @@ function state() {
     queue: ready.filter(r => r.chat === chatId).map(r => ({ agent: r.agent, basedOn: r.basedOn })),
     members: memberOrder().map(n => ({
       name: n, label: aliasOf(n), at: atOf(n), nick: nickOf(n), alias: memberConfigs[n].label || '', defaultAlias: defaultAlias(n), color: memberConfigs[n].color, ...rt[n], enabled: S.enabled[n], model: S.models[n],
-      configurable: memberConfigs[n].harness === 'opencode', harness: memberConfigs[n].harness,
+      configurable: memberConfigs[n].harness === 'opencode', harness: memberConfigs[n].harness, installed: harnesses[memberConfigs[n].harness]?.installed ?? true,
       harnessLabel: AGENTS[memberConfigs[n].harness].label,
       config: { baseURL: memberConfigs[n].baseURL || '',
         protocol: memberConfigs[n].protocol || 'responses', persona: memberConfigs[n].persona || '', hasKey: !!memberConfigs[n].apiKey },
@@ -1618,7 +1623,7 @@ const routes = {
     send(init());
   },
   async 'POST /api/models/refresh'() {
-    modelLists = await listModels();
+    modelLists = await listModels(); harnesses = harnessList();
     send(init());
     return { modelLists };
   },
@@ -1636,6 +1641,7 @@ const routes = {
     if (memberConfigs[name] && memberConfigs[name].harness !== 'opencode') throw new Error('该标识已由其他运行工具的成员使用');
     if (rt[name]?.status === 'thinking' || ready.some(r => r.agent === name)) throw new Error('请等该成员完成本轮并发布后再修改配置');
     const m = validateMember(body, memberConfigs[name]);
+    if (!memberConfigs[name] && harnesses[m.harness] && !harnesses[m.harness].installed) throw new Error(`没有找到 ${AGENTS[m.harness].label} 的 CLI，请先安装`);
     checkAlias(name, m.label);
     run('INSERT OR REPLACE INTO members VALUES(?,?)', name, JSON.stringify(m));
     memberConfigs[name] = m;

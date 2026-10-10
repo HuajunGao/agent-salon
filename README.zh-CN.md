@@ -42,8 +42,12 @@ git clone <本仓库> && cd agent-chat
 node app/server.mjs
 ```
 
-打开 http://localhost:3517。首次启动时，会为 PATH 里找得到的每个 CLI 各建一个成员。
-新加的成员走 OpenCode，可以用它支持的任何模型或 OpenAI 兼容接口，并自定名字和人设。
+打开 http://localhost:3517。首次启动时，会为 PATH 里找得到的每个 CLI 各建一个成员。在成员面板里可以继续添加：选一个 CLI（几个成员可以共用一个，
+比如两个人设不同的 Claude），起名字、写人设；OpenCode 成员还能单独配置模型、API 地址和 Key。
+CLI 没装或没登录的成员，会直接提示怎么解决。
+
+**订阅最少的玩法：** 只装 OpenCode，给每个成员配一个 API Key（DeepSeek、GLM、Kimi，或任何 OpenAI 兼容服务商），
+几分钟就能凑齐三四个便宜的成员。
 
 成员讨论用的语言是一个设置项（"讨论语言"，例如 `English`）。
 
