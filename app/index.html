@@ -1456,7 +1456,8 @@ function renderMode() {
     .map(([v, l]) => `<option value="${v}" ${v === d.mode ? 'selected' : ''}>${l}</option>`).join(''));
 }
 $('#mode').onchange = e => post('/api/chat/mode', { id: S.chatId, mode: e.target.value });
-const newChat = () => { post('/api/chat/new'); $('#input').focus(); };
+// on a phone the list drawer closes, as when picking a discussion, so the input is ready to type in
+const newChat = () => { post('/api/chat/new'); if (phone()) closeDrawers(); $('#input').focus(); };
 $('#newChat').onclick = newChat;
 // Both side panels collapse; the choice is remembered, narrow windows start collapsed. On a phone they are drawers:
 // closed on load, one at a time, and tapping outside closes them.
