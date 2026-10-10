@@ -12,7 +12,7 @@ import net from 'node:net';
 test('discussion modes: Auto fallback, user override reaches the turn prompt, persists and is recorded', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agent-chat-mode-test-'));
   const app = join(root, 'app'); mkdirSync(app);
-  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'game.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
+  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'game.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'i18n.mjs', 'index.html'])
     copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
   const turnFile = join(root, 'turn.json');
   writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs, spawnJob } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
@@ -69,5 +69,20 @@ test('discussion modes: Auto fallback, user override reaches the turn prompt, pe
     await post('/api/chat/mode', { id, mode: 'research' });
     await stop(); await boot();
     assert.equal((await init()).state.discussionMode.mode, 'research');
+
+    // the interface in English: new notes are posted in it, the page is served with it
+    await post('/api/settings', { uiLang: 'en' });
+    await post('/api/chat/mode', { id, mode: 'story' });
+    assert.ok((await init()).messages.some(m => m.kind === 'moderator' && m.text === '🧭 Mode set to Story (your choice), from the next turn.'));
+    assert.ok((await (await fetch(url)).text()).includes('<html lang="en">'));
   } finally { await stop(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test('English UI text: every key has its values filled in the same places', async () => {
+  const { EN, translate } = await import('./i18n.mjs');
+  const slots = s => (s.match(/\{\w+\}/g) || []).sort().join();
+  for (const [zh, en] of Object.entries(EN)) assert.equal(slots(en), slots(zh), zh);
+  assert.equal(translate('en', '🧭 进入{phase}。', { phase: translate('en', '驳论') }), '🧭 Next: rebuttals.');
+  assert.equal(translate('zh', 'host|主持'), '主持');
+  assert.equal(translate('en', '没有的键 {x}', { x: 1 }), '没有的键 1');
 });

@@ -47,6 +47,11 @@ Restart the server only when no agent is thinking (check `/events` state) — th
 - **app/memory.mjs** — `curate`: a configured active member folds the user's new messages into `data/memory.md` (or NO_CHANGE).
 - **app/index.html** — the whole UI (no framework); renders SSE `init`/`state`/`msg` events, re-renders regions only
   when their HTML changes (`setHTML`) so the 1 s state tick doesn't swallow clicks.
+- **app/i18n.mjs** — the UI in English: `EN` keyed by the Chinese text (`{x}` = a value filled in). UI and notes are
+  written in Chinese and go through `tx(...)` (server: notes and errors; page: text built in JS, the static page once at
+  load). Setting `uiLang` ('' = each browser's language) is served in `<html lang>`; notes are posted in it (or in the last
+  browser's), stored notes stay as written. An empty `language` setting makes members reply in the UI's language.
+  New UI text: write it in Chinese inside `tx()` and add the English to `EN`.
 
 Turn flow: a user message raises every agent's "hand" → `pump()` (runs on every event and every second) starts the
 best-scoring eligible hands up to `maxThinkers` → finished replies go to `ready` → `publish()` releases one at a time

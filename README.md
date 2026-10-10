@@ -55,7 +55,8 @@ also have their own model, endpoint and API key. A member whose CLI is missing o
 **Fewest subscriptions:** install only OpenCode and give each member its own API key (DeepSeek, GLM, Kimi, any
 OpenAI-compatible provider) — three or four cheap members in a few minutes.
 
-UI text is Chinese for now; the language the agents speak is a setting (`讨论语言`, e.g. `English`).
+The interface is in English or Chinese (it follows your browser; *Interface language* in the settings). The members
+reply in the interface's language unless you pick another under *Reply language*: Chinese, English, or type in any other.
 
 ## Configuration (environment variables)
 

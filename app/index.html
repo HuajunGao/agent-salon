@@ -420,7 +420,8 @@
   .settings input:not([type=checkbox]), .settings select { height:24px; border:1px solid transparent; border-radius:var(--r-sm); background:var(--surface);
     padding:0 6px; font-size:var(--t-sm); color:var(--ink); box-shadow:0 0 0 1px var(--hair); }
   .settings input[type=number] { width:64px; text-align:right; }
-  .settings #s-language { width:80px; }
+  .settings #s-language { display:block; width:150px; margin:2px var(--s1) 4px auto; }
+  .settings #s-language[hidden] { display:none; }
   .settings select { max-width:150px; }
 
   /* a shared discussion, read-only: just the conversation */
@@ -428,6 +429,7 @@
   body.viewer .msg .rp { display:none !important; }
   body.viewer .bar .title { cursor:default; }
   body.viewer .bar .title:hover { background:none; }
+  html[lang=en] .msg.speaking .gut::after { content:"Reading"; }
   body.viewer .bar::after { content:"只读"; order:9; margin-left:auto; flex:none; font-size:var(--t-xs); color:var(--ink-3); }
   body.viewer #msgs { padding-bottom:var(--s6); }
   /* touch screens have no hover: show the actions hover would reveal (on the current discussion), bigger rows */
@@ -444,6 +446,7 @@
   }
   /* narrow windows (phones, half-screen windows): the side panels become drawers over the conversation, one at a
      time, closed on load; tap outside or the panel's own toggle to close */
+  html[lang=en] body.viewer .bar::after { content:"Read-only"; }
   #scrim, .righttop { display:none; }
   @media (max-width: 900px) {
     html, body { height:100dvh; }
@@ -530,7 +533,9 @@
   <div class="settings" id="settings-body">
     <div class="grp">
       <div class="gl">节奏</div>
-      <label>讨论语言 <input id="s-language"></label>
+      <label>界面语言 <select id="s-uiLang"><option value="">自动</option><option value="zh">中文</option><option value="en">English</option></select></label>
+      <label title="成员回复用的语言">讨论语言 <select id="s-langpick"></select></label>
+      <input id="s-language" hidden aria-label="讨论语言">
       <label title="自你上一条消息起，每人最多发言几次">每人每轮发言上限 <input id="s-turnCap" type="number" min="1"></label>
       <label>阅读速度（字/分钟） <input id="s-readSpeed" type="number" min="50" step="50"></label>
       <label>同时思考人数 <input id="s-maxThinkers" type="number" min="1" max="4"></label>
@@ -591,8 +596,40 @@
   </form>
 </dialog>
 <script src="/vendor/marked.umd.js"></script>
+<script src="/i18n.js"></script>
 <script>
 const $ = s => document.querySelector(s);
+// UI language: the server's setting (served in <html lang>), else the browser's. Text written in Chinese is looked up
+// in EN (app/i18n.mjs): the static page once here, text built in JS through tx ({x} = a value filled in).
+const LANG = document.documentElement.lang || (/^zh\b/i.test(navigator.language) ? 'zh' : 'en');
+document.documentElement.lang = LANG;
+const tx = (s, v = {}) => String(LANG === 'en' && EN[s] || String(s ?? '').replace(/^\w+\|/, '')).replace(/\{(\w+)\}/g, (m, k) => (k in v ? v[k] : m));
+if (LANG === 'en') {
+  const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let n; (n = walk.nextNode());) if (n.parentElement.tagName !== 'SCRIPT') n.data = n.data.replace(/^(\s*)([\s\S]*?)(\s*)$/, (_, a, s, b) => a + tx(s) + b);
+  for (const el of document.querySelectorAll('[title],[placeholder],[aria-label]'))
+    for (const a of ['title', 'placeholder', 'aria-label']) if (el.hasAttribute(a)) el.setAttribute(a, tx(el.getAttribute(a)));
+}
+// Reply language (S.language; '' = the UI's): Chinese, English, or any language typed in after "other".
+$('#s-langpick').innerHTML = [['zh', tx('reply|中文')], ['en', tx('reply|英文')], ['other', tx('其他（请输入）')]]
+  .map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+$('#s-language').placeholder = tx('例如 日本語');
+const langPick = l => (!l ? LANG : /^(中文|汉语|简体中文|chinese|zh)$/i.test(l) ? 'zh' : /^(英文|英语|english|en)$/i.test(l) ? 'en' : 'other');
+let langOther = false; // "other" picked, the language not typed in yet
+function syncLang() {
+  const l = S.settings.language, pick = langOther ? 'other' : langPick(l);
+  $('#s-langpick').value = pick;
+  $('#s-language').hidden = pick !== 'other';
+  if (!langOther && document.activeElement !== $('#s-language')) $('#s-language').value = pick === 'other' ? l : '';
+}
+const setLang = language => { langOther = false; S.settings.language = language; syncLang(); post('/api/settings', { language }); };
+$('#s-langpick').onchange = e => {
+  if (e.target.value !== 'other') return setLang(e.target.value === 'zh' ? '中文' : 'English');
+  langOther = true; syncLang(); $('#s-language').focus();
+};
+$('#s-language').onchange = e => { const v = e.target.value.trim(); if (v) setLang(v); };
+// debate seats are stored as written in Chinese (正方一辩, 评委)
+const seatName = s => (LANG === 'zh' ? s : s.replace(/^(正方|反方)(.)辩$/, (_, side, n) => `${tx(side)} ${'一二三四五六七八'.indexOf(n) + 1}`).replace(/^评委$/, tx('评委')));
 // A shared link (/s/<code>) shows one discussion read-only.
 const SHARED = location.pathname.match(/^\/s\/([\w-]+)/)?.[1];
 if (SHARED) document.body.classList.add('viewer');
@@ -600,7 +637,7 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '
 const post = (url, body = {}) => fetch(url, { method: 'POST', body: JSON.stringify(body) });
 let messages = [], S = null, replyTo = null, clockSkew = 0, jumpTo = null;
 const member = n => S?.members.find(m => m.name === n);
-const label = n => n === 'user' ? '我' : n === 'system' ? '系统' : n === 'moderator' ? '主持人' : (member(n)?.label || n);
+const label = n => n === 'user' ? tx('我') : n === 'system' ? tx('系统') : n === 'moderator' ? tx('主持人') : (member(n)?.label || n);
 // Agent accents: used only for avatars, the message rail and mini-bars.
 const color = n => member(n)?.color || 'var(--ink-3)';
 const av = n => `<span class="av" style="--c:${color(n)}">${esc(label(n).slice(0, 2))}</span>`;
@@ -613,7 +650,7 @@ const mini = (v, tick, c) => `<span class="mini" ${c ? `style="--c:${c}"` : ''}>
 
 // Hovering a #N reference previews that message, so numbers can be followed without clicking.
 const refTitle = id => { const m = messages.find(x => x.id === +id);
-  return m ? esc(`#${id} ${label(m.sender)}：${m.text.replace(/\s+/g, ' ').slice(0, 90)}${m.text.length > 90 ? '…' : ''}`) : `#${id}`; };
+  return m ? esc(`#${id} ${label(m.sender)}${tx('：')}${m.text.replace(/\s+/g, ' ').slice(0, 90)}${m.text.length > 90 ? '…' : ''}`) : `#${id}`; };
 const ref = id => `<a class="ref" data-id="${id}" title="${refTitle(id)}">#${id}</a>`;
 function linkRefs(t) {
   return esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`\n]+)`/g, '<code>$1</code>')
@@ -658,43 +695,43 @@ function renderMsg(m) {
   el.className = `msg ${m.kind}`; el.id = 'm' + m.id;
   if (m.kind === 'agent') el.style.setProperty('--c', color(m.sender));
   if (m.kind === 'system') { el.innerHTML = `<span>${linkRefs(m.text)}</span>`; el.title = `#${m.id}`; return el; }
-  if (m.kind === 'moderator') { el.innerHTML = `<span>${linkRefs(m.text)}</span>`; el.title = `主持人 ${when(m.created_at)}`; return el; }
+  if (m.kind === 'moderator') { el.innerHTML = `<span>${linkRefs(m.text)}</span>`; el.title = `${tx('主持人')} ${when(m.created_at)}`; return el; }
   const talk = messages.filter(x => x.kind === 'user' || x.kind === 'agent');
   const idx = talk.findIndex(x => x.id === m.id);
   const between = m.based_on != null ? talk.slice(0, idx).filter(x => x.id > m.based_on) : [];
   const gut = `<div class="gut"><span class="who">${esc(label(m.sender))}</span>
-    <small>${hm(m.created_at)} <span class="num" title="消息编号，正文里的 #${m.id} 指的就是这条">#${m.id}</span></small></div>`;
+    <small>${hm(m.created_at)} <span class="num" title="${tx('消息编号，正文里的 #{id} 指的就是这条', { id: m.id })}">#${m.id}</span></small></div>`;
   const hd = [];
   // the name the member gave itself in this discussion: click to @ it
-  if (m.nick) hd.unshift(`<button class="tag nick" data-at="${esc(m.nick)}" title="它在这场讨论里给自己取的名字，点一下 @ 它">${esc(m.nick)}</button>`);
+  if (m.nick) hd.unshift(`<button class="tag nick" data-at="${esc(m.nick)}" title="${tx('它在这场讨论里给自己取的名字，点一下 @ 它')}">${esc(m.nick)}</button>`);
   if (m.model) hd.push(`<span class="model" title="${esc(m.model)}">${esc(m.model)}</span>`);
-  if (m.latency_ms) hd.push(`<span title="思考用时">想了 ${Math.round(m.latency_ms / 1000)}s</span>`);
+  if (m.latency_ms) hd.push(`<span title="${tx('思考用时')}">${tx('想了 {s}s', { s: Math.round(m.latency_ms / 1000) })}</span>`);
   const st = m.stance && JSON.parse(m.stance);
-  if (st) hd.push(`<span class="dim" title="立场：${esc(st.l ? `${st.l}：${st.t}` : st.t)}">${st.l ? `${esc(st.l)} ` : ''}${st.c}%</span>`);
-  if (m.dm) hd.unshift(m.role === 'order' ? `<span class="tag warn" title="秘密指令：只有主持人看得到">🔒 秘密指令给 ${esc(label(m.dm))}</span>`
-    : `<span class="tag warn" title="私信：只有收信人看得到（你全都看得到）">🔒 私信给 ${esc(label(m.dm))}</span>`);
-  if (m.reply_to) hd.push(`<span class="tag">回复 ${ref(m.reply_to)}</span>`);
-  if (m.based_on != null && between.length) hd.push(`<span class="dim" title="开始思考时看到的最后一条是 #${m.based_on}，之后又有 ${between.length} 条">基于 ${ref(m.based_on)} +${between.length}</span>`);
-  if (m.stale) hd.push(`<span class="tag warn" title="这条回复写于你的新消息之前">写于你的新消息之前</span>`);
-  if (m.role === 'devil') hd.push(`<span class="tag devil" title="主持人请它站到对立面">唱反调</span>`);
-  if (m.role === 'summary') hd.push(`<span class="tag summary">总结</span>`);
-  if (m.role === 'outsider') hd.push(`<span class="tag" title="这位成员的模型开了一个新会话：只看你的提问和共享文件，先独立想，再读讨论记录，只带回没试过的方向">局外人</span>`);
-  if (m.seat) hd.unshift(`<span class="tag${m.role === 'verdict' ? ' summary' : ''}">${esc(m.seat)}${m.role === 'verdict' ? '评判' : ''}</span>`);
+  if (st) hd.push(`<span class="dim" title="${tx('立场：')}${esc(st.l ? `${st.l}：${st.t}` : st.t)}">${st.l ? `${esc(st.l)} ` : ''}${st.c}%</span>`);
+  if (m.dm) hd.unshift(m.role === 'order' ? `<span class="tag warn" title="${tx('秘密指令：只有主持人看得到')}">${tx('🔒 秘密指令给 {who}', { who: esc(label(m.dm)) })}</span>`
+    : `<span class="tag warn" title="${tx('私信：只有收信人看得到（你全都看得到）')}">${tx('🔒 私信给 {who}', { who: esc(label(m.dm)) })}</span>`);
+  if (m.reply_to) hd.push(`<span class="tag">${tx('回复 {ref}', { ref: ref(m.reply_to) })}</span>`);
+  if (m.based_on != null && between.length) hd.push(`<span class="dim" title="${tx('开始思考时看到的最后一条是 #{id}，之后又有 {n} 条', { id: m.based_on, n: between.length })}">${tx('基于 {ref} +{n}', { ref: ref(m.based_on), n: between.length })}</span>`);
+  if (m.stale) hd.push(`<span class="tag warn" title="${tx('这条回复写于你的新消息之前')}">${tx('写于你的新消息之前')}</span>`);
+  if (m.role === 'devil') hd.push(`<span class="tag devil" title="${tx('主持人请它站到对立面')}">${tx('唱反调')}</span>`);
+  if (m.role === 'summary') hd.push(`<span class="tag summary">${tx('总结')}</span>`);
+  if (m.role === 'outsider') hd.push(`<span class="tag" title="${tx('这位成员的模型开了一个新会话：只看你的提问和共享文件，先独立想，再读讨论记录，只带回没试过的方向')}">${tx('局外人')}</span>`);
+  if (m.seat) hd.unshift(`<span class="tag${m.role === 'verdict' ? ' summary' : ''}">${esc(m.role === 'verdict' ? tx('{seat}评判', { seat: seatName(m.seat) }) : seatName(m.seat))}</span>`);
   const ops = m.note_ops && JSON.parse(m.note_ops);
-  if (ops?.length) hd.push(`<span title="这条发言更新了本场讨论的笔记">笔记 ${ops.map(o => `${{ add: '+', edit: '~', drop: '−' }[o.op]}N${o.n}`).join(' ')}</span>`);
-  if (m.turn_no) hd.push(`<span class="dim" title="本讨论中的第 ${m.turn_no} 次发言">第 ${m.turn_no} 次</span>`);
+  if (ops?.length) hd.push(`<span title="${tx('这条发言更新了本场讨论的笔记')}">${tx('笔记')} ${ops.map(o => `${{ add: '+', edit: '~', drop: '−' }[o.op]}N${o.n}`).join(' ')}</span>`);
+  if (m.turn_no) hd.push(`<span class="dim" title="${tx('本讨论中的第 {n} 次发言', { n: m.turn_no })}">${tx('第 {n} 次', { n: m.turn_no })}</span>`);
   el.innerHTML = `${gut}<div><div class="meta">${hd.join('')}</div><div class="tx">${md(m.text)}</div>${renderFiles(m)}</div>`
-    + `<span class="rp" data-reply="${m.id}" title="引用回复 #${m.id}">回复</span>`;
+    + `<span class="rp" data-reply="${m.id}" title="${tx('引用回复 #{id}', { id: m.id })}">${tx('回复')}</span>`;
   return el;
 }
 
-const IDEAS = ['单元测试应该 mock 数据库，还是连真实的测试库？', '三个人做内部工具，后端选 Node 还是 Go？', '什么时候值得把单体应用拆成微服务？'];
+const IDEAS = ['单元测试应该 mock 数据库，还是连真实的测试库？', '三个人做内部工具，后端选 Node 还是 Go？', '什么时候值得把单体应用拆成微服务？'].map(s => tx(s));
 function emptyState() {
   const names = S?.members.filter(m => m.enabled).map(m => m.name) || [];
   return `<div class="empty">
     <div class="members">${names.map(av).join('')}</div>
-    <h1>开一场讨论</h1>
-    <p>${names.length ? `提一个问题，${names.length} 位参与成员会各自给出观点、互相补充和反驳；主持人安排发言顺序，观点收敛时请人总结。你随时可以插话。` : '添加或启用一位成员，开始讨论。'}</p>
+    <h1>${tx('开一场讨论')}</h1>
+    <p>${names.length ? tx('提一个问题，{n} 位参与成员会各自给出观点、互相补充和反驳；主持人安排发言顺序，观点收敛时请人总结。你随时可以插话。', { n: names.length }) : tx('添加或启用一位成员，开始讨论。')}</p>
     <div class="ideas">${IDEAS.map(t => `<button class="idea" data-idea="${esc(t)}">${esc(t)}</button>`).join('')}</div>
   </div>`;
 }
@@ -703,10 +740,10 @@ thinkingEl.onclick = e => e.target.closest('[data-go]') && post('/api/opening/go
 thinkingEl.setAttribute('aria-live', 'polite');
 function renderThinking() {
   // after Jev picks the mode for a new discussion, a few seconds to switch it before anyone starts
-  const open = S.opening ? `<span>⏳ <span data-left="${S.opening}"></span> 后按「${MODE_LABEL[S.discussionMode.effective]}」开始，不对就在顶栏换模式`
-    + `<button class="rowbtn" data-go>现在开始</button></span>` : '';
+  const open = S.opening ? `<span>⏳ ${tx('<span data-left="{t}"></span> 后按「{mode}」开始，不对就在顶栏换模式', { t: S.opening, mode: MODE_LABEL[S.discussionMode.effective] })}`
+    + `<button class="rowbtn" data-go>${tx('现在开始')}</button></span>` : '';
   const html = open + S.members.filter(m => m.status === 'thinking').map(m => `<span style="--c:${color(m.name)}">`
-    + `<span class="dot"></span><b>${esc(m.label)}</b><span class="pulse">正在思考</span><span data-since="${m.started}"></span></span>`).join('');
+    + `<span class="dot"></span><b>${esc(m.label)}</b><span class="pulse">${tx('正在思考')}</span><span data-since="${m.started}"></span></span>`).join('');
   if (thinkingEl.dataset.html !== html) { thinkingEl.innerHTML = thinkingEl.dataset.html = html; }
   if (messages.length && thinkingEl.parentNode !== $('#msgs')) $('#msgs').appendChild(thinkingEl);
 }
@@ -733,7 +770,7 @@ let modelLists = {};
 function modelOptions(m) {
   const list = modelLists[m.name] || modelLists[m.harness] || [];
   const opts = list.some(x => x.id === m.model) ? list : [{ id: m.model, name: m.model || 'default' }, ...list];
-  return opts.map(x => `<option value="${esc(x.id)}" ${x.id === m.model ? 'selected' : ''}>${esc(x.name === x.id ? x.id : `${x.name} (${x.id || 'default'})`)}</option>`).join('');
+  return opts.map(x => `<option value="${esc(x.id)}" ${x.id === m.model ? 'selected' : ''}>${esc(x.name === x.id ? x.id : `${tx(x.name)} (${x.id || 'default'})`)}</option>`).join('');
 }
 
 // ---------- history ----------
@@ -746,13 +783,13 @@ const ICON = {
 function renderHistory() {
   if (searchHits) {
     const re = new RegExp(searchQ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-    return setHTML('#history', `<section class="pane">${pane('hist:search', '搜索结果', { count: searchHits.length, body: searchHits.length
+    return setHTML('#history', `<section class="pane">${pane('hist:search', tx('搜索结果'), { count: searchHits.length, body: searchHits.length
       ? `<div>${searchHits.map(h => `<div class="hit" data-hit="${h.chat_id}:${h.id}">
-      <div class="ht">${esc(h.title)}</div><div>${esc(label(h.sender))}：${esc(h.snippet).replace(re, '<mark>$&</mark>')}</div></div>`).join('')}</div>`
-      : '<div class="memempty">没有找到匹配的讨论</div>' })}</section>`);
+      <div class="ht">${esc(chatTitle(h.title))}</div><div>${esc(label(h.sender))}${tx('：')}${esc(h.snippet).replace(re, '<mark>$&</mark>')}</div></div>`).join('')}</div>`
+      : `<div class="memempty">${tx('没有找到匹配的讨论')}</div>` })}</section>`);
   }
   const day = c => { const d = utc(c.last || c.created_at), t = new Date(); t.setHours(0, 0, 0, 0);
-    return d >= t ? '今天' : d >= new Date(t - 864e5) ? '昨天' : d >= new Date(t - 6 * 864e5) ? '最近 7 天' : '更早'; };
+    return tx(d >= t ? '今天' : d >= new Date(t - 864e5) ? '昨天' : d >= new Date(t - 6 * 864e5) ? '最近 7 天' : '更早'); };
   // Grouped by recency, or by mode (newest first within each); by recency each row names its mode. Each group is a
   // section like the right panel's, folded the same way.
   const KINDS = Object.keys(MODE_LABEL), byKind = histGroup === 'kind';
@@ -760,10 +797,10 @@ function renderHistory() {
   const chats = byKind ? [...S.chats].sort((x, y) => rank(x) - rank(y)) : S.chats;
   const groups = new Map();
   for (const c of chats) {
-    const gg = byKind ? MODE_LABEL[c.kind] || '未分类' : day(c);
-    groups.set(gg, (groups.get(gg) || '') + `<div class="chat ${c.id === S.chatId ? 'on' : ''}" data-chat="${c.id}" title="${esc(c.title)}${c.preview ? `\n${esc(c.preview)}` : ''}\n${c.n} 条消息">
-      <span class="n" title="讨论编号：消息里写“讨论 ${c.id}”，成员就能在存档里找到它">${c.id}</span><span class="t">${esc(c.title)}</span>${!byKind && c.kind ? `<span class="k">${MODE_LABEL[c.kind]}</span>` : ''}<span class="m">${when(c.last || c.created_at)}</span>
-      <span class="acts"><span data-rename="${c.id}" title="重命名">${ICON.rename}</span><span data-export="${c.id}" title="导出 Markdown">${ICON.export}</span><span data-del="${c.id}" title="删除">${ICON.del}</span></span>
+    const gg = byKind ? MODE_LABEL[c.kind] || tx('未分类') : day(c);
+    groups.set(gg, (groups.get(gg) || '') + `<div class="chat ${c.id === S.chatId ? 'on' : ''}" data-chat="${c.id}" title="${esc(c.title)}${c.preview ? `\n${esc(c.preview)}` : ''}\n${tx('{n} 条消息', { n: c.n })}">
+      <span class="n" title="${tx('讨论编号：消息里写“讨论 {id}”，成员就能在存档里找到它', { id: c.id })}">${c.id}</span><span class="t">${esc(c.title)}</span>${!byKind && c.kind ? `<span class="k">${MODE_LABEL[c.kind]}</span>` : ''}<span class="m">${when(c.last || c.created_at)}</span>
+      <span class="acts"><span data-rename="${c.id}" title="${tx('重命名')}">${ICON.rename}</span><span data-export="${c.id}" title="${tx('导出 Markdown')}">${ICON.export}</span><span data-del="${c.id}" title="${tx('删除')}">${ICON.del}</span></span>
     </div>`);
   }
   setHTML('#history', [...groups].map(([g, rows]) =>
@@ -782,26 +819,26 @@ $('#search').addEventListener('input', e => {
 // ---------- moderator ----------
 function renderModerator() {
   const j = S.jev, mode = S.settings.scheduler, m = S.mod;
-  const status = j.assessing ? '<span class="pulse">在评估谁有新观点</span>' : j.judging ? '<span class="pulse">在判断是否收敛</span>'
-    : j.down ? 'Jev 暂不可用，改用算法' : j.ms ? `上次判断 ${j.ms}ms` : '待命';
+  const status = j.assessing ? `<span class="pulse">${tx('在评估谁有新观点')}</span>` : j.judging ? `<span class="pulse">${tx('在判断是否收敛')}</span>`
+    : j.down ? tx('Jev 暂不可用，改用算法') : j.ms ? tx('上次判断 {ms}ms', { ms: j.ms }) : tx('待命');
   const row = (name, v, tick, hint) => `<div class="metric" title="${hint}"><span class="ml">${name}</span>${mini(v, tick)}<span class="mv">${v == null ? '–' : pct(v)}</span></div>`;
-  const modeText = mode === 'jev' ? '按新意请人发言' : mode === 'algorithm' ? '按算法调度' : '广播：每条唤醒所有人';
-  const html = pane('moderator', '主持人 Jev', { status, body: `<div class="lead">${flowText(modeText)}</div>${renderSeats()}
-    ${m?.convergence != null ? row('观点收敛', m.convergence, S.settings.autoStop ? S.settings.convergeAt : null, '刻度是收尾阈值') : ''}
+  const modeText = tx(mode === 'jev' ? '按新意请人发言' : mode === 'algorithm' ? '按算法调度' : '广播：每条唤醒所有人');
+  const html = pane('moderator', tx('主持人 Jev'), { status, body: `<div class="lead">${flowText(modeText)}</div>${renderSeats()}
+    ${m?.convergence != null ? row(tx('观点收敛'), m.convergence, S.settings.autoStop ? S.settings.convergeAt : null, tx('刻度是收尾阈值')) : ''}
     ${m?.convergence != null ? `<div class="quiet">${[
-      `<span title="最近几条是否只在附和或复述">附和重复 <b>${pct(m.stalling)}</b></span>`,
-      S.settings.circlePause ? `<span title="同样的论点来回重复；到 70% 会暂停">原地打转 <b>${pct(m.circling)}</b></span>` : '',
-      m.debatable != null ? `<span title="问题是否见仁见智（不是有标准答案的事实题）">见仁见智 <b>${pct(m.debatable)}</b></span>` : '',
-      m.challenged != null ? `<span title="本轮有没有人认真反对过多数意见">有人反对 <b>${pct(m.challenged)}</b></span>` : '',
+      `<span title="${tx('最近几条是否只在附和或复述')}">${tx('附和重复')} <b>${pct(m.stalling)}</b></span>`,
+      S.settings.circlePause ? `<span title="${tx('同样的论点来回重复；到 70% 会暂停')}">${tx('原地打转')} <b>${pct(m.circling)}</b></span>` : '',
+      m.debatable != null ? `<span title="${tx('问题是否见仁见智（不是有标准答案的事实题）')}">${tx('见仁见智')} <b>${pct(m.debatable)}</b></span>` : '',
+      m.challenged != null ? `<span title="${tx('本轮有没有人认真反对过多数意见')}">${tx('有人反对')} <b>${pct(m.challenged)}</b></span>` : '',
     ].filter(Boolean).join('')}</div>` : ''}
-    ${S.wrapped ? '<div class="wrapnote">本轮已收尾，发新消息可继续讨论。</div>' : ''}` });
+    ${S.wrapped ? `<div class="wrapnote">${tx('本轮已收尾，发新消息可继续讨论。')}</div>` : ''}` });
   setHTML('#moderator', html);
   const line = $('#convline');
   line.classList.toggle('off', m?.convergence == null);
   if (m?.convergence != null) {
     line.querySelector('i').style.width = pct(m.convergence);
     line.querySelector('b').style.left = S.settings.autoStop ? `${S.settings.convergeAt}%` : '-10px';
-    line.title = `观点收敛度 ${pct(m.convergence)}${S.settings.autoStop ? `，到 ${S.settings.convergeAt}% 收尾` : ''}`;
+    line.title = tx('观点收敛度 {p}', { p: pct(m.convergence) }) + (S.settings.autoStop ? tx('，到 {n}% 收尾', { n: S.settings.convergeAt }) : '');
   }
 }
 
@@ -809,26 +846,28 @@ function renderModerator() {
 const PHASE_LABEL = { opening: '开篇立论', rebuttal: '驳论', free: '自由辩', closing: '结辩', verdict: '评判' };
 function flowText(schedulerText) {
   const d = S.debate, flow = S.discussionMode.rules.flow;
-  if (flow === 'relay') return '故事接力：一人一段，按顺序或 @ 交棒';
-  if (flow === 'debate') return d ? `辩论：${PHASE_LABEL[d.phase] || '评判'}（第 ${d.step}/${d.steps} 步）` : '辩论：你发出辩题后抽签分持方';
+  if (flow === 'relay') return tx('故事接力：一人一段，按顺序或 @ 交棒');
+  if (flow === 'debate') return d ? tx('辩论：{phase}（第 {step}/{steps} 步）', { phase: tx(PHASE_LABEL[d.phase] || '评判'), step: d.step, steps: d.steps }) : tx('辩论：你发出辩题后抽签分持方');
   const g = S.game;
-  if (flow === 'game') return !g ? '博弈：@ 一位成员当主持人，说说玩什么，如“@claude 主持，我们玩狼人杀”'
-    : g.over ? '博弈已结束，自由聊；点“再开一局”在这里接着玩'
-    : `博弈 · ${esc(label(g.host))} 主持 · 第 ${g.round + 1} 回合 · ${{ host: '主持人结算', talk: '轮流发言', orders: `秘密行动（${g.ordered.length}/${g.waiting.length}）` }[g.phase]}`
-      + (g.turn === 'user' ? (g.phase === 'talk' ? ' · <b>轮到你发言</b>' : ' · <b>轮到你：下一条消息是只给主持人的秘密指令</b>') : '');
-  return (d?.done ? '辩论已结束，自由讨论；' : '') + schedulerText + (S.settings.autoStop ? '，收敛后自动收尾' : '');
+  if (flow === 'game') return !g ? tx('博弈：@ 一位成员当主持人，说说玩什么，如“@claude 主持，我们玩狼人杀”')
+    : g.over ? tx('博弈已结束，自由聊；点“再开一局”在这里接着玩')
+    : tx('博弈 · {host} 主持 · 第 {r} 回合 · {phase}', { host: esc(label(g.host)), r: g.round + 1,
+      phase: { host: tx('主持人结算'), talk: tx('轮流发言'), orders: tx('秘密行动（{a}/{b}）', { a: g.ordered.length, b: g.waiting.length }) }[g.phase] })
+      + (g.turn === 'user' ? ` · <b>${tx(g.phase === 'talk' ? '轮到你发言' : '轮到你：下一条消息是只给主持人的秘密指令')}</b>` : '');
+  return (d?.done ? tx('辩论已结束，自由讨论；') : '') + schedulerText + (S.settings.autoStop ? tx('，收敛后自动收尾') : '');
 }
 function renderSeats() {
   const d = S.debate, g = S.game;
-  const who = n => (n === 'user' ? '你' : `<span style="color:${color(n)}">${esc(label(n))}</span>`);
-  if (g && S.discussionMode.rules.flow === 'game') return `<div class="seats"><b>主持</b><span>${who(g.host)}</span>`
-    + `<b>玩家</b><span>${g.players.map(who).join('、')}</span></div>`
-    + (g.user && !g.over ? '<div class="form-help">你也在玩：别人之间的私信和主持人账本等游戏结束后再显示。私信某人：单独一行 [DM @某人]，后面写内容。</div>' : '')
-    + (g.ledger ? `<div class="ledger" title="主持人的私密账本，只有它和你看得到">${esc(g.ledger)}</div>` : '')
-    + (g.over ? '<button class="rowbtn" data-gamenew title="在这个讨论里接着玩：大家带着前面几局的记忆，你 @ 一位主持人说说玩什么">再开一局</button>' : '<button class="rowbtn" data-gameend title="主持人忘了宣布结束、或者不想玩了：这局到此为止，之后的消息是普通聊天">结束这局游戏</button>');
+  const who = n => (n === 'user' ? tx('你') : `<span style="color:${color(n)}">${esc(label(n))}</span>`);
+  if (g && S.discussionMode.rules.flow === 'game') return `<div class="seats"><b>${tx('host|主持')}</b><span>${who(g.host)}</span>`
+    + `<b>${tx('玩家')}</b><span>${g.players.map(who).join(tx('、'))}</span></div>`
+    + (g.user && !g.over ? `<div class="form-help">${tx('你也在玩：别人之间的私信和主持人账本等游戏结束后再显示。私信某人：单独一行 [DM @某人]，后面写内容。')}</div>` : '')
+    + (g.ledger ? `<div class="ledger" title="${tx('主持人的私密账本，只有它和你看得到')}">${esc(g.ledger)}</div>` : '')
+    + (g.over ? `<button class="rowbtn" data-gamenew title="${tx('在这个讨论里接着玩：大家带着前面几局的记忆，你 @ 一位主持人说说玩什么')}">${tx('再开一局')}</button>`
+      : `<button class="rowbtn" data-gameend title="${tx('主持人忘了宣布结束、或者不想玩了：这局到此为止，之后的消息是普通聊天')}">${tx('结束这局游戏')}</button>`);
   if (!d) return '';
-  return `<div class="seats"><b>正方</b><span>${d.pro.map(who).join('、')}</span><b>反方</b><span>${d.con.map(who).join('、')}</span>`
-    + `<b>评委</b><span>${who(d.judge)}</span></div>`;
+  return `<div class="seats"><b>${tx('正方')}</b><span>${d.pro.map(who).join(tx('、'))}</span><b>${tx('反方')}</b><span>${d.con.map(who).join(tx('、'))}</span>`
+    + `<b>${tx('评委')}</b><span>${who(d.judge)}</span></div>`;
 }
 
 // ---------- the right panel's sections ----------
@@ -840,7 +879,7 @@ if (!localStorage.foldV2) {
   folded.add('settings'); localStorage.removeItem('memory-collapsed');
   localStorage.folded = JSON.stringify([...folded]); localStorage.foldV2 = '1';
 }
-const foldButton = (key, inner) => `<button class="memtoggle" data-fold="${key}" aria-expanded="${!folded.has(key)}" title="展开或收起"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 5 7 7-7 7"/></svg>${inner}</button>`;
+const foldButton = (key, inner) => `<button class="memtoggle" data-fold="${key}" aria-expanded="${!folded.has(key)}" title="${tx('展开或收起')}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 5 7 7-7 7"/></svg>${inner}</button>`;
 const pane = (key, title, { count, status = '', acts = '', body = '' } = {}) => `<div class="ph">${foldButton(key,
   `${title}${count ? `<span class="count">${count}</span>` : ''}`)}${status ? `<span class="st">${status}</span>` : ''}`
   + `${acts ? `<span class="pa">${acts}</span>` : ''}</div>${folded.has(key) ? '' : body}`;
@@ -856,12 +895,12 @@ document.addEventListener('click', e => {
 // ---------- the discussion's notes ----------
 // Kept by the members with [NOTE] lines at the end of their replies, and seen by every turn; the user can edit them here.
 function renderNotes() {
-  const title = S.discussionMode.rules.notesTitle;
-  setHTML('#notes', pane('notes', esc(title), { count: S.notes.length, acts: '<button data-note-add>添加</button>', body:
+  const title = tx(S.discussionMode.rules.notesTitle);
+  setHTML('#notes', pane('notes', esc(title), { count: S.notes.length, acts: `<button data-note-add>${tx('添加')}</button>`, body:
     S.notes.length ? `<ul class="notelist">${S.notes.map(x => `<li><span class="nn">N${x.n}</span><span class="nt clamp ${openNotes.has(x.n) ? 'open' : ''}" data-note-open="${x.n}">${linkRefs(x.text)}</span>`
-      + `<span class="nm">${x.msg ? ref(x.msg) : x.by === 'user' ? '你' : ''}<button data-note-edit="${x.n}" title="修改" aria-label="修改 N${x.n}">${ICON.rename}</button>`
-      + `<button data-note-drop="${x.n}" title="删除" aria-label="删除 N${x.n}">${ICON.del}</button></span></li>`).join('')}</ul>`
-      : `<div class="memempty">成员发言时会把需要前后一致的内容记在这里（${esc(title)}），之后每一轮都会参考。你也可以自己添加或修改。</div>` }));
+      + `<span class="nm">${x.msg ? ref(x.msg) : x.by === 'user' ? tx('你') : ''}<button data-note-edit="${x.n}" title="${tx('修改')}" aria-label="${tx('修改 N{n}', { n: x.n })}">${ICON.rename}</button>`
+      + `<button data-note-drop="${x.n}" title="${tx('删除')}" aria-label="${tx('删除 N{n}', { n: x.n })}">${ICON.del}</button></span></li>`).join('')}</ul>`
+      : `<div class="memempty">${tx('成员发言时会把需要前后一致的内容记在这里（{title}），之后每一轮都会参考。你也可以自己添加或修改。', { title: esc(title) })}</div>` }));
 }
 // long notes show three lines; a click opens one (links inside still work)
 const openNotes = new Set();
@@ -883,13 +922,13 @@ function renderJobs() {
   // J = a [JOB] command, T = a [TASK] coding session (its description; a running one shows its live output)
   const tagOf = j => `${j.kind === 'task' ? 'T' : 'J'}${j.id}`, short = s => (s.length > 60 ? s.slice(0, 60) + '…' : s);
   const running = jobs.filter(j => j.status === 'running').length;
-  setHTML('#jobs', !jobs.length ? '' : pane('jobs', '后台任务', { count: running, status: running ? '' : '都已结束', body: `<ul class="notelist">${jobs.map(j => `<li><span class="nn">${tagOf(j)}</span>`
+  setHTML('#jobs', !jobs.length ? '' : pane('jobs', tx('后台任务'), { count: running, status: running ? '' : tx('都已结束'), body: `<ul class="notelist">${jobs.map(j => `<li><span class="nn">${tagOf(j)}</span>`
       + `<span class="nt"><span style="color:${color(j.agent)}">${esc(label(j.agent))}</span> `
       + (j.kind === 'task' ? `<span title="${esc(j.cmd)}">${esc(short(j.cmd))}</span>${j.branch ? ` <code>${esc(j.branch)}</code>` : ''}`
         : `<code title="${esc(j.cmd)}">${esc(short(j.cmd))}</code>`)
-      + (j.live ? `<details data-job-live="${j.id}" ${openJobLive.has(j.id) ? 'open' : ''}><summary>实时输出</summary><pre>${esc(j.live)}</pre></details>` : '')
-      + `</span><span class="nm">${j.status === 'running' ? `${mins(j)} 分钟<button data-job-stop="${j.id}" data-tag="${tagOf(j)}" title="停止" aria-label="停止 ${tagOf(j)}">${ICON.del}</button>`
-        : `${JOB_STATUS[j.status] || j.status}${j.code ? ` (${j.code})` : ''}`}</span></li>`).join('')}</ul>` }))
+      + (j.live ? `<details data-job-live="${j.id}" ${openJobLive.has(j.id) ? 'open' : ''}><summary>${tx('实时输出')}</summary><pre>${esc(j.live)}</pre></details>` : '')
+      + `</span><span class="nm">${j.status === 'running' ? `${tx('{n} 分钟', { n: mins(j) })}<button data-job-stop="${j.id}" data-tag="${tagOf(j)}" title="${tx('停止')}" aria-label="${tx('停止 {tag}', { tag: tagOf(j) })}">${ICON.del}</button>`
+        : `${tx(JOB_STATUS[j.status] || j.status)}${j.code ? ` (${j.code})` : ''}`}</span></li>`).join('')}</ul>` }))
     && document.querySelectorAll('[data-job-live]').forEach(d => {
       d.ontoggle = () => d.open ? openJobLive.add(+d.dataset.jobLive) : openJobLive.delete(+d.dataset.jobLive);
       const pre = d.querySelector('pre'); pre.scrollTop = pre.scrollHeight;
@@ -897,56 +936,56 @@ function renderJobs() {
 }
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-job-stop]');
-  if (t && confirm(`停止后台任务 ${t.dataset.tag}？`)) post('/api/job/stop', { id: +t.dataset.jobStop });
+  if (t && confirm(tx('停止后台任务 {tag}？', { tag: t.dataset.tag }))) post('/api/job/stop', { id: +t.dataset.jobStop });
 });
 // ---------- training window ----------
 // Open: time left, each member's last measured win rate (the server's probes, not the members' word), stop button.
 // Otherwise, when there are referees (_shared/referees/<name>) and executing code is on: the form to open one.
 function renderArena() {
   const A = S.arena;
-  if (!A) return setHTML('#arena', !S.referees?.length ? '' : pane('arena', '训练窗口', { status: '每人独立做，到点循环赛', body: `<form id="arena-form" class="settings arenaform">
-      <textarea name="goal" rows="3" required placeholder="目标，原话交给每位成员，比如：写一个尽量强的 kore bot"></textarea>
-      <label>裁判 <select name="referee">${S.referees.map(r => `<option>${esc(r)}</option>`).join('')}</select></label>
-      <label>时长（分钟） <input name="minutes" type="number" min="1" max="600" value="30"></label>
-      <label>每隔几分钟评测 <input name="every" type="number" min="1" value="10"></label>
-      <button class="rowbtn">开始训练</button></form>` }));
+  if (!A) return setHTML('#arena', !S.referees?.length ? '' : pane('arena', tx('训练窗口'), { status: tx('每人独立做，到点循环赛'), body: `<form id="arena-form" class="settings arenaform">
+      <textarea name="goal" rows="3" required placeholder="${tx('目标，原话交给每位成员，比如：写一个尽量强的 kore bot')}"></textarea>
+      <label>${tx('裁判')} <select name="referee">${S.referees.map(r => `<option>${esc(r)}</option>`).join('')}</select></label>
+      <label>${tx('时长（分钟）')} <input name="minutes" type="number" min="1" max="600" value="30"></label>
+      <label>${tx('每隔几分钟评测')} <input name="every" type="number" min="1" value="10"></label>
+      <button class="rowbtn">${tx('开始训练')}</button></form>` }));
   const left = Math.max(0, Math.ceil((A.until - Date.now() + clockSkew) / 60e3));
-  setHTML('#arena', pane('arena', '训练窗口', { status: A.phase === 'work' ? `还剩 ${left} 分钟` : '<span class="pulse">循环赛中</span>',
-    acts: `<button id="arena-stop">${A.phase === 'work' ? '结束' : '停止'}</button>`, body:
-      `<div class="lead" title="${esc(A.goal)}">${esc(A.id)} · 裁判 ${esc(A.referee)} · <a href="${esc(A.url)}" target="_blank" rel="noopener">文件</a></div>`
+  setHTML('#arena', pane('arena', tx('训练窗口'), { status: A.phase === 'work' ? tx('还剩 {n} 分钟', { n: left }) : `<span class="pulse">${tx('循环赛中')}</span>`,
+    acts: `<button id="arena-stop">${tx(A.phase === 'work' ? '结束' : '停止')}</button>`, body:
+      `<div class="lead" title="${esc(A.goal)}">${esc(A.id)} · ${tx('裁判')} ${esc(A.referee)} · <a href="${esc(A.url)}" target="_blank" rel="noopener">${tx('文件')}</a></div>`
       + `<ul class="notelist">${A.members.map(m => `<li><span class="nt"><span style="color:${color(m.name)}">${esc(label(m.name))}</span> `
-        + `${A.probing === m.name ? '评测中…' : m.out ? '已退出' : A.phase !== 'work' ? '' : m.working ? '工作中' : '等待续上'}</span>`
-        + `<span class="nm">${m.rate == null ? '—' : `${Math.round(m.rate * 100)}%（第 ${m.probes} 版）`}</span></li>`).join('')}</ul>` }));
+        + `${tx(A.probing === m.name ? '评测中…' : m.out ? '已退出' : A.phase !== 'work' ? '' : m.working ? '工作中' : '等待续上')}</span>`
+        + `<span class="nm">${m.rate == null ? '—' : `${Math.round(m.rate * 100)}%${tx('（第 {n} 版）', { n: m.probes })}`}</span></li>`).join('')}</ul>` }));
 }
 document.addEventListener('submit', async e => {
   if (e.target.id !== 'arena-form') return;
   e.preventDefault();
   const r = await post('/api/arena/start', Object.fromEntries(new FormData(e.target)));
-  if (!r.ok) alert((await r.json().catch(() => ({}))).error || '请求失败');
+  if (!r.ok) alert((await r.json().catch(() => ({}))).error || tx('请求失败'));
 });
 document.addEventListener('click', e => {
-  if (e.target.id === 'arena-stop' && confirm(S.arena.phase === 'work' ? '现在结束训练，用各人当前的 bot 打循环赛？' : '停止循环赛（没有结果）？')) post('/api/arena/stop');
+  if (e.target.id === 'arena-stop' && confirm(tx(S.arena.phase === 'work' ? '现在结束训练，用各人当前的 bot 打循环赛？' : '停止循环赛（没有结果）？'))) post('/api/arena/stop');
 });
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-note-add],[data-note-edit],[data-note-drop]');
   if (!t) return;
-  const title = S.discussionMode.rules.notesTitle, note = n => S.notes.find(x => x.n === n);
-  if ('noteAdd' in t.dataset) { const text = prompt(`添加一条${title}`); if (text?.trim()) post('/api/notes', { chat_id: S.chatId, op: 'add', text }); }
-  if (t.dataset.noteEdit) { const n = +t.dataset.noteEdit, text = prompt(`修改 N${n}`, note(n)?.text || ''); if (text?.trim()) post('/api/notes', { chat_id: S.chatId, op: 'edit', n, text }); }
-  if (t.dataset.noteDrop) { const n = +t.dataset.noteDrop; if (confirm(`删除 N${n}：${note(n)?.text || ''}？`)) post('/api/notes', { chat_id: S.chatId, op: 'drop', n }); }
+  const title = tx(S.discussionMode.rules.notesTitle), note = n => S.notes.find(x => x.n === n);
+  if ('noteAdd' in t.dataset) { const text = prompt(tx('添加一条{title}', { title })); if (text?.trim()) post('/api/notes', { chat_id: S.chatId, op: 'add', text }); }
+  if (t.dataset.noteEdit) { const n = +t.dataset.noteEdit, text = prompt(tx('修改 N{n}', { n }), note(n)?.text || ''); if (text?.trim()) post('/api/notes', { chat_id: S.chatId, op: 'edit', n, text }); }
+  if (t.dataset.noteDrop) { const n = +t.dataset.noteDrop; if (confirm(tx('删除 N{n}：{text}？', { n, text: note(n)?.text || '' }))) post('/api/notes', { chat_id: S.chatId, op: 'drop', n }); }
 });
 
 // Each member ends a message with its position and confidence; Jev judges whether a change was moved by a new argument.
 function renderStances() {
   if (!S.discussionMode.rules.stance || !S.stances?.length) return setHTML('#stances', '');
-  setHTML('#stances', pane('stances', '<span title="成员每条发言末尾给出当前立场和信心；立场变化时由 Jev 判断有没有新论据">立场</span>',
+  setHTML('#stances', pane('stances', `<span title="${tx('成员每条发言末尾给出当前立场和信心；立场变化时由 Jev 判断有没有新论据')}">${tx('立场')}</span>`,
     { count: S.stances.length, body: `<div class="stances">${S.stances.map(x => {
-    const was = x.prev ? `之前：${x.prev.t}（${x.prev.c}%）` : '';
-    const tag = x.role === 'devil' ? '<span class="tag devil">唱反调</span>'
-      : x.changed >= 0.5 ? (x.evidence < 0.5 ? `<span class="tag warn" title="${esc(was)}">改了立场，但没有新论据</span>`
-        : `<span class="tag" title="${esc(was)}">改了立场</span>`) : '';
+    const was = x.prev ? tx('之前：{t}（{c}%）', { t: x.prev.t, c: x.prev.c }) : '';
+    const tag = x.role === 'devil' ? `<span class="tag devil">${tx('唱反调')}</span>`
+      : x.changed >= 0.5 ? (x.evidence < 0.5 ? `<span class="tag warn" title="${esc(was)}">${tx('改了立场，但没有新论据')}</span>`
+        : `<span class="tag" title="${esc(was)}">${tx('改了立场')}</span>`) : '';
     return `<div class="stance"><div class="sh"><span class="dot" style="--c:${color(x.name)}"></span>
-      <a class="ref" data-id="${x.id}" title="跳到 #${x.id}">${esc(label(x.name))}</a>${x.l ? `<span class="verdict">${esc(x.l)}</span>` : ''}<span class="mv" title="信心">${x.c}%</span></div>
+      <a class="ref" data-id="${x.id}" title="${tx('跳到 #{id}', { id: x.id })}">${esc(label(x.name))}</a>${x.l ? `<span class="verdict">${esc(x.l)}</span>` : ''}<span class="mv" title="${tx('信心')}">${x.c}%</span></div>
       <div class="stx">${esc(x.t)}</div>${tag}</div>`;
   }).join('')}</div>` }));
 }
@@ -957,25 +996,25 @@ let memEditing = false;
 function renderMemory() {
   if (memEditing) return; // don't overwrite the textarea while the user edits
   const m = S.memory, items = (m.text || '').split('\n').map(l => l.replace(/^-\s*/, '').trim()).filter(Boolean);
-  const status = m.curating ? '<span class="pulse">整理中</span>'
-    : m.error ? `<span style="color:var(--danger)" title="${esc(m.error)}">整理失败，10 分钟后重试</span>`
-    : !S.settings.memory ? '已关闭' : '';
+  const status = m.curating ? `<span class="pulse">${tx('整理中')}</span>`
+    : m.error ? `<span style="color:var(--danger)" title="${esc(m.error)}">${tx('整理失败，10 分钟后重试')}</span>`
+    : !S.settings.memory ? tx('已关闭') : '';
   // trailing "(#74, #80, 2026-10)" = where the fact came from and when the user last said it
   const SRC = /\s*[(（]\s*(#\d+(?:\s*[,，、]\s*#\d+)*)(?:\s*[,，、]\s*(\d{4}-\d{2}(?:-\d{2})?))?\s*[)）]\s*$/;
   const item = t => { const src = t.match(SRC);
     return `<li>${linkRefs(t.replace(SRC, ''))}${src ? ` <span class="src">${linkRefs(src[1])}${src[2] ? ` · ${src[2]}` : ''}</span>` : ''}</li>`; };
-  setHTML('#memory', pane('memory', '关于你', { count: items.length, status,
-    acts: '<button data-mem-curate title="把你最近说的话整理进来">整理</button><button data-mem-edit title="修改或删除记忆">编辑</button>',
-    body: `<div><label class="username" title="朗读时，别人引用你的发言（如 #12）会念成这个称呼">朗读时称呼你
-      <input data-user-name maxlength="20" placeholder="用户" value="${esc(S.settings.userName || '')}"></label>${items.length ? `<ul class="memlist">${items.map(item).join('')}</ul>`
-      : '<div class="memempty">还没有关于你的记忆。每轮讨论安静下来后，会从你说过的话里整理出长期有用的信息，新讨论里的成员都会先读到。</div>'}</div>` }));
+  setHTML('#memory', pane('memory', tx('关于你'), { count: items.length, status,
+    acts: `<button data-mem-curate title="${tx('把你最近说的话整理进来')}">${tx('整理')}</button><button data-mem-edit title="${tx('修改或删除记忆')}">${tx('编辑')}</button>`,
+    body: `<div><label class="username" title="${tx('朗读时，别人引用你的发言（如 #12）会念成这个称呼')}">${tx('朗读时称呼你')}
+      <input data-user-name maxlength="20" placeholder="${tx('用户')}" value="${esc(S.settings.userName || '')}"></label>${items.length ? `<ul class="memlist">${items.map(item).join('')}</ul>`
+      : `<div class="memempty">${tx('还没有关于你的记忆。每轮讨论安静下来后，会从你说过的话里整理出长期有用的信息，新讨论里的成员都会先读到。')}</div>`}</div>` }));
 }
 document.addEventListener('click', e => {
   if (e.target.closest('[data-mem-curate]')) post('/api/memory/curate');
   if (e.target.closest('[data-mem-edit]')) {
     memEditing = true;
-    $('#memory').innerHTML = `<div class="ph"><span class="memtoggle">关于你</span><span class="pa"><button data-mem-save>保存</button><button data-mem-cancel>取消</button></span></div>
-      <textarea id="memedit" placeholder="每行一条，比如：- 主要写 Python"></textarea>`;
+    $('#memory').innerHTML = `<div class="ph"><span class="memtoggle">${tx('关于你')}</span><span class="pa"><button data-mem-save>${tx('保存')}</button><button data-mem-cancel>${tx('取消')}</button></span></div>
+      <textarea id="memedit" placeholder="${tx('每行一条，比如：- 主要写 Python')}"></textarea>`;
     $('#memedit').value = S.memory.text || ''; $('#memedit').focus();
   }
   if (e.target.closest('[data-mem-save]')) { post('/api/memory', { text: $('#memedit').value }); memEditing = false; delete lastHTML['#memory']; }
@@ -989,50 +1028,52 @@ let orderingMembers = false, savingMemberOrder = false;
 const CLI_HELP = {
   claude: { install: 'npm install -g @anthropic-ai/claude-code', login: 'claude auth login' },
   codex: { install: 'npm install -g @openai/codex', login: 'codex login --device-auth' },
-  agy: { install: '安装 Google Antigravity（自带 agy 命令）', login: 'agy' },
+  agy: { install: tx('安装 Google Antigravity（自带 agy 命令）'), login: 'agy' },
   opencode: { install: 'npm install -g opencode-ai', login: 'opencode auth login' },
 };
 function cliHelp(m) {
-  const h = CLI_HELP[m.harness], as = S.runAs ? `（以 ${esc(S.runAs)} 用户：<code>su - ${esc(S.runAs)}</code>）` : '';
-  if (h && !m.installed) return `没有找到 ${esc(m.harnessLabel)} 的 CLI。在服务器上安装：<code>${esc(h.install)}</code>，一分钟内自动识别。`;
-  if (h && m.error === 'auth') return `${esc(m.harnessLabel)} 没有登录。在服务器终端${as}运行 <code>${esc(h.login)}</code>，然后点"请发言"重试。`;
-  if (m.error === 'quota') return '额度用完了：等额度恢复，或换一个模型。';
-  if (m.error === 'bad-model') return '这个模型用不了：在上面换一个模型。';
+  const h = CLI_HELP[m.harness], cli = esc(m.harnessLabel), code = x => `<code>${esc(x)}</code>`;
+  if (h && !m.installed) return tx('没有找到 {cli} 的 CLI。在服务器上安装：{cmd}，一分钟内自动识别。', { cli, cmd: code(h.install) });
+  if (h && m.error === 'auth') return S.runAs
+    ? tx('{cli} 没有登录。在服务器终端以 {user} 用户（{su}）运行 {cmd}，然后点“请发言”重试。', { cli, user: esc(S.runAs), su: code(`su - ${S.runAs}`), cmd: code(h.login) })
+    : tx('{cli} 没有登录。在服务器终端运行 {cmd}，然后点“请发言”重试。', { cli, cmd: code(h.login) });
+  if (m.error === 'quota') return tx('额度用完了：等额度恢复，或换一个模型。');
+  if (m.error === 'bad-model') return tx('这个模型用不了：在上面换一个模型。');
   return esc(m.error);
 }
 function renderMembers() {
   return S.members.map((m, i) => {
     const qi = S.queue.findIndex(x => x.agent === m.name);
-    let st = '空闲', cls = '';
-    if (!m.enabled) st = '未参与';
-    else if (m.status === 'thinking') { st = `<span class="pulse">思考中</span> <span data-since="${m.started}"></span>`; cls = 'busy'; }
-    else if (qi >= 0) { st = `已写好，排第 ${qi + 1}`; cls = 'busy'; }
-    else if (m.hand) { st = `举手：${esc(m.hand.why)}`; cls = 'busy'; }
-    else if (!m.installed) { st = '未安装'; cls = 'err'; }
-    else if (m.error) { st = m.error === 'auth' ? '未登录' : '出错'; cls = 'err'; }
+    let st = tx('空闲'), cls = '';
+    if (!m.enabled) st = tx('未参与');
+    else if (m.status === 'thinking') { st = `<span class="pulse">${tx('思考中')}</span> <span data-since="${m.started}"></span>`; cls = 'busy'; }
+    else if (qi >= 0) { st = tx('已写好，排第 {n}', { n: qi + 1 }); cls = 'busy'; }
+    else if (m.hand) { st = tx('举手：{why}', { why: esc(m.hand.why) }); cls = 'busy'; }
+    else if (!m.installed) { st = tx('未安装'); cls = 'err'; }
+    else if (m.error) { st = tx(m.error === 'auth' ? '未登录' : '出错'); cls = 'err'; }
     else if (m.note) st = esc(m.note);
     const right = S.settings.scheduler === 'jev' && m.nov != null
-      ? `<span title="Jev 判断的新意 ${pct(m.nov)}（刻度是阈值）">${mini(m.nov, S.settings.noveltyMin, color(m.name))}</span>`
-      : `<span title="本轮发言 / 上限">${m.sinceUser}/${S.settings.turnCap}</span>`;
+      ? `<span title="${tx('Jev 判断的新意 {p}（刻度是阈值）', { p: pct(m.nov) })}">${mini(m.nov, S.settings.noveltyMin, color(m.name))}</span>`
+      : `<span title="${tx('本轮发言 / 上限')}">${m.sinceUser}/${S.settings.turnCap}</span>`;
     const open = !orderingMembers && openMem.has(m.name);
     return `<div class="mem ${m.enabled ? '' : 'off'} ${open ? 'open' : ''}">
-      <div class="mrow" ${orderingMembers ? '' : `data-expand="${m.name}"`} title="${esc(orderingMembers ? '调整成员显示顺序' : m.hand ? `举手原因：${m.hand.why}${m.score != null ? `，得分 ${m.score}` : ''}` : '点击查看模型、会话和实时输出')}">
-        ${av(m.name)}<div class="midentity"><div class="mheadline"><button class="mname" data-member-alias="${m.name}" title="编辑别名 · @${esc(m.at)}">${esc(m.label)}</button><span class="mst ${cls}">${st}</span></div><span class="mmeta" title="${esc(m.harnessLabel || m.harness)} · ${esc(m.model || 'CLI 默认模型')}">${esc(m.harnessLabel || m.harness)} · ${esc(m.model || 'CLI 默认模型')}</span></div>
+      <div class="mrow" ${orderingMembers ? '' : `data-expand="${m.name}"`} title="${esc(orderingMembers ? tx('调整成员显示顺序') : m.hand ? tx('举手原因：{why}', { why: m.hand.why }) + (m.score != null ? tx('，得分 {s}', { s: m.score }) : '') : tx('点击查看模型、会话和实时输出'))}">
+        ${av(m.name)}<div class="midentity"><div class="mheadline"><button class="mname" data-member-alias="${m.name}" title="${tx('编辑别名')} · @${esc(m.at)}">${esc(m.label)}</button><span class="mst ${cls}">${st}</span></div><span class="mmeta" title="${esc(m.harnessLabel || m.harness)} · ${esc(m.model || tx('CLI 默认模型'))}">${esc(m.harnessLabel || m.harness)} · ${esc(m.model || tx('CLI 默认模型'))}</span></div>
         <span class="mright">${right}</span>
-        ${orderingMembers ? `<span class="member-move"><button data-move-member="${m.name}" data-step="-1" aria-label="上移 ${esc(m.label)}" ${i === 0 || savingMemberOrder ? 'disabled' : ''}>↑</button><button data-move-member="${m.name}" data-step="1" aria-label="下移 ${esc(m.label)}" ${i === S.members.length - 1 || savingMemberOrder ? 'disabled' : ''}>↓</button></span>` : ''}
+        ${orderingMembers ? `<span class="member-move"><button data-move-member="${m.name}" data-step="-1" aria-label="${tx('上移 {name}', { name: esc(m.label) })}" ${i === 0 || savingMemberOrder ? 'disabled' : ''}>↑</button><button data-move-member="${m.name}" data-step="1" aria-label="${tx('下移 {name}', { name: esc(m.label) })}" ${i === S.members.length - 1 || savingMemberOrder ? 'disabled' : ''}>↓</button></span>` : ''}
       </div>
       <div class="mdetail">
-        <div class="member-actions"><button class="floor-button" data-floor="${m.name}" title="让它马上发言">请发言</button>${m.hand && m.status !== 'thinking' ? `<button data-lower="${m.name}">放下手</button>` : ''}${m.configurable ? `<button data-member-edit="${m.name}">配置成员</button>` : ''}</div>
-        <select data-model="${m.name}" title="模型（下一轮生效，会话保留）">${modelOptions(m)}<option value="__custom__">自定义模型…</option></select>
-        ${S.speech?.on ? `<select data-voice="${m.name}" title="朗读声音：每位成员默认分到一个不同的 Azure 声音">${voiceOptions(m.name)}</select>` : ''}
+        <div class="member-actions"><button class="floor-button" data-floor="${m.name}" title="${tx('让它马上发言')}">${tx('请发言')}</button>${m.hand && m.status !== 'thinking' ? `<button data-lower="${m.name}">${tx('放下手')}</button>` : ''}${m.configurable ? `<button data-member-edit="${m.name}">${tx('配置成员')}</button>` : ''}</div>
+        <select data-model="${m.name}" title="${tx('模型（下一轮生效，会话保留）')}">${modelOptions(m)}<option value="__custom__">${tx('自定义模型…')}</option></select>
+        ${S.speech?.on ? `<select data-voice="${m.name}" title="${tx('朗读声音：每位成员默认分到一个不同的 Azure 声音')}">${voiceOptions(m.name)}</select>` : ''}
         <div class="kv">
-          <label class="switch"><input type="checkbox" data-enable="${m.name}" ${m.enabled ? 'checked' : ''}>参与</label>
-          <span>本轮 ${m.sinceUser}/${S.settings.turnCap}</span><span>共 ${m.turns} 次</span>
-          <span title="${esc(m.sid || '')}">会话 ${m.sid ? esc(m.sid.slice(0, 8)) : '未开始'}</span>
+          <label class="switch"><input type="checkbox" data-enable="${m.name}" ${m.enabled ? 'checked' : ''}>${tx('参与')}</label>
+          <span>${tx('本轮 {a}/{b}', { a: m.sinceUser, b: S.settings.turnCap })}</span><span>${tx('共 {n} 次', { n: m.turns })}</span>
+          <span title="${esc(m.sid || '')}">${tx('会话 {sid}', { sid: m.sid ? esc(m.sid.slice(0, 8)) : tx('未开始') })}</span>
         </div>
         ${!m.installed || m.error ? `<div class="err">${cliHelp(m)}</div>` : ''}
-        ${m.live ? `<details data-live="${m.name}" ${openLive.has(m.name) ? 'open' : ''}><summary>实时输出</summary><pre>${esc(m.live)}</pre></details>` : ''}
-        <button class="member-remove" data-member-delete="${m.name}">移除成员</button>
+        ${m.live ? `<details data-live="${m.name}" ${openLive.has(m.name) ? 'open' : ''}><summary>${tx('实时输出')}</summary><pre>${esc(m.live)}</pre></details>` : ''}
+        <button class="member-remove" data-member-delete="${m.name}">${tx('移除成员')}</button>
       </div>
     </div>`;
   }).join('');
@@ -1055,36 +1096,41 @@ function renderState() {
   // thinking timers tick without re-rendering the rows (keeps dropdowns and hover stable)
   document.querySelectorAll('[data-since]').forEach(s => (s.textContent = fmtSecs(now - +s.dataset.since)));
   document.querySelectorAll('[data-left]').forEach(s => (s.textContent = fmtSecs(+s.dataset.left - now)));
-  setHTML('#ats', S.members.filter(m => m.enabled).map(m => `<button class="chip" data-at="${esc(m.nick || m.at)}" title="点名 @${esc(m.nick || m.at)}"><span class="dot" style="--c:${color(m.name)}"></span>@${esc(m.nick || m.at)}</button>`).join(''));
+  setHTML('#ats', S.members.filter(m => m.enabled).map(m => `<button class="chip" data-at="${esc(m.nick || m.at)}" title="${tx('点名 @{at}', { at: esc(m.nick || m.at) })}"><span class="dot" style="--c:${color(m.name)}"></span>@${esc(m.nick || m.at)}</button>`).join(''));
   const p = $('#pause');
   setHTML('#pause', S.paused
-    ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l12-7.5Z"/></svg><span class="lbl">继续</span>'
-    : '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4" height="15" rx="1.2"/><rect x="14" y="4.5" width="4" height="15" rx="1.2"/></svg><span class="lbl">暂停</span>');
-  p.classList.toggle('paused', S.paused); p.title = S.paused ? '继续：从暂停的地方接着进行' : '暂停：不再开始新的发言和发布，朗读也暂停；正在思考的会想完，回复留在队列';
+    ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l12-7.5Z"/></svg><span class="lbl">${tx('继续')}</span>`
+    : `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4" height="15" rx="1.2"/><rect x="14" y="4.5" width="4" height="15" rx="1.2"/></svg><span class="lbl">${tx('暂停')}</span>`);
+  p.classList.toggle('paused', S.paused); p.title = tx(S.paused ? '继续：从暂停的地方接着进行' : '暂停：不再开始新的发言和发布，朗读也暂停；正在思考的会想完，回复留在队列');
   const info = [];
-  if (S.paused) info.push('已暂停');
-  if (S.queue.length) info.push(`待发布 ${S.queue.map(x => label(x.agent)).join('、')}`);
-  if (tts.on && tts.blocked) info.push('浏览器拦截了自动播放：点一下页面任意处，从这条接着朗读');
-  if (S.speaking) info.push(tts.current ? '正在朗读，读完再放下一条（“下一条”可跳过）' : '有浏览器在朗读，读完再放下一条');
-  if (S.holding) info.push('你在输入，暂缓发布');
-  else if (S.readLeft > 0 && S.queue.length) info.push(`阅读中，还剩 ${fmtSecs(S.readLeft)}`);
-  $('#info').textContent = info.join('，');
+  if (S.paused) info.push(tx('已暂停'));
+  if (S.queue.length) info.push(tx('待发布 {names}', { names: S.queue.map(x => label(x.agent)).join(tx('、')) }));
+  if (tts.on && tts.blocked) info.push(tx('浏览器拦截了自动播放：点一下页面任意处，从这条接着朗读'));
+  if (S.speaking) info.push(tx(tts.current ? '正在朗读，读完再放下一条（“下一条”可跳过）' : '有浏览器在朗读，读完再放下一条'));
+  if (S.holding) info.push(tx('你在输入，暂缓发布'));
+  else if (S.readLeft > 0 && S.queue.length) info.push(tx('阅读中，还剩 {t}', { t: fmtSecs(S.readLeft) }));
+  $('#info').textContent = info.join(tx('，'));
   for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind', 'outsider', 'userPlays']) $('#s-' + k).checked = S.settings[k];
-  for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin']) {
+  if (S.settings.uiLang && S.settings.uiLang !== LANG) location.reload(); // another window switched the language
+  syncLang();
+  for (const k of ['uiLang', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin']) {
     const el = $('#s-' + k);
     if (document.activeElement !== el) el.value = S.settings[k];
   }
 }
 
-const es = new EventSource(SHARED ? `/events?s=${SHARED}` : '/events');
+const es = new EventSource(SHARED ? `/events?s=${SHARED}` : `/events?lang=${LANG}`);
 // The shared page gets only the discussion and who is thinking.
 function renderShared() {
-  $('#title').textContent = document.title = S.title;
+  $('#title').textContent = document.title = chatTitle(S.title);
   renderThinking();
   document.querySelectorAll('[data-since]').forEach(s => (s.textContent = fmtSecs(Date.now() - clockSkew - +s.dataset.since)));
 }
+// a discussion's default title ("讨论 3") is stored in the language of the moment
+const chatTitle = t => (t || '').replace(/^讨论 (\d+)$/, (_, n) => tx('讨论 {n}', { n }));
 es.onmessage = e => {
   const ev = JSON.parse(e.data);
+  for (const c of (ev.state || ev).chats || []) c.title = chatTitle(c.title);
   if (SHARED && ev.type !== 'msg') {
     S = ev.type === 'init' ? ev.state : ev; clockSkew = Date.now() - S.now;
     if (ev.type === 'init') { messages = ev.messages; renderAll(); }
@@ -1109,7 +1155,7 @@ es.onmessage = e => {
 };
 
 function rename(id) {
-  const c = S.chats.find(x => x.id === id), t = prompt('重命名讨论', c?.title || '');
+  const c = S.chats.find(x => x.id === id), t = prompt(tx('重命名讨论'), c?.title || '');
   if (t && t.trim()) post('/api/chat/rename', { id, title: t.trim() });
 }
 document.addEventListener('click', e => {
@@ -1121,7 +1167,7 @@ document.addEventListener('click', e => {
   if (d.export) return void (location.href = '/api/export?id=' + d.export);
   if (d.del) {
     const c = S.chats.find(x => x.id === +d.del);
-    if (confirm(`删除「${c?.title}」？消息和决策记录会一起删除，无法恢复。`)) post('/api/chat/delete', { id: +d.del });
+    if (confirm(tx('删除「{title}」？消息和决策记录会一起删除，无法恢复。', { title: c?.title }))) post('/api/chat/delete', { id: +d.del });
     return;
   }
   if (d.chat) { if (+d.chat !== S.chatId) post('/api/chat/switch', { id: +d.chat }); if (phone()) closeDrawers(); return; }
@@ -1142,7 +1188,7 @@ document.addEventListener('click', e => {
 const memberForm = $('#member-form');
 $('#order-members').onclick = () => {
   orderingMembers = !orderingMembers;
-  $('#order-members').textContent = orderingMembers ? '完成' : '调整顺序';
+  $('#order-members').textContent = tx(orderingMembers ? '完成' : '调整顺序');
   $('#members').classList.toggle('sorting', orderingMembers);
   $('#member-order-hint').hidden = !orderingMembers;
   $('#add-member').hidden = orderingMembers;
@@ -1156,7 +1202,7 @@ document.addEventListener('click', async e => {
   [names[i], names[j]] = [names[j], names[i]];
   savingMemberOrder = true; delete lastHTML['#members']; renderState();
   try { const res = await post('/api/member/order', { names }); const data = await res.json();
-    if (!res.ok) throw new Error(data.error || '排序保存失败');
+    if (!res.ok) throw new Error(data.error || tx('排序保存失败'));
   } catch (err) { alert(err.message); }
   finally { savingMemberOrder = false; delete lastHTML['#members']; renderState(); }
 });
@@ -1165,23 +1211,23 @@ const modelSelect = $('#member-model-select');
 function populateMemberModels(selected = modelSelect.value) {
   const models = [...(modelLists.opencode || [])];
   if (selected && selected !== '__custom__' && !models.some(x => x.id === selected)) models.unshift({ id: selected });
-  modelSelect.innerHTML = '<option value="">选择模型</option>' + models.map(x => `<option value="${esc(x.id)}">${esc(x.id)}</option>`).join('') + '<option value="__custom__">自定义模型…</option>';
+  modelSelect.innerHTML = `<option value="">${tx('选择模型')}</option>` + models.map(x => `<option value="${esc(x.id)}">${esc(x.id)}</option>`).join('') + `<option value="__custom__">${tx('自定义模型…')}</option>`;
   modelSelect.value = selected;
-  $('#model-list-status').textContent = models.length ? `${models.length} 个可用模型` : '尚未读取到模型，请刷新列表或填写自定义模型。';
+  $('#model-list-status').textContent = models.length ? tx('{n} 个可用模型', { n: models.length }) : tx('尚未读取到模型，请刷新列表或填写自定义模型。');
 }
 $('#refresh-models').onclick = async () => {
-  const b = $('#refresh-models'); b.disabled = true; b.textContent = '读取中…';
+  const b = $('#refresh-models'); b.disabled = true; b.textContent = tx('读取中…');
   try { const res = await post('/api/models/refresh'); const data = await res.json();
-    if (!res.ok) throw new Error(data.error || '读取失败');
+    if (!res.ok) throw new Error(data.error || tx('读取失败'));
     modelLists = data.modelLists; populateMemberModels();
   } catch (err) { $('#model-list-status').textContent = err.message; }
-  finally { b.disabled = false; b.textContent = '刷新列表'; }
+  finally { b.disabled = false; b.textContent = tx('刷新列表'); }
 };
 // A new member on another CLI uses its own login and default model (changed later from the member card).
 function syncHarness() {
   const oc = aliasOnly || memberForm.elements.harness.value === 'opencode' || $('#harness-field').hidden;
   $('#opencode-section').hidden = aliasOnly || !oc;
-  $('#harness-help').textContent = oc ? '' : '用这个 CLI 自己的登录和默认模型；添加后可在成员卡片里换模型。';
+  $('#harness-help').textContent = oc ? '' : tx('用这个 CLI 自己的登录和默认模型；添加后可在成员卡片里换模型。');
   syncMemberModel();
 }
 memberForm.elements.harness.onchange = syncHarness;
@@ -1200,8 +1246,8 @@ function editMember(name, onlyAlias = false) {
   memberForm.reset();
   for (const key of ['name', 'label', 'model', 'color']) memberForm.elements[key].value = m?.[key] || (key === 'color' ? '#7c5cff' : '');
   memberForm.elements.label.value = m?.alias || '';
-  memberForm.elements.label.placeholder = m?.defaultAlias || '默认使用 @ 标识';
-  $('#alias-help').textContent = m ? `默认：${m.defaultAlias}，留空恢复默认。不含空格时也用来 @。` : '聊天中显示和 @ 用的名字，留空使用标识。';
+  memberForm.elements.label.placeholder = m?.defaultAlias || tx('默认使用 @ 标识');
+  $('#alias-help').textContent = m ? tx('默认：{a}，留空恢复默认。不含空格时也用来 @。', { a: m.defaultAlias }) : tx('聊天中显示和 @ 用的名字，留空使用标识。');
   memberForm.querySelectorAll('[data-connection]').forEach(el => { el.hidden = onlyAlias; });
   populateMemberModels(m?.model || '');
   syncMemberModel();
@@ -1211,15 +1257,15 @@ function editMember(name, onlyAlias = false) {
   memberForm.elements.name.readOnly = !!m;
   $('#harness-field').hidden = onlyAlias || !!m;
   memberForm.elements.harness.innerHTML = Object.entries(S.harnesses || {}).filter(([, x]) => x.installed)
-    .map(([h, x]) => `<option value="${h}">${esc(x.label)}${h === 'opencode' ? '（任意模型和 API Key）' : '（用它自己的登录）'}</option>`).join('')
+    .map(([h, x]) => `<option value="${h}">${esc(x.label)}${tx(h === 'opencode' ? '（任意模型和 API Key）' : '（用它自己的登录）')}</option>`).join('')
     || '<option value="opencode">OpenCode</option>';
   memberForm.elements.harness.value = m?.harness || (S.harnesses?.opencode?.installed ? 'opencode' : memberForm.elements.harness.value);
   syncHarness();
-  memberForm.elements.apiKey.placeholder = m?.config?.hasKey ? '已配置；留空保留，输入新 Key 替换' : '留空使用 OpenCode 已有凭据';
-  $('#member-title').textContent = onlyAlias ? '编辑别名' : m ? '配置成员' : '邀请新成员';
-  $('#member-subtitle').textContent = onlyAlias ? `给 @${m.name} 起个熟悉的名字。` : m ? `@${m.name} · OpenCode` : '给它一个名字，让新的视角加入讨论。';
-  $('#member-help').textContent = onlyAlias ? '别名可以随时修改，不影响 @ 标识和现有会话。' : '每位成员拥有独立会话。连接配置变更后，会开启新会话，历史消息保留。';
-  memberForm.querySelector('[type="submit"]').textContent = m ? '保存修改' : '添加成员';
+  memberForm.elements.apiKey.placeholder = tx(m?.config?.hasKey ? '已配置；留空保留，输入新 Key 替换' : '留空使用 OpenCode 已有凭据');
+  $('#member-title').textContent = tx(onlyAlias ? '编辑别名' : m ? '配置成员' : '邀请新成员');
+  $('#member-subtitle').textContent = onlyAlias ? tx('给 @{name} 起个熟悉的名字。', { name: m.name }) : m ? `@${m.name} · OpenCode` : tx('给它一个名字，让新的视角加入讨论。');
+  $('#member-help').textContent = tx(onlyAlias ? '别名可以随时修改，不影响 @ 标识和现有会话。' : '每位成员拥有独立会话。连接配置变更后，会开启新会话，历史消息保留。');
+  memberForm.querySelector('[type="submit"]').textContent = tx(m ? '保存修改' : '添加成员');
   $('#member-error').textContent = '';
   $('#member-dialog').showModal();
   if (!onlyAlias && !(modelLists.opencode || []).length) $('#refresh-models').click();
@@ -1232,9 +1278,9 @@ document.addEventListener('click', async e => {
   const alias = e.target.closest('[data-member-alias]'); if (alias) editMember(alias.dataset.memberAlias, true);
   const b = e.target.closest('[data-member-edit]'); if (b) editMember(b.dataset.memberEdit);
   const d = e.target.closest('[data-member-delete]');
-  if (d && confirm(`移除 @${d.dataset.memberDelete}？历史消息保留。`)) {
+  if (d && confirm(tx('移除 @{name}？历史消息保留。', { name: d.dataset.memberDelete }))) {
     try { const res = await post('/api/member/delete', { name: d.dataset.memberDelete });
-      const data = await res.json(); if (!res.ok) throw new Error(data.error || '移除失败');
+      const data = await res.json(); if (!res.ok) throw new Error(data.error || tx('移除失败'));
     } catch (err) { alert(err.message); }
   }
 });
@@ -1244,7 +1290,7 @@ memberForm.onsubmit = async e => {
   try {
     const body = Object.fromEntries(new FormData(memberForm)); body.clearKey = memberForm.elements.clearKey.checked;
     const res = await post(aliasOnly ? '/api/member/alias' : '/api/member/save', body);
-    const data = await res.json(); if (!res.ok) throw new Error(data.error || '保存失败');
+    const data = await res.json(); if (!res.ok) throw new Error(data.error || tx('保存失败'));
     $('#member-dialog').close();
   } catch (err) { $('#member-error').textContent = err.message; }
   finally { button.disabled = false; }
@@ -1256,23 +1302,24 @@ document.addEventListener('change', e => {
   if ('userName' in d) post('/api/settings', { userName: e.target.value });
   if (d.model) {
     let value = e.target.value;
-    if (value === '__custom__') { value = prompt('填写真实模型 ID（OpenCode 使用 provider/model）', member(d.model)?.model || '');
+    if (value === '__custom__') { value = prompt(tx('填写真实模型 ID（OpenCode 使用 provider/model）'), member(d.model)?.model || '');
       if (value === null || !value.trim()) { e.target.value = member(d.model)?.model || ''; return; } value = value.trim(); }
     post('/api/settings', { models: { [d.model]: value } });
   }
 });
 for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind', 'outsider', 'userPlays']) $('#s-' + k).onchange = e => post('/api/settings', { [k]: e.target.checked });
 document.addEventListener('click', e => { if (e.target.closest('[data-gamenew]')) post('/api/game/new'); });
-document.addEventListener('click', e => { if (e.target.closest('[data-gameend]') && confirm('结束这局游戏？之后的消息就是普通聊天。')) post('/api/game/end'); });
-$('#outsider-now').onclick = async () => { const r = await post('/api/outsider'); if (!r.ok) alert((await r.json().catch(() => ({}))).error || '请求失败'); };
-for (const k of ['language', 'turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin'])
+document.addEventListener('click', e => { if (e.target.closest('[data-gameend]') && confirm(tx('结束这局游戏？之后的消息就是普通聊天。'))) post('/api/game/end'); });
+$('#outsider-now').onclick = async () => { const r = await post('/api/outsider'); if (!r.ok) alert((await r.json().catch(() => ({}))).error || tx('请求失败')); };
+for (const k of ['turnCap', 'readSpeed', 'maxThinkers', 'scheduler', 'convergeAt', 'noveltyMin'])
   $('#s-' + k).addEventListener('change', e => post('/api/settings', { [k]: e.target.value }));
+$('#s-uiLang').onchange = async e => { await post('/api/settings', { uiLang: e.target.value }); location.reload(); };
 
 function setReply(id) {
   replyTo = id;
   const m = messages.find(x => x.id === id), q = $('#quote');
   q.style.display = id ? 'block' : 'none';
-  if (id) q.innerHTML = `<span class="q"><span>回复 #${id} ${esc(label(m?.sender))}：${esc((m?.text || '').slice(0, 80))}</span><button class="icon" id="unquote" style="width:20px;height:20px" aria-label="取消引用">✕</button></span>`;
+  if (id) q.innerHTML = `<span class="q"><span>${tx('回复 {ref}', { ref: `#${id}` })} ${esc(label(m?.sender))}${tx('：')}${esc((m?.text || '').slice(0, 80))}</span><button class="icon" id="unquote" style="width:20px;height:20px" aria-label="${tx('取消引用')}">✕</button></span>`;
   if (id) { $('#unquote').onclick = ev => { ev.stopPropagation(); setReply(null); }; $('#input').focus(); }
 }
 
@@ -1290,11 +1337,11 @@ setInterval(() => { if ($('#input').value.trim()) typing(); }, 5000);
 
 async function sendMsg() {
   const text = $('#input').value.trim();
-  if (pending.some(p => !p.file && !p.failed)) return alert('附件还在上传，稍等一下再发送');
+  if (pending.some(p => !p.file && !p.failed)) return alert(tx('附件还在上传，稍等一下再发送'));
   const files = pending.filter(p => p.file).map(({ file, name, size, type }) => ({ file, name, size, type }));
   if (!text && !files.length) return;
   const r = await post('/api/send', { text, reply_to: replyTo, chat_id: S.chatId, files });
-  if (!r.ok) return alert((await r.json().catch(() => ({}))).error || '发送失败'); // keep the text for a retry
+  if (!r.ok) return alert((await r.json().catch(() => ({}))).error || tx('发送失败')); // keep the text for a retry
   $('#input').value = ''; grow(); lastPing = 0; setReply(null);
   pending.length = 0; renderPending();
 }
@@ -1304,7 +1351,7 @@ async function sendMsg() {
 const pending = []; // {name, size, type, url (image preview), file (once uploaded) | failed}
 async function attach(list) {
   for (const f of list) {
-    if (f.size > 20e6) { alert(`${f.name} 超过 20MB，没有添加`); continue; }
+    if (f.size > 20e6) { alert(tx('{name} 超过 20MB，没有添加', { name: f.name })); continue; }
     const p = { name: f.name || 'image.png', size: f.size, type: f.type, url: f.type.startsWith('image/') ? URL.createObjectURL(f) : '' };
     pending.push(p); renderPending();
     try {
@@ -1317,8 +1364,8 @@ async function attach(list) {
 }
 function renderPending() {
   $('#atts').innerHTML = pending.map((p, i) => `<span class="att-chip${p.failed ? ' failed' : ''}">${p.url ? `<img src="${p.url}" alt="">` : ''}`
-    + `<span>${esc(p.name)}${p.failed ? '（上传失败）' : p.file ? '' : '（上传中…）'}</span>`
-    + `<button data-unattach="${i}" title="移除" aria-label="移除 ${esc(p.name)}">✕</button></span>`).join('');
+    + `<span>${esc(p.name)}${p.failed ? tx('（上传失败）') : p.file ? '' : tx('（上传中…）')}</span>`
+    + `<button data-unattach="${i}" title="${tx('移除')}" aria-label="${tx('移除 {name}', { name: esc(p.name) })}">✕</button></span>`).join('');
 }
 $('#attach').onclick = () => $('#filepick').click();
 $('#filepick').onchange = e => { attach([...e.target.files]); e.target.value = ''; };
@@ -1337,9 +1384,9 @@ let savedPrompts = [];
 function renderPrompts() {
   $('#plist').innerHTML = savedPrompts.map(p => `<div class="prow" data-puse="${p.id}" title="${esc(p.text.slice(0, 300))}">`
     + `<span class="pt">${esc(p.title)}</span>${p.mode ? `<span class="k">${MODE_LABEL[p.mode] || ''}</span>` : ''}`
-    + `<button data-pnew="${p.id}" title="开一场新讨论${p.mode ? `（${MODE_LABEL[p.mode]}模式）` : ''}，把它填进输入框">新讨论</button>`
-    + `<button data-pdel="${p.id}" title="删除这条收藏" aria-label="删除">✕</button></div>`).join('')
-    || '<div class="memempty">还没有收藏。把 prompt 写进输入框，点“收藏当前输入”。</div>';
+    + `<button data-pnew="${p.id}" title="${tx(p.mode ? '开一场新讨论（{mode}模式），把它填进输入框' : '开一场新讨论，把它填进输入框', { mode: MODE_LABEL[p.mode] })}">${tx('新讨论')}</button>`
+    + `<button data-pdel="${p.id}" title="${tx('删除这条收藏')}" aria-label="${tx('删除')}">✕</button></div>`).join('')
+    || `<div class="memempty">${tx('还没有收藏。把 prompt 写进输入框，点“收藏当前输入”。')}</div>`;
 }
 const fill = p => { $('#input').value = p.text; grow(); $('#input').focus(); $('#prompts').hidden = true; };
 $('#fav').onclick = () => { $('#prompts').hidden = !$('#prompts').hidden; };
@@ -1348,7 +1395,7 @@ $('#prompts').addEventListener('click', async e => {
   const b = e.target.closest('[data-psave],[data-puse],[data-pnew],[data-pdel]');
   if (!b) return;
   const p = savedPrompts.find(x => x.id === (b.dataset.puse || b.dataset.pnew || b.dataset.pdel));
-  if (b.dataset.pdel) { if (confirm(`删除收藏「${p.title}」？`)) post('/api/prompts/delete', { id: p.id }); return; }
+  if (b.dataset.pdel) { if (confirm(tx('删除收藏「{title}」？', { title: p.title }))) post('/api/prompts/delete', { id: p.id }); return; }
   if (b.dataset.pnew) {
     const { id } = await (await post('/api/chat/new')).json();
     if (p.mode) await post('/api/chat/mode', { id, mode: p.mode });
@@ -1359,12 +1406,12 @@ $('#prompts').addEventListener('click', async e => {
     return fill(p);
   }
   const text = $('#input').value.trim();
-  if (!text) return alert('先把要收藏的 prompt 写进输入框');
-  const title = prompt('给这个 prompt 起个名字', text.split('\n')[0].replace(/^#+\s*/, '').slice(0, 30))?.trim();
-  if (!title || (savedPrompts.some(x => x.title === title) && !confirm(`已经有「${title}」，覆盖吗？`))) return;
+  if (!text) return alert(tx('先把要收藏的 prompt 写进输入框'));
+  const title = prompt(tx('给这个 prompt 起个名字'), text.split('\n')[0].replace(/^#+\s*/, '').slice(0, 30))?.trim();
+  if (!title || (savedPrompts.some(x => x.title === title) && !confirm(tx('已经有「{title}」，覆盖吗？', { title })))) return;
   const mode = S.discussionMode.mode !== 'auto' ? S.discussionMode.mode : null;
   const r = await post('/api/prompts/save', { title, text, mode });
-  if (!r.ok) alert((await r.json().catch(() => ({}))).error || '收藏失败');
+  if (!r.ok) alert((await r.json().catch(() => ({}))).error || tx('收藏失败'));
 });
 $('#input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMsg(); } });
 $('#pause').onclick = () => post('/api/pause', { paused: !S.paused });
@@ -1374,15 +1421,15 @@ $('#title').onclick = () => SHARED || rename(S.chatId);
 $('#share').onclick = async () => {
   const { share } = await (await post('/api/chat/share', { id: S.chatId })).json();
   const url = `${location.origin}/s/${share}`;
-  try { await navigator.clipboard.writeText(url); alert(`已复制只读链接，打开的人只能看这场讨论：\n${url}`); }
-  catch { prompt('只读链接（打开的人只能看这场讨论）：', url); }
+  try { await navigator.clipboard.writeText(url); alert(`${tx('已复制只读链接，打开的人只能看这场讨论：')}\n${url}`); }
+  catch { prompt(tx('只读链接（打开的人只能看这场讨论）：'), url); }
 };
 
 // Discussion mode: Auto shows what Jev chose; picking a mode overrides it from the next turn.
-const MODE_LABEL = { research: '研究', roundtable: '圆桌', debate: '辩论', story: '故事', game: '博弈' };
+const MODE_LABEL = { research: tx('研究'), roundtable: tx('圆桌'), debate: tx('辩论'), story: tx('故事'), game: tx('博弈') };
 function renderMode() {
   const d = S.discussionMode;
-  const auto = d.pending ? '自动 · 判断中…' : d.auto ? `自动 · ${MODE_LABEL[d.auto]}` : '自动';
+  const auto = d.pending ? tx('自动 · 判断中…') : d.auto ? `${tx('自动')} · ${MODE_LABEL[d.auto]}` : tx('自动');
   setHTML('#mode', [['auto', auto], ...Object.entries(MODE_LABEL)]
     .map(([v, l]) => `<option value="${v}" ${v === d.mode ? 'selected' : ''}>${l}</option>`).join(''));
 }
@@ -1413,8 +1460,8 @@ document.addEventListener('keydown', e => {
 function voiceOptions(name) {
   const cur = S.settings.ttsVoices?.[name] || '', def = S.speech.defaults[name];
   const defLabel = S.speech.models.find(t => t.id === def)?.label || def;
-  return [{ id: '', label: `默认：${defLabel}` }, ...S.speech.models]
-    .map(t => `<option value="${esc(t.id)}" ${t.id === cur ? 'selected' : ''}>${esc(t.label)}</option>`).join('');
+  return [{ id: '', label: tx('默认：{v}', { v: tx(defLabel) }) }, ...S.speech.models]
+    .map(t => `<option value="${esc(t.id)}" ${t.id === cur ? 'selected' : ''}>${esc(tx(t.label))}</option>`).join('');
 }
 
 // Each browser decides for itself whether to read aloud. While it plays (or still has replies to play) it holds the
@@ -1484,12 +1531,12 @@ function renderTts() {
   const b = $('#tts');
   b.hidden = !S.speech?.on;
   b.classList.toggle('on', tts.on); b.classList.toggle('blocked', tts.blocked); b.setAttribute('aria-pressed', tts.on);
-  b.title = tts.blocked ? '浏览器拦截了自动播放：点一下继续朗读' : tts.on ? '正在朗读新发言（点击关闭）' : '朗读新发言（局域网语音服务）；朗读时暂缓发布下一条';
+  b.title = tx(tts.blocked ? '浏览器拦截了自动播放：点一下继续朗读' : tts.on ? '正在朗读新发言（点击关闭）' : '朗读新发言（局域网语音服务）；朗读时暂缓发布下一条');
   const mic = $('#mic');
   mic.hidden = !S.speech?.on;
   // Browsers only allow the microphone on HTTPS or localhost.
   mic.disabled = !window.isSecureContext || !navigator.mediaDevices;
-  if (mic.disabled) mic.title = '语音输入需要 HTTPS 或 localhost 访问：浏览器不允许在普通 http 局域网地址上使用麦克风';
+  if (mic.disabled) mic.title = tx('语音输入需要 HTTPS 或 localhost 访问：浏览器不允许在普通 http 局域网地址上使用麦克风');
 }
 const unblock = () => { tts.blocked = false; renderTts(); playNext(); };
 for (const ev of ['pointerdown', 'keydown'])
@@ -1542,11 +1589,11 @@ $('#mic').onclick = async () => {
         const r = await fetch('/api/stt', { method: 'POST', body: await toWav16k(new Blob(rec.chunks)) });
         const data = await r.json(); if (!r.ok) throw new Error(data.error || r.status);
         const i = $('#input'); i.value = (i.value ? i.value + ' ' : '') + data.text; i.focus(); grow(); typing();
-      } catch (err) { alert('语音识别失败：' + err.message); }
+      } catch (err) { alert(tx('语音识别失败：') + err.message); }
       mic.disabled = false;
     };
     rec.media.start(); mic.classList.add('rec'); typing();
-  } catch (err) { alert('无法使用麦克风：' + err.message); }
+  } catch (err) { alert(tx('无法使用麦克风：') + err.message); }
 };
 </script>
 </body>

@@ -59,7 +59,7 @@ import net from 'node:net';
 async function server(t, slowFirst = 0) {
   const root = mkdtempSync(join(tmpdir(), 'agent-chat-flow-test-'));
   const app = join(root, 'app'); mkdirSync(app);
-  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'game.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
+  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'game.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'i18n.mjs', 'index.html'])
     copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
   const log = join(root, 'turns.jsonl');
   // Story turns: the first one passes the baton to @opencode; every turn adds a note. The judge gives a verdict.
