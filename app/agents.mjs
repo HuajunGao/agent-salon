@@ -185,7 +185,7 @@ export const AGENTS = {
         ev.result.status === 'SUCCESS' ? (st.text = ev.result.response) : (st.error = `agy ${ev.result.status}`);
         // Headless agy can't prompt: a denied permission ends the turn with an empty response.
         const denied = (ev.result.denied_actions || []).map(d => d.action);
-        if (!st.text && denied.length) st.error = `agy 权限被拒（${denied.join(', ')}），本轮无输出`;
+        if (!st.text && denied.length) st.error = `agy denied actions (${denied.join(', ')}), no output this turn`;
       }
     },
   },
@@ -235,7 +235,7 @@ AGENTS.hermes = {
   label: 'Hermes', color: '#b45309', defaultModel: '', optional: true,
   async http(prompt, sid, { signal }) {
     const base = (process.env.HERMES_BASE_URL || '').replace(/\/+$/, '');
-    if (!base) return { sid, error: 'HERMES_BASE_URL 未配置' };
+    if (!base) return { sid, error: 'HERMES_BASE_URL is not set' };
     sid ||= `agent-chat-${randomUUID()}`;
     const r = await fetch(base + '/chat/completions', { method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout(TOTAL_MS)].filter(Boolean)),
       headers: { authorization: `Bearer ${process.env.HERMES_API_KEY || ''}`, 'content-type': 'application/json', 'X-Hermes-Session-Id': sid },

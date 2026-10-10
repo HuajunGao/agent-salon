@@ -54,7 +54,7 @@ test('parseReply finds markers mid-line, several on a line, and before more text
 test('research mode: everyone answers the question at once, stances reach the state', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agent-chat-stance-test-'));
   const app = join(root, 'app'); mkdirSync(app);
-  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'game.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'index.html'])
+  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'game.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'i18n.mjs', 'index.html'])
     copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
   const log = join(root, 'turns.jsonl');
   writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs, spawnJob } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};

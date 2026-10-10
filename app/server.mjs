@@ -11,6 +11,7 @@ import { judge, novelty, classifyMode, stanceShift } from './moderator.mjs';
 import { talkOrder, parseHost, hostBrief, playerBrief, HOST_TURNS } from './game.mjs';
 import { MODES, rulesOf, relayNext, debateSetup, debateScript, debateBrief, seatOf, PHASES, parseReply, applyNotes } from './modes.mjs';
 import { curate } from './memory.mjs';
+import { translate, EN } from './i18n.mjs';
 import { validateMember, memberMentions, atToken } from './members.mjs';
 import { speechOn, loadCatalog, ttsModels, speakable, synth, transcribe, defaultVoice, FALLBACK_TTS } from './speech.mjs';
 
@@ -161,11 +162,16 @@ for (const a of NAMES) {
   if (RUNAS) chownSync(wsOf(a), RUNAS.uid, RUNAS.gid);
 }
 
-const DEFAULTS = { language: '中文', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true, memory: true, exec: false, blind: true, outsider: true,
+const DEFAULTS = { uiLang: '', language: '', turnCap: 3, readSpeed: 400, maxThinkers: 2, scheduler: 'algorithm', autoStop: true, convergeAt: 80, noveltyMin: 45, devil: true, circlePause: true, memory: true, exec: false, blind: true, outsider: true,
   enabled: Object.fromEntries(NAMES.map(n => [n, true])), models: Object.fromEntries(NAMES.map(n => [n, memberConfigs[n].model])) };
 let S = { ...DEFAULTS, ...JSON.parse(q1(`SELECT value FROM settings WHERE key='s'`)?.value || '{}') };
 S.models = { ...DEFAULTS.models, ...S.models };
 S.enabled = { ...DEFAULTS.enabled, ...S.enabled };
+// UI language: S.uiLang, or '' = each browser's own; notes posted to the chat use it, else the last browser's.
+let lastLang = 'zh';
+const tx = (s, v) => translate(S.uiLang || lastLang, s, v);
+// the language members reply in: the setting, else the UI's (existing installs keep the 中文 they stored)
+const replyLang = () => S.language || ((S.uiLang || lastLang) === 'en' ? 'English' : '中文');
 if (NAMES.includes('glm') && !NAMES.includes('opencode')) {
   if (S.models.opencode) { S.models.glm = S.models.opencode; delete S.models.opencode; }
   if (typeof S.enabled.opencode === 'boolean') { S.enabled.glm = S.enabled.opencode; delete S.enabled.opencode; }
@@ -176,7 +182,7 @@ listModels().then(l => { modelLists = l; send(init()); });
 const saveSettings = () => run(`INSERT OR REPLACE INTO settings VALUES('s', ?)`, JSON.stringify(S));
 const memberOrder = () => [...new Set([...(Array.isArray(S.memberOrder) ? S.memberOrder : []), ...NAMES])].filter(n => NAMES.includes(n));
 
-let chatId = q1('SELECT max(id) id FROM chats')?.id || Number(run(`INSERT INTO chats(title) VALUES('讨论 1')`).lastInsertRowid);
+let chatId = q1('SELECT max(id) id FROM chats')?.id || Number(run(`INSERT INTO chats(title) VALUES(?)`, tx('讨论 {n}', { n: 1 })).lastInsertRowid);
 let paused = !!q1('SELECT paused FROM chats WHERE id=?', chatId).paused;
 
 const sess = (c, a) => q1('SELECT * FROM agent_sessions WHERE chat_id=? AND agent=?', c, a)
@@ -296,8 +302,8 @@ async function classifyChat(c, msg) {
   } else if (chatMode(c).mode === 'auto') { // the user may have picked a mode meanwhile
     run('UPDATE chats SET auto_mode=? WHERE id=?', r.mode, c);
     logDecision('mode', null, { score: r.probabilities[r.mode], latency_ms: r.ms, detail: { source: 'jev', ...r } });
-    if (c === chatId) note(`🧭 讨论模式：${MODES[r.mode].label}（Jev 判断，${Math.round(r.probabilities[r.mode] * 100)}%）。`
-      + `${msg ? `${OPEN_HOLD / 1e3} 秒后开始，不对的话现在在顶栏换模式。` : '可以在顶栏随时切换。'}`);
+    if (c === chatId) note(tx('🧭 讨论模式：{mode}（Jev 判断，{p}%）。', { mode: tx(MODES[r.mode].label), p: Math.round(r.probabilities[r.mode] * 100) })
+      + (msg ? tx('{s} 秒后开始，不对的话现在在顶栏换模式。', { s: OPEN_HOLD / 1e3 }) : tx('可以在顶栏随时切换。')));
   }
   if (msg && c === chatId) holdOpening(c, msg);
   pump();
@@ -346,7 +352,7 @@ function setNick(c, a, nick) {
 // An alias that would be @-called must not be another member's handle or @-name.
 function checkAlias(name, label) {
   for (const at of new Set([name, atToken(name, label).toLowerCase()]))
-    if (NAMES.some(n => n !== name && (n === at || atOf(n).toLowerCase() === at))) throw new Error(`@${at} 已被其他成员使用`);
+    if (NAMES.some(n => n !== name && (n === at || atOf(n).toLowerCase() === at))) throw new Error(tx('@{at} 已被其他成员使用', { at }));
 }
 
 // Research mode: the discussion's opening question is answered independently: until the first reply is published,
@@ -392,15 +398,15 @@ function debateOnUser(m) {
     const names = enabledOrder();
     if (names.length < 2) {
       st.debate = { done: true, skipped: true }; saveState(chatId, st);
-      note('🧭 辩论至少需要 2 位参与成员，先按自由讨论进行。');
+      note(tx('🧭 辩论至少需要 2 位参与成员，先按自由讨论进行。'));
       return wake(m);
     }
     const nd = { ...debateSetup(names), motion: m.id };
     st.debate = { ...nd, script: debateScript(nd) }; saveState(chatId, st);
-    const who = n => (n === 'user' ? '你' : `@${atOf(n)}`);
+    const who = n => (n === 'user' ? tx('你') : `@${atOf(n)}`);
     logDecision('debate', null, { message_id: m.id, detail: { pro: nd.pro, con: nd.con, judge: nd.judge } });
-    note(`🧭 辩论开始，辩题是 #${m.id}。抽签结果：正方 ${nd.pro.map(who).join('、')}；反方 ${nd.con.map(who).join('、')}；`
-      + `评委 ${who(nd.judge)}。顺序：开篇立论、驳论、自由辩、结辩，最后由评委评判，之后自由讨论。你随时可以插话。`);
+    note(tx('🧭 辩论开始，辩题是 #{id}。抽签结果：正方 {pro}；反方 {con}；评委 {judge}。顺序：开篇立论、驳论、自由辩、结辩，最后由评委评判，之后自由讨论。你随时可以插话。',
+      { id: m.id, pro: nd.pro.map(who).join(tx('、')), con: nd.con.map(who).join(tx('、')), judge: who(nd.judge) }));
     return nextSlot(chatId);
   }
   if (d.script[d.at]?.phase === 'verdict' && d.judge === 'user') return finishDebate(chatId); // the user's verdict
@@ -413,11 +419,11 @@ function nextSlot(c) {
   const st = chatState(c), d = st.debate;
   for (; d.at < d.script.length; d.at++) {
     const s = d.script[d.at], prev = d.script[d.at - 1];
-    if (s.phase === 'verdict' && d.judge === 'user') { noteNext('🧭 结辩结束。请你作为评委判胜负、说说理由；你发言后进入自由讨论。'); break; }
+    if (s.phase === 'verdict' && d.judge === 'user') { noteNext(tx('🧭 结辩结束。请你作为评委判胜负、说说理由；你发言后进入自由讨论。')); break; }
     const spoke = n => q1('SELECT count(*) n FROM messages WHERE chat_id=? AND sender=? AND id>?', c, n, d.motion).n;
     const who = s.phase === 'free' ? d[s.side].filter(n => S.enabled[n]).sort((x, y) => spoke(x) - spoke(y))[0] : s.who;
     if (!who || !S.enabled[who]) continue;
-    if (prev && prev.phase !== s.phase) noteNext(`🧭 进入${PHASES[s.phase]}。`);
+    if (prev && prev.phase !== s.phase) noteNext(tx('🧭 进入{phase}。', { phase: tx(PHASES[s.phase]) }));
     rt[who].hand = { r: 50, since: Date.now(), why: 'debate', slot: d.at, seat: seatOf(d, who) };
     break;
   }
@@ -437,7 +443,7 @@ function finishDebate(c) {
   st.debate.done = true; saveState(c, st);
   logDecision('debate-over', null, { message_id: lastTalkId() });
   if (c !== chatId) return;
-  note('🧭 辩论结束，进入自由讨论：大家不必再守持方，说说自己真实的想法。');
+  note(tx('🧭 辩论结束，进入自由讨论：大家不必再守持方，说说自己真实的想法。'));
   for (const n of NAMES) raise(n, 1, 'after the debate');
 }
 
@@ -453,14 +459,14 @@ function gameOnUser(m) {
   if (st.game?.over) { for (const n of NAMES) raise(n, 1, 'user message'); return; }
   if (!st.game) {
     const host = mentions(m.text).find(n => S.enabled[n]);
-    if (!host) return note('🎲 博弈要有人主持：@ 一位成员当主持人，再说说玩什么、规则是什么，比如“@claude 主持，我们玩狼人杀”。');
+    if (!host) return note(tx('🎲 博弈要有人主持：@ 一位成员当主持人，再说说玩什么、规则是什么，比如“@claude 主持，我们玩狼人杀”。'));
     const players = enabledOrder().filter(n => n !== host);
-    if (players.length < 2) return note('🎲 博弈除了主持人至少还要 2 位参与成员。');
+    if (players.length < 2) return note(tx('🎲 博弈除了主持人至少还要 2 位参与成员。'));
     st.game = { host, players, phase: 'host', round: 0, step: 0, orders: {}, waiting: [], queue: [], ledger: '' };
     saveState(chatId, st);
     logDecision('game-start', null, { message_id: m.id, detail: { host, players } });
-    note(`🎲 博弈开始：${handle(host)} 主持，玩家 ${players.map(handle).join('、')}。主持人先公布规则、私信发身份或资源，`
-      + '再一个阶段一个阶段推进（轮流发言 / 秘密行动），每个阶段后由它结算。私信、秘密指令和它的私密账本你都看得到。');
+    note(tx('🎲 博弈开始：{host} 主持，玩家 {players}。主持人先公布规则、私信发身份或资源，再一个阶段一个阶段推进（轮流发言 / 秘密行动），每个阶段后由它结算。私信、秘密指令和它的私密账本你都看得到。',
+      { host: handle(host), players: players.map(handle).join(tx('、')) }));
     return gameNext(chatId);
   }
   if (!busy() && !NAMES.some(n => rt[n].hand)) gameNext(chatId); // nothing scheduled (e.g. after a stop): carry on
@@ -512,21 +518,21 @@ function gameOrder(c, a, h, res) {
 function hostDone(c, play, h) {
   const st = chatState(c), g = st.game;
   if (!g?.host || g.over || g.phase !== 'host' || g.round !== play.round) return;
-  if (!h) return void jobNote(c, '⚠ 主持人这一回合没成功，发一条消息让它再来一次。');
+  if (!h) return void jobNote(c, tx('⚠ 主持人这一回合没成功，发一条消息让它再来一次。'));
   if (h.ledger != null) g.ledger = h.ledger;
   g.round++;
   // [PAUSE], or no next step at all (a guess could run the wrong phase): wait for the user, whose message wakes the host
   if (!h.next || h.next.kind === 'pause') {
     saveState(c, st);
     logDecision('game-pause', g.host, { chat: c, detail: { round: g.round, asked: !!h.next } });
-    return noteNext(h.next ? '⏸ 主持人暂停了比赛（原因见它的发言）。发一条消息让它继续。'
-      : '⏸ 主持人这一回合没写下一步（[PHASE …] / [PAUSE] / [END]），比赛先暂停。发一条消息让它继续。', c);
+    return noteNext(tx(h.next ? '⏸ 主持人暂停了比赛（原因见它的发言）。发一条消息让它继续。'
+      : '⏸ 主持人这一回合没写下一步（[PHASE …] / [PAUSE] / [END]），比赛先暂停。发一条消息让它继续。'), c);
   }
   const next = h.next;
   if (next.kind === 'end' || g.round >= HOST_TURNS) {
     Object.assign(g, { over: next.kind === 'end' ? 'end' : 'cap', phase: 'over' }); saveState(c, st);
     logDecision('game-over', g.host, { chat: c, detail: { over: g.over, turns: g.round } });
-    noteNext(g.over === 'end' ? '🏁 主持人宣布游戏结束。' : `🏁 主持人已经主持了 ${HOST_TURNS} 回合，游戏到此结束。`, c);
+    noteNext(g.over === 'end' ? tx('🏁 主持人宣布游戏结束。') : tx('🏁 主持人已经主持了 {n} 回合，游戏到此结束。', { n: HOST_TURNS }), c);
     if (c === chatId) for (const a of [...g.players, g.host]) raise(a, 1, 'after the game');
     return;
   }
@@ -540,8 +546,9 @@ function hostDone(c, play, h) {
   }
   saveState(c, st);
   logDecision('game-phase', g.host, { chat: c, detail: { round: g.round, ...next, waiting: g.waiting } });
-  noteNext(next.kind === 'talk' ? `🎲 轮流发言${order.length ? `：${g.queue.map(handle).join(' → ')}` : next.laps > 1 ? `（每人 ${next.laps} 次）` : ''}。`
-    : `🎲 秘密行动：${g.waiting.map(handle).join('、')}，指令只交给主持人。`, c);
+  noteNext(next.kind === 'talk' ? tx('🎲 轮流发言') + (order.length ? tx('：{order}', { order: g.queue.map(handle).join(' → ') })
+    : next.laps > 1 ? tx('（每人 {n} 次）', { n: next.laps }) : '') + tx('。')
+    : tx('🎲 秘密行动：{who}，指令只交给主持人。', { who: g.waiting.map(handle).join(tx('、')) }), c);
   gameNext(c);
 }
 // Every CLI runs as the same OS user, so a player could read other members'
@@ -553,7 +560,7 @@ function audit(c, a, log) {
     && (PEEK.test(l) || NAMES.some(n => n !== a && (l.includes(wsOf(n)) || l.includes(`../${n}`)))));
   if (!hits.length) return;
   logDecision('game-audit', a, { detail: { hits } });
-  jobNote(c, `🚨 ${handle(a)} 这一回合碰了不该看的地方：\n${hits.slice(0, 3).map(l => `\`${l.slice(0, 160)}\``).join('\n')}`);
+  jobNote(c, `${tx('🚨 {who} 这一回合碰了不该看的地方：', { who: handle(a) })}\n${hits.slice(0, 3).map(l => `\`${l.slice(0, 160)}\``).join('\n')}`);
 }
 
 // ---------- the discussion's notes ----------
@@ -639,10 +646,10 @@ function pump() {
       }
       if (blind) {
         rt[c.a].hand.blind = true;
-        if (jev.blindAt !== lastUserId(chatId)) { jev.blindAt = lastUserId(chatId); note('🧭 研究模式：先请大家各自独立作答（互相看不到），答完再互相讨论。'); }
+        if (jev.blindAt !== lastUserId(chatId)) { jev.blindAt = lastUserId(chatId); note(tx('🧭 研究模式：先请大家各自独立作答（互相看不到），答完再互相讨论。')); }
       }
       logDecision('start', c.a, { score: c.s, detail: { ...c, blind, candidates: cands.map(x => [x.a, +x.s.toFixed(2)]) } });
-      if (c.why === 'Jev') note(`🧭 请 @${atOf(c.a)} 发言（新意 ${Math.round(c.nov * 100)}%）`);
+      if (c.why === 'Jev') note(tx('🧭 请 @{a} 发言（新意 {p}%）', { a: atOf(c.a), p: Math.round(c.nov * 100) }));
       startTurn(c.a);
     }
   }
@@ -670,7 +677,7 @@ async function assess() {
   if (r.error) {
     jev.downAt = Date.now();
     logDecision('jev-error', null, { detail: r });
-    note(`🧭 Jev 暂时不可用（${r.error.slice(0, 80)}），1 分钟内改用算法调度。`);
+    note(tx('🧭 Jev 暂时不可用（{err}），1 分钟内改用算法调度。', { err: r.error.slice(0, 80) }));
   } else if (lastUserId(chatId) === round && wrapRound !== round) {
     jev.ms = r.ms;
     for (const a of cands) rt[a].nov = { p: r.novelty[a], at };
@@ -692,8 +699,8 @@ function floorBack() {
   floorTimer = setTimeout(() => {  // give a pending Jev call a moment
     if (!quiet() || jev.idleNoted === lastTalkId()) return;
     jev.idleNoted = lastTalkId();
-    const c = mod ? `收敛度 ${Math.round(mod.convergence * 100)}%，` : '';
-    note(`🧭 暂时没有人要发言了（${c}没人举手）。轮到你：可以追问、反驳，或 @某人。`);
+    const c = mod ? tx('收敛度 {p}%，', { p: Math.round(mod.convergence * 100) }) : '';
+    note(tx('🧭 暂时没有人要发言了（{c}没人举手）。轮到你：可以追问、反驳，或 @某人。', { c }));
   }, 1500);
 }
 
@@ -710,7 +717,7 @@ async function maybeCurate(force = false) {
   const quiet = NAMES.every(n => rt[n].status !== 'thinking') && !ready.length;
   if (!force && (!quiet || Date.now() - new Date(pending.at(-1).created_at.replace(' ', 'T') + 'Z') < 20e3)) return;
   const curator = memberOrder().find(n => S.enabled[n] && rt[n].status === 'idle');
-  if (!curator) { if (force) { memo.error = '请先启用一位空闲成员来整理记忆'; sendState(); } return; }
+  if (!curator) { if (force) { memo.error = tx('请先启用一位空闲成员来整理记忆'); sendState(); } return; }
   const member = { ...memberConfigs[curator], model: S.models[curator] || '' };
   memo.curating = true; memo.abort = new AbortController(); sendState();
   // Facts without a month get the month of their latest source message, so the curator can tell old from recent.
@@ -718,7 +725,7 @@ async function maybeCurate(force = false) {
     const at = q1(`SELECT max(created_at) at FROM messages WHERE id IN (${refs.match(/\d+/g).join(',')})`)?.at;
     return at ? `(${refs}, ${at.slice(0, 7)})` : all;
   });
-  const r = await curate(dated, pending, { language: S.language, cwd: wsOf(curator), dataDir: DATA,
+  const r = await curate(dated, pending, { language: replyLang(), cwd: wsOf(curator), dataDir: DATA,
     harness: member.harness, model: member.model, member, signal: memo.abort.signal });
   // back off after a failure; a stopped curation just tries again later, quietly
   memo.curating = false; memo.error = r.error === 'stopped' ? '' : r.error || ''; memo.retryAt = r.error ? Date.now() + 10 * 60e3 : 0;
@@ -798,19 +805,19 @@ function turnAsk(a, chat, { r, d, phase, k, n, floor, summary, invited, blind, r
     + (nickOf(a, chat) ? `Your name here is ${nickOf(a, chat)}; a line [NAME] <name> changes it if your role or mood changes.`
       : 'Give yourself a name for this discussion: a line [NAME] <name> (up to 12 characters, no spaces). Have fun with it, '
         + 'pick one that fits your character, role or stance here; it shows next to your messages and others can @ you by it.');
-  const reply = `(Reply in ${S.language}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later. ${tools})`;
+  const reply = `(Reply in ${replyLang()}. Short chat message. Answer exactly PASS if you have nothing new. End with [HAND] to speak again later. ${tools})`;
   if (summary) return `\n\nThe moderator judged that the discussion has converged. Write a short summary for the user: `
     + `the conclusion, who agreed (cite #N), and caveats still open. No new arguments, no @mentions, no [HAND].\n\n${reply}${roster}`;
   let ask;
   const g = r.flow === 'game' && chatState(chat).game;
-  if (r.flow === 'relay') ask = `\n\n(Your turn in the relay. Reply in ${S.language}. ${tools})\n${r.prompt}`;
+  if (r.flow === 'relay') ask = `\n\n(Your turn in the relay. Reply in ${replyLang()}. ${tools})\n${r.prompt}`;
   else if (g) ask = `\n\n${!g.host ? 'The game is over: talk about it in public.' // an old built-in game
     : a !== g.host ? playerBrief(g, a, play?.phase || 'over', handle, exec)
     : play?.phase === 'host' ? hostBrief(g, handle, exec, !g.round) : 'You hosted the game, which is over: talk about it in public.'}`
-    + `\n\n(Reply in ${S.language}. ${tools})\n${r.prompt}`;
+    + `\n\n(Reply in ${replyLang()}. ${tools})\n${r.prompt}`;
   else if (r.flow === 'debate' && d && !d.skipped && seatOf(d, a)) {
     const motion = q1('SELECT text FROM messages WHERE id=?', d.motion)?.text || '';
-    ask = `\n\n${debateBrief(d, a, phase || d.script[d.at]?.phase || 'free', motion, x => `@${atOf(x)}`)}\n(Reply in ${S.language}. ${tools})`;
+    ask = `\n\n${debateBrief(d, a, phase || d.script[d.at]?.phase || 'free', motion, x => `@${atOf(x)}`)}\n(Reply in ${replyLang()}. ${tools})`;
   } else {
     ask = `\n\n(Your turn ${k} of at most ${S.turnCap} since the user's last message; ${n} new message(s).`
       + (k >= S.turnCap && !floor ? ' This is your last turn here: PASS unless something essential is missing.)' : ')');
@@ -862,7 +869,7 @@ async function startTurn(a, retried = false) {
   // Stopped by the user: nothing is posted, the session isn't advanced (the messages count as unseen next time),
   // and the flow doesn't move on, so a debate slot or the relay baton is played again when the discussion resumes.
   if (res.error === 'stopped') {
-    Object.assign(rt[a], { status: 'idle', note: '已停止' });
+    Object.assign(rt[a], { status: 'idle', note: tx('已停止') });
     logDecision('cancelled', a, { based_on: basedOn, latency_ms: res.ms });
     return pump();
   }
@@ -882,7 +889,7 @@ async function startTurn(a, retried = false) {
   if (res.error) {
     rt[a].error = res.error;
     logDecision('error', a, { based_on: basedOn, latency_ms: res.ms, detail: { error: res.error } });
-    insertMsg({ chat_id: chat, sender: 'system', kind: 'system', text: `⚠ @${atOf(a)} 出错: ${res.error}`, based_on: basedOn, latency_ms: res.ms });
+    insertMsg({ chat_id: chat, sender: 'system', kind: 'system', text: tx('⚠ @{a} 出错: {err}', { a: atOf(a), err: res.error }), based_on: basedOn, latency_ms: res.ms });
   } else {
     // the host's reply: its phase marker and ledger come off first
     hostRes = play?.phase === 'host' ? parseHost(res.text) : null;
@@ -945,7 +952,7 @@ function publishOne(r) {
     const was = nickOf(r.agent, r.chat), why = setNick(r.chat, r.agent, r.nick);
     logDecision('nick', r.agent, { detail: { nick: r.nick, was, refused: why } });
     if (why) (rt[r.agent].jobs ??= []).push({ kind: 'note', chat: r.chat, summary: `Your name "${r.nick}" was not taken: ${why}.` });
-    else if (was !== r.nick) jobNote(r.chat, `🏷 @${atOf(r.agent)} ${was ? `把名字从「${was}」改成` : '给自己取名'}「${r.nick}」`);
+    else if (was !== r.nick) jobNote(r.chat, tx(was ? '🏷 @{a} 把名字从「{was}」改成「{nick}」' : '🏷 @{a} 给自己取名「{nick}」', { a: atOf(r.agent), was, nick: r.nick }));
   }
   // The reply's [NOTE] lines update the discussion's notes; the message records what changed.
   const st = chatState(r.chat);
@@ -994,7 +1001,7 @@ const procs = new Map(); // job id -> child process
 const tasks = new Map(); // task id -> {agent, abort, live, why}
 const tag = (id, kind) => `${kind === 'task' ? 'T' : 'J'}${id}`;
 const jobNote = (chat, text) => insertMsg({ chat_id: chat, sender: 'moderator', kind: 'moderator', text });
-const dur = ms => (ms < 60e3 ? `${Math.round(ms / 1000)} 秒` : `${Math.floor(ms / 60e3)} 分 ${Math.round(ms % 60e3 / 1000)} 秒`);
+const dur = ms => (ms < 60e3 ? tx('{s} 秒', { s: Math.round(ms / 1000) }) : tx('{m} 分 {s} 秒', { m: Math.floor(ms / 60e3), s: Math.round(ms % 60e3 / 1000) }));
 const memberAt = a => (memberConfigs[a] ? atOf(a) : a);
 const running = chat => !!q1(`SELECT 1 FROM jobs WHERE status='running' AND chat_id=?`, chat);
 
@@ -1026,8 +1033,8 @@ setImmediate(() => { for (const j of q(`SELECT * FROM jobs WHERE status='running
   if (arena && Object.values(arena.members).some(m => m.job === j.id)) continue; // the training window resumes it
   if (j.branch && RUNAS && existsSync(join(TASKS, `T${j.id}`))) dropWorktree(j.agent, j.id, join(TASKS, `T${j.id}`), 'interrupted');
   if (!q1('SELECT 1 FROM chats WHERE id=?', j.chat_id)) continue;
-  jobNote(j.chat_id, `⚠ 后台任务 ${tag(j.id, j.kind)}（@${memberAt(j.agent)}）因服务器重启中断`
-    + `${j.branch ? `，改动保留在分支 ${j.branch}` : ''}：\`${j.cmd}\``);
+  jobNote(j.chat_id, tx('⚠ 后台任务 {tag}（@{a}）因服务器重启中断', { tag: tag(j.id, j.kind), a: memberAt(j.agent) })
+    + (j.branch ? tx('，改动保留在分支 {b}', { b: j.branch }) : '') + `${tx('：')}\`${j.cmd}\``);
   // The member hears about it too (moderator notes never reach the members), and in the current discussion is woken.
   if (!rt[j.agent]) continue;
   (rt[j.agent].jobs ??= []).push({ kind: j.kind, id: j.id, cmd: j.cmd, chat: j.chat_id, status: 'interrupted', why: 'the server restarted',
@@ -1037,7 +1044,7 @@ setImmediate(() => { for (const j of q(`SELECT * FROM jobs WHERE status='running
 setInterval(cleanupTasks, 86400e3);
 
 function startJob(a, chat, cmd, msgId) {
-  if (procs.size >= JOB_MAX) return jobDone(a, chat, { kind: 'job', cmd, status: 'rejected', why: `已有 ${JOB_MAX} 个后台任务在跑` });
+  if (procs.size >= JOB_MAX) return jobDone(a, chat, { kind: 'job', cmd, status: 'rejected', why: tx('已有 {n} 个后台任务在跑', { n: JOB_MAX }) });
   const id = Number(run(`INSERT INTO jobs(chat_id, agent, cmd, msg_id, status) VALUES(?,?,?,?,'running')`, chat, a, cmd, msgId).lastInsertRowid);
   const fd = openSync(jobLog(id), 'w');
   if (RUNAS) fchownSync(fd, RUNAS.uid, RUNAS.gid);
@@ -1058,7 +1065,7 @@ function startJob(a, chat, cmd, msgId) {
   p.on('error', e => end(null, e.message));
   p.on('exit', code => end(code));
   logDecision('job-start', a, { message_id: msgId, detail: { job: id, cmd } });
-  jobNote(chat, `▶ @${atOf(a)} 启动后台任务 J${id}：\`${cmd}\``);
+  jobNote(chat, `${tx('▶ @{a} 启动后台任务 J{id}：', { a: atOf(a), id })}\`${cmd}\``);
   sendState();
 }
 
@@ -1067,8 +1074,8 @@ function startJob(a, chat, cmd, msgId) {
 function startTask(a, chat, { desc, shared }, msgId, o = {}) {
   const harness = memberConfigs[a].harness;
   const reject = why => (o.onEnd ? null : jobDone(a, chat, { kind: 'task', cmd: desc, status: 'rejected', why }));
-  if (AGENTS[harness].http) return reject('这位成员不能操作文件');
-  if ([...tasks.values()].some(t => t.agent === a)) return reject('你已有一个后台写代码任务在跑');
+  if (AGENTS[harness].http) return reject(tx('这位成员不能操作文件'));
+  if ([...tasks.values()].some(t => t.agent === a)) return reject(tx('你已有一个后台写代码任务在跑'));
   const id = Number(run(`INSERT INTO jobs(chat_id, agent, cmd, msg_id, status, kind) VALUES(?,?,?,?,'running','task')`, chat, a, desc, msgId).lastInsertRowid);
   const branch = shared ? `task/T${id}` : null, cwd = shared ? join(TASKS, `T${id}`) : wsOf(a);
   if (shared) {
@@ -1078,14 +1085,15 @@ function startTask(a, chat, { desc, shared }, msgId, o = {}) {
     const w = git(a, SHARED, 'worktree', 'add', '-q', '-b', branch, cwd, 'HEAD');
     if (w.status) {
       run(`UPDATE jobs SET status='failed', ended_at=CURRENT_TIMESTAMP WHERE id=?`, id);
-      return jobDone(a, chat, { kind: 'task', id, cmd: desc, status: 'failed', why: `建 worktree 失败：${w.stderr.trim().slice(0, 200)}` });
+      return jobDone(a, chat, { kind: 'task', id, cmd: desc, status: 'failed', why: tx('建 worktree 失败：{err}', { err: w.stderr.trim().slice(0, 200) }) });
     }
     run('UPDATE jobs SET branch=? WHERE id=?', branch, id);
   }
   const model = S.models[a], t = { agent: a, abort: new AbortController(), live: '' }, t0 = Date.now();
   tasks.set(id, t);
   logDecision('task-start', a, { message_id: msgId, detail: { task: id, shared, desc } });
-  if (!o.onEnd) jobNote(chat, `▶ @${atOf(a)} 启动后台写代码任务 T${id}（${shared ? `共享仓分支 ${branch}` : '自己的工作区'}）：${desc}`);
+  if (!o.onEnd) jobNote(chat, tx('▶ @{a} 启动后台写代码任务 T{id}（{where}）：{desc}',
+    { a: atOf(a), id, where: shared ? tx('共享仓分支 {b}', { b: branch }) : tx('自己的工作区'), desc }));
   sendState();
   runTurn(harness, o.prompt || taskPrompt(a, chat, id, desc, cwd, branch, msgId), o.sid || null, {
     cwd, dataDir: DATA, shared: SHARED, model, exec: true, member: { ...memberConfigs[a], model }, onSid: o.onSid,
@@ -1125,7 +1133,7 @@ Work in ${cwd}${branch ? `, a git worktree of the shared repo ${SHARED} on branc
 commits your changes and merges the branch into the shared repo; don't merge or push yourself, and keep the changes to
 what the task needs so the merge stays clean. Pages you put in public/ appear under ${wURL()} after the merge.` : ` (your own workspace).`}
 Python: use ${SHARED}/.venv. You have up to ${TASK_MS / 60e3} minutes; long commands are fine. Test what you build.
-When you are done, reply in ${S.language} with a short summary: what you changed (files), how you verified it, and what
+When you are done, reply in ${replyLang()} with a short summary: what you changed (files), how you verified it, and what
 is left or uncertain. The summary goes back to you in the chat.
 
 Recent messages in the discussion, for context:
@@ -1144,12 +1152,12 @@ function killJob(id, why) {
 }
 // Tells the chat and wakes the member, whose next turn gets the result (a job's log tail, a task's summary).
 const JOB_TEXT = { done: '完成', failed: '失败', stopped: '已被停止', timeout: '超时被停止', rejected: '没有启动' };
-const MERGE_TEXT = { merged: '，改动已合并到共享仓', conflict: '，合并有冲突，改动保留在分支 BRANCH', kept: '，改动保留在分支 BRANCH' };
+const MERGE_TEXT = { merged: '，改动已合并到共享仓', conflict: '，合并有冲突，改动保留在分支 {b}', kept: '，改动保留在分支 {b}' };
 function jobDone(a, chat, j) {
-  jobNote(chat, `${j.status === 'done' && j.merge !== 'conflict' ? '✅' : '⚠'} 后台${j.kind === 'task' ? '写代码' : ''}任务`
-    + `${j.id ? ` ${tag(j.id, j.kind)}` : ''}（@${atOf(a)}）${JOB_TEXT[j.status]}`
-    + `${j.code ? `，退出码 ${j.code}` : ''}${j.ms != null ? `，用时 ${dur(j.ms)}` : ''}${j.merge ? MERGE_TEXT[j.merge].replace('BRANCH', j.branch) : ''}`
-    + `${j.why ? `：${j.why}` : ''}。`);
+  jobNote(chat, `${j.status === 'done' && j.merge !== 'conflict' ? '✅' : '⚠'} `
+    + tx(j.kind === 'task' ? '后台写代码任务{tag}（@{a}）{status}' : '后台任务{tag}（@{a}）{status}', { tag: j.id ? ` ${tag(j.id, j.kind)}` : '', a: atOf(a), status: tx(JOB_TEXT[j.status]) })
+    + (j.code ? tx('，退出码 {code}', { code: j.code }) : '') + (j.ms != null ? tx('，用时 {t}', { t: dur(j.ms) }) : '')
+    + (j.merge ? tx(MERGE_TEXT[j.merge], { b: j.branch }) : '') + (j.why ? tx('：') + j.why : '') + tx('。'));
   (rt[a].jobs ??= []).push({ ...j, chat });
   if (chat === chatId && j.status !== 'stopped') raise(a, 3, 'job');
   pump();
@@ -1205,7 +1213,7 @@ function startArena(chat, { goal, minutes, every, referee }) {
   if (!S.exec) throw new Error('先在讨论设置里打开“允许执行代码”');
   if (!goal) throw new Error('写一下训练目标');
   if (!(minutes > 0 && minutes <= 600 && every > 0)) throw new Error('时长要在 0–600 分钟之间');
-  if (!referees().includes(referee)) throw new Error(`没有这个裁判：${REFEREES}/<名字>/referee.py`);
+  if (!referees().includes(referee)) throw new Error(tx('没有这个裁判：{path}', { path: `${REFEREES}/<${tx('名字')}>/referee.py` }));
   const who = NAMES.filter(a => S.enabled[a] && !AGENTS[memberConfigs[a].harness].http && ![...tasks.values()].some(t => t.agent === a));
   if (!who.length) throw new Error('没有能参加的成员（要启用、能操作文件、且没有后台任务在跑）');
   const now = Date.now(), id = `W${localISO(now).slice(2, 16).replace(/\D/g, '')}`;
@@ -1217,8 +1225,8 @@ function startArena(chat, { goal, minutes, every, referee }) {
   for (const a of who) { mkdirSync(dirname(entryOf(A, a)), { recursive: true }); own(dirname(entryOf(A, a))); }
   arena = A; saveArena();
   logDecision('arena-start', null, { detail: { id, goal, minutes, every, referee, members: who } });
-  jobNote(chat, `🏁 训练窗口 ${id} 开始：${who.map(a => `@${atOf(a)}`).join(' ')} 各自独立做 ${minutes} 分钟，`
-    + `裁判 ${referee}（已冻结）。每 ${every} 分钟自动评测一次有改动的 bot，到点跑循环赛。\n\n目标：${goal}`);
+  jobNote(chat, tx('🏁 训练窗口 {id} 开始：{who} 各自独立做 {m} 分钟，裁判 {ref}（已冻结）。每 {every} 分钟自动评测一次有改动的 bot，到点跑循环赛。',
+    { id, who: who.map(a => `@${atOf(a)}`).join(' '), m: minutes, ref: referee, every }) + `\n\n${tx('目标：')}${goal}`);
   arenaTick();
 }
 
@@ -1242,7 +1250,7 @@ The referee is ${A.dir} (read-only; read referee.py for the rules and how games 
 Earlier code and results in the shared repo ${SHARED} are resources, not the answer: start from them, rewrite from scratch
 or search the web, whichever you judge best. Work in ${wsOf(a)}.
 You have until ${until} (${left} minutes); if your session ends early the server resumes it, so keep notes of
-what you tried in your workspace. At the end, reply in ${S.language} with a short summary: the routes you considered and
+what you tried in your workspace. At the end, reply in ${replyLang()} with a short summary: the routes you considered and
 which you took, what you measured, and what is in your entry.`;
 }
 
@@ -1260,7 +1268,7 @@ setInterval(arenaTick, 1000);
 function arenaWork(A, a) {
   const m = A.members[a], left = A.until - Date.now();
   if (m.sessions && left < RESUME_MIN_MS) return; // not worth resuming
-  const id = startTask(a, A.chat, { desc: `训练窗口 ${A.id}：${A.goal}` }, null, {
+  const id = startTask(a, A.chat, { desc: `${tx('训练窗口')} ${A.id}${tx('：')}${A.goal}` }, null, {
     prompt: arenaPrompt(A, a, !!m.sid), sid: m.sid, totalMs: left,
     onSid: sid => { m.sid = sid; saveArena(A); },
     onEnd: (status, res) => {
@@ -1269,7 +1277,7 @@ function arenaWork(A, a) {
       // three quick failures in a row and the member is out of this window (the second one tries a fresh session)
       m.fails = res.error && status !== 'stopped' && res.ms < 120e3 ? (m.fails || 0) + 1 : 0;
       if (m.fails === 2) m.sid = null;
-      if (m.fails >= 3) { m.out = true; jobNote(A.chat, `⚠ @${atOf(a)} 的训练会话连续失败，退出本轮：${res.error}`); }
+      if (m.fails >= 3) { m.out = true; jobNote(A.chat, tx('⚠ @{a} 的训练会话连续失败，退出本轮：{err}', { a: atOf(a), err: res.error })); }
       saveArena(A);
       logDecision('arena-session', a, { latency_ms: res.ms, detail: { id: A.id, status, error: res.error || null, fails: m.fails } });
     },
@@ -1313,12 +1321,12 @@ async function probeAll(A) {
     probing = null;
     Object.assign(m, { hash, probes: n });
     logDecision('arena-probe', a, { detail: { id: A.id, n, hash, rate: r.rate ?? null, games: r.games ?? null, error: r.error || null } });
-    if (r.error || typeof r.rate !== 'number') jobNote(A.chat, `⚠ @${atOf(a)} 的第 ${n} 版 bot 评测失败：\n\`\`\`\n${r.error || JSON.stringify(r)}\n\`\`\``);
+    if (r.error || typeof r.rate !== 'number') jobNote(A.chat, `${tx('⚠ @{a} 的第 {n} 版 bot 评测失败：', { a: atOf(a), n })}\n\`\`\`\n${r.error || JSON.stringify(r)}\n\`\`\``);
     else {
       const was = m.rate; m.rate = r.rate;
-      jobNote(A.chat, `${was == null ? '📊' : r.rate > was ? '📈' : r.rate < was ? '📉' : '➖'} @${atOf(a)} 第 ${n} 版：`
-        + `${was == null ? '' : `${pct(was)} → `}**${pct(r.rate)}**（${r.games} 局对基线）`
-        + `${r.replay ? ` · [回放](${arenaURL(A, r.replay)})` : ''} · [代码](${arenaURL(A, `${a}-${n}.py`)})`);
+      jobNote(A.chat, `${was == null ? '📊' : r.rate > was ? '📈' : r.rate < was ? '📉' : '➖'} ${tx('@{a} 第 {n} 版：', { a: atOf(a), n })}`
+        + `${was == null ? '' : `${pct(was)} → `}**${pct(r.rate)}**${tx('（{g} 局对基线）', { g: r.games })}`
+        + `${r.replay ? ` · [${tx('回放')}](${arenaURL(A, r.replay)})` : ''} · [${tx('代码')}](${arenaURL(A, `${a}-${n}.py`)})`);
     }
     saveArena(A); sendState();
   }
@@ -1330,7 +1338,7 @@ function endWork(why) {
   A.phase = 'ranking'; A.ended = Date.now(); saveArena(A);
   for (const m of Object.values(A.members)) if (tasks.has(m.job)) killJob(m.job, 'stopped');
   logDecision('arena-end-work', null, { detail: { id: A.id, why } });
-  jobNote(A.chat, `⏱ 训练窗口 ${A.id}${why === 'user' ? '被你提前结束' : '到点了'}：所有人停手，开始循环赛。`);
+  jobNote(A.chat, tx(why === 'user' ? '⏱ 训练窗口 {id}被你提前结束：所有人停手，开始循环赛。' : '⏱ 训练窗口 {id}到点了：所有人停手，开始循环赛。', { id: A.id }));
   sendState();
 }
 
@@ -1338,7 +1346,7 @@ async function rankArena(A) {
   const names = Object.keys(A.members).filter(a => existsSync(entryOf(A, a)));
   for (const a of names) { const f = join(A.out, `${a}-final.py`); writeFileSync(f, readFileSync(entryOf(A, a))); own(f); }
   ranking = true;
-  const r = names.length < 2 ? { error: `只有 ${names.length} 份参赛 bot，不够打循环赛` }
+  const r = names.length < 2 ? { error: tx('只有 {n} 份参赛 bot，不够打循环赛', { n: names.length }) }
     : await runReferee(A, ['rank', A.out, ...names.map(a => `${a}=${join(A.out, `${a}-final.py`)}`)]);
   ranking = null;
   const ok = Array.isArray(r.standings);
@@ -1347,10 +1355,11 @@ async function rankArena(A) {
   if (arena === A) arena = null;
   logDecision('arena-rank', null, { detail: { id: A.id, ...A.result } });
   const who = n => (memberConfigs[n] ? `@${atOf(n)}` : n);
-  const table = ok ? `| 名次 | 成员 | 胜率 | 局数 |\n|---|---|---|---|\n`
+  const table = ok ? `${tx('| 名次 | 成员 | 胜率 | 局数 |')}\n|---|---|---|---|\n`
     + r.standings.map((s, i) => `| ${i + 1} | ${who(s.name)} | ${pct(s.rate)} | ${s.games} |`).join('\n')
-    + (A.result.replays.length ? `\n\n回放：${A.result.replays.map(f => `[${f.replace(/\.html$/, '')}](${arenaURL(A, f)})`).join(' · ')}` : '') : '';
-  jobNote(A.chat, ok ? `🏆 训练窗口 ${A.id} 循环赛结果（裁判 ${A.referee}）：\n\n${table}` : `⚠ 训练窗口 ${A.id} 的循环赛没有结果：${A.result.error}`);
+    + (A.result.replays.length ? `\n\n${tx('回放：')}${A.result.replays.map(f => `[${f.replace(/\.html$/, '')}](${arenaURL(A, f)})`).join(' · ')}` : '') : '';
+  jobNote(A.chat, ok ? `${tx('🏆 训练窗口 {id} 循环赛结果（裁判 {ref}）：', { id: A.id, ref: A.referee })}\n\n${table}`
+    : tx('⚠ 训练窗口 {id} 的循环赛没有结果：{err}', { id: A.id, err: A.result.error }));
   // The meeting: everyone is woken with the standings and its own session's last summary.
   const plain = ok ? r.standings.map((s, i) => `${i + 1}. ${s.name} ${pct(s.rate)} (${s.games} games)`).join('\n') : `no result: ${A.result.error}`;
   for (const [a, m] of Object.entries(A.members)) {
@@ -1395,14 +1404,14 @@ function startOutsider(c, why) {
   mkdirSync(cwd, { recursive: true });
   if (RUNAS) chownSync(cwd, RUNAS.uid, RUNAS.gid);
   logDecision('outsider-start', a, { message_id: st.outsider.at, detail: { why } });
-  insertMsg({ chat_id: c, sender: 'moderator', kind: 'moderator', text: `🧭 ${why === 'circling' ? '讨论在原地打转，' : ''}`
-    + `请 @${atOf(a)} 当局外人：用它的模型开一个新会话，只看你的提问和共享文件，先独立想，再读讨论记录，只带回没试过的方向。` });
+  insertMsg({ chat_id: c, sender: 'moderator', kind: 'moderator', text: `🧭 ${why === 'circling' ? tx('讨论在原地打转，') : ''}`
+    + tx('请 @{a} 当局外人：用它的模型开一个新会话，只看你的提问和共享文件，先独立想，再读讨论记录，只带回没试过的方向。', { a: atOf(a) }) });
   runOutsider(a, c, cwd).catch(e => ({ error: e.message, ms: 0 })).then(r => {
     outsiders.delete(c);
     logDecision('outsider-end', a, { message_id: st.outsider.at, latency_ms: r.ms, detail: { why, error: r.error || null, chars: r.text?.length || 0 } });
     const none = /^NOTHING NEW[.。]?$/i.test(r.text || '');
     if (r.error || none || !r.text) return void insertMsg({ chat_id: c, sender: 'moderator', kind: 'moderator',
-      text: r.error ? `⚠ 局外人 @${atOf(a)} 出错：${r.error.slice(0, 120)}` : `🧭 局外人 @${atOf(a)} 没发现群里没试过的方向。` });
+      text: r.error ? tx('⚠ 局外人 @{a} 出错：{err}', { a: atOf(a), err: r.error.slice(0, 120) }) : tx('🧭 局外人 @{a} 没发现群里没试过的方向。', { a: atOf(a) }) });
     insertMsg({ chat_id: c, sender: a, kind: 'agent', text: r.text, based_on: st.outsider.at, latency_ms: r.ms,
       model: S.models[a] || 'default', role: 'outsider', mode: chatMode(c).effective });
     if (c !== chatId || wrapRound === lastUserId(c)) return;
@@ -1417,7 +1426,7 @@ async function runOutsider(a, c, cwd) {
     .map(m => `- ${m.text}${attached(m)}`).join('\n');
   const opts = { cwd, dataDir: DATA, model: S.models[a], exec: false, member: { ...memberConfigs[a], model: S.models[a] },
     onLive() {}, idleMs: 10 * 60e3, totalMs: 25 * 60e3 };
-  const t0 = Date.now(), lang = S.language;
+  const t0 = Date.now(), lang = replyLang();
   const one = await runTurn(memberConfigs[a].harness, `You are an outside expert, called in fresh. A group of AI agents has
 been working on the user's problem for a while. You have not seen their discussion, on purpose: groups anchor on their
 first ideas, and a fresh look often finds what they missed.
@@ -1505,8 +1514,7 @@ async function checkConvergence() {
     jev.circledAt = round; jev.circlePaused = paused = true; run('UPDATE chats SET paused=1 WHERE id=?', chatId);
     for (const n of NAMES) rt[n].hand = null;
     logDecision('circling', null, { score: j.circling, message_id: mod.msgId, detail: j });
-    note(`🧭 讨论在原地打转（${pc(j.circling)}）：同样的论点在来回重复，没有新进展。已暂停，请你定方向：`
-      + `补充信息或约束、@某人回答一个具体问题，或者点“继续”。`);
+    note(tx('🧭 讨论在原地打转（{p}）：同样的论点在来回重复，没有新进展。已暂停，请你定方向：补充信息或约束、@某人回答一个具体问题，或者点“继续”。', { p: pc(j.circling) }));
     maybeOutsider('circling'); // its report resumes the discussion if the user hasn't yet
     return pump();
   }
@@ -1521,8 +1529,8 @@ async function checkConvergence() {
       .sort((x, y) => x[1] - y[1] || x[2] - y[2])[0][0];
     rt[devil].hand = { r: 100, since: Date.now(), why: 'devil' };
     logDecision('devil', devil, { score: j.debatable, message_id: mod.msgId, detail: j });
-    note(`🧭 大家很快就达成了一致（收敛度 ${pc(j.convergence)}，几乎没人反对），但这是见仁见智的问题。`
-      + `收尾前请 @${atOf(devil)} 唱反调：站到对立面，给出最有力的反驳。`);
+    note(tx('🧭 大家很快就达成了一致（收敛度 {p}，几乎没人反对），但这是见仁见智的问题。收尾前请 @{a} 唱反调：站到对立面，给出最有力的反驳。',
+      { p: pc(j.convergence), a: atOf(devil) }));
     return pump();
   }
   wrapRound = round;
@@ -1533,8 +1541,8 @@ async function checkConvergence() {
     .sort((x, y) => y[1] - x[1] || x[2] - y[2] || x[3] - y[3])[0][0];
   rt[writer].hand = { r: 100, since: Date.now(), why: 'summary' };
   logDecision('converged', writer, { score: j.convergence, message_id: mod.msgId, detail: j });
-  note(`🧭 观点已收敛（收敛度 ${Math.round(j.convergence * 100)}%，重复度 ${j.stalling.toFixed(2)}）。`
-    + `请 @${atOf(writer)} 总结，本轮到此结束；发新消息可继续讨论。`);
+  note(tx('🧭 观点已收敛（收敛度 {p}%，重复度 {s}）。请 @{a} 总结，本轮到此结束；发新消息可继续讨论。',
+    { p: Math.round(j.convergence * 100), s: j.stalling.toFixed(2), a: atOf(writer) }));
   pump();
 }
 
@@ -1675,7 +1683,7 @@ const routes = {
     if (jev.circlePaused) { jev.circlePaused = paused = false; run('UPDATE chats SET paused=0 WHERE id=?', chatId); } // the user set a direction
     // An untitled discussion is named after its first question.
     const c = q1('SELECT title FROM chats WHERE id=?', chatId);
-    if (/^讨论 \d+$/.test(c.title) && !q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user'`, chatId))
+    if (/^(讨论|Discussion) \d+$/.test(c.title) && !q1(`SELECT 1 FROM messages WHERE chat_id=? AND kind='user'`, chatId))
       run('UPDATE chats SET title=? WHERE id=?', (text || files[0].name).replace(/\s+/g, ' ').slice(0, 30), chatId);
     const m = insertMsg({ chat_id: chatId, sender: 'user', kind: 'user', text, reply_to: reply_to || null, files });
     logDecision('user', null, { message_id: m.id, detail: { mentions: mentions(text), reply_to: reply_to || null } });
@@ -1717,7 +1725,7 @@ const routes = {
     for (const n of NAMES) if (rt[n].hand?.game) rt[n].hand = null;
     Object.assign(g, { over: 'user', phase: 'over' }); saveState(chatId, st);
     logDecision('game-over', null, { detail: { over: 'user', turns: g.round } });
-    note('🏁 你结束了这局游戏。之后的消息就是普通聊天。');
+    note(tx('🏁 你结束了这局游戏。之后的消息就是普通聊天。'));
   },
   // Another game in the same discussion: everyone keeps what happened (it's all in their sessions). The finished game is
   // kept in st.games; the user's next message starts the new one (@ a host) as in a new discussion.
@@ -1727,7 +1735,7 @@ const routes = {
     (st.games ??= []).push(st.game); delete st.game; saveState(chatId, st);
     for (const n of NAMES) rt[n].hand = null;
     logDecision('game-new', null, { detail: { games: st.games.length } });
-    note(`🎲 再开一局（这个讨论的第 ${st.games.length + 1} 局，大家都记得前面的）：@ 一位成员当主持人，说说玩什么。`);
+    note(tx('🎲 再开一局（这个讨论的第 {n} 局，大家都记得前面的）：@ 一位成员当主持人，说说玩什么。', { n: st.games.length + 1 }));
   },
   'POST /api/arena/start'(body) { startArena(chatId, body); },
   'POST /api/arena/stop'() { if (arena?.phase === 'work') endWork('user'); else ranking?.kill?.(); },
@@ -1736,6 +1744,7 @@ const routes = {
   'POST /api/lower'({ agent }) { if (NAMES.includes(agent)) rt[agent].hand = null; },
   'POST /api/settings'(body) {
     for (const k of ['language', 'scheduler']) if (typeof body[k] === 'string' && body[k]) S[k] = body[k];
+    if (['', 'zh', 'en'].includes(body.uiLang)) S.uiLang = body.uiLang;
     if (typeof body.userName === 'string') S.userName = body.userName.trim().slice(0, 20); // '' = 用户
     for (const k of ['autoStop', 'devil', 'circlePause', 'memory', 'exec', 'blind', 'outsider']) if (typeof body[k] === 'boolean') S[k] = body[k];
     for (const k of ['turnCap', 'readSpeed', 'maxThinkers', 'convergeAt', 'noveltyMin']) if (+body[k] > 0) S[k] = +body[k];
@@ -1753,7 +1762,7 @@ const routes = {
     saveSettings();
   },
   'POST /api/chat/new'({ title }) {
-    switchChat(Number(run('INSERT INTO chats(title) VALUES(?)', title || `讨论 ${maxChat() + 1}`).lastInsertRowid));
+    switchChat(Number(run('INSERT INTO chats(title) VALUES(?)', title || tx('讨论 {n}', { n: maxChat() + 1 })).lastInsertRowid));
     return { id: chatId };
   },
   // Saved prompts (the user's favourite openings, e.g. a game's full rules), with the mode to start them in.
@@ -1776,8 +1785,8 @@ const routes = {
     const cm = chatMode(id);
     if (opening?.chat === id) openNow(id); // the user chose during the hold: start now, in that mode
     if (id === chatId) note(mode === 'auto'
-      ? `🧭 讨论模式改回自动${cm.auto ? `：${MODES[cm.auto].label}` : '，Jev 会根据问题判断'}。`
-      : `🧭 讨论模式改为：${MODES[mode].label}（你指定），从下一轮发言开始生效。`);
+      ? (cm.auto ? tx('🧭 讨论模式改回自动：{mode}。', { mode: tx(MODES[cm.auto].label) }) : tx('🧭 讨论模式改回自动，Jev 会根据问题判断。'))
+      : tx('🧭 讨论模式改为：{mode}（你指定），从下一轮发言开始生效。', { mode: tx(MODES[mode].label) }));
     if (mode === 'auto' && !cm.auto) classifyChat(id);
   },
   // The discussion's read-only link code (made once, kept): /s/<code>.
@@ -1815,7 +1824,7 @@ const routes = {
     rmSync(archiveFile(id), { force: true }); writeIndex();
     rmSync(join(UPLOADS, String(id)), { recursive: true, force: true });
     ready = ready.filter(r => r.chat !== id);
-    if (id === chatId) switchChat(q1('SELECT max(id) m FROM chats').m || Number(run(`INSERT INTO chats(title) VALUES('讨论 1')`).lastInsertRowid));
+    if (id === chatId) switchChat(q1('SELECT max(id) m FROM chats').m || Number(run(`INSERT INTO chats(title) VALUES(?)`, tx('讨论 {n}', { n: 1 })).lastInsertRowid));
   },
 };
 // GET routes return data instead of acting.
@@ -1856,14 +1865,18 @@ http.createServer((req, res) => {
   }
   if (key === 'GET /' || /^GET \/s\/[\w-]+$/.test(key)) { // /s/<code>: the same page, showing one discussion read-only
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    return res.end(readFileSync(join(ROOT, 'app/index.html')));
+    return res.end(String(readFileSync(join(ROOT, 'app/index.html'))).replace('<html lang="zh">', `<html lang="${S.uiLang}">`));
+  }
+  if (key === 'GET /i18n.js') {
+    res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
+    return res.end(`const EN = ${JSON.stringify(EN)};`);
   }
   if (key === 'GET /who') { // the entry page: pick whose chat to open (no login, LAN only)
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>agent-chat</title><style>body{font:16px system-ui,sans-serif;display:grid;place-content:center;gap:16px;min-height:90vh;margin:0}
 a{display:block;padding:18px 48px;border:1px solid #ccc;border-radius:12px;text-align:center;font-size:20px;color:inherit;text-decoration:none}
-a:hover{background:#f3f3f3}</style><h2 style="text-align:center;font-weight:500">你是谁？</h2>
+a:hover{background:#f3f3f3}</style><h2 style="text-align:center;font-weight:500">${tx('你是谁？')}</h2>
 <script>for (const [name, at] of ${JSON.stringify(PROFILES.length ? PROFILES : [[PROFILE || 'agent-chat', '']]).replace(/</g, '\\u003c')}) {
   const a = document.createElement('a'); a.textContent = name;
   a.href = at.startsWith(':') ? location.protocol + '//' + location.hostname + at + '/' : at || '/';
@@ -1879,8 +1892,10 @@ a:hover{background:#f3f3f3}</style><h2 style="text-align:center;font-weight:500"
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'x-accel-buffering': 'no' });
     const code = new URL(req.url, 'http://x').searchParams.get('s');
     const view = code ? q1('SELECT id FROM chats WHERE share=?', code)?.id ?? -1 : null; // -1: no such link
+    const lang = new URL(req.url, 'http://x').searchParams.get('lang');
+    if (view == null && (lang === 'zh' || lang === 'en')) lastLang = lang;
     clients.set(res, view); req.on('close', () => clients.delete(res));
-    return res.write(data(view == null ? init() : { type: 'init', state: view < 0 ? { ...viewState(view), title: '这个分享链接已失效' } : viewState(view),
+    return res.write(data(view == null ? init() : { type: 'init', state: view < 0 ? { ...viewState(view), title: tx('这个分享链接已失效') } : viewState(view),
       messages: q('SELECT * FROM messages WHERE chat_id=? ORDER BY id', view) }));
   }
   const url = new URL(req.url, 'http://x');
@@ -1963,7 +1978,7 @@ a:hover{background:#f3f3f3}</style><h2 style="text-align:center;font-weight:500"
   req.on('data', d => (body += d));
   req.on('end', async () => {
     try { const result = await h(body ? JSON.parse(body) : {}); pump(); res.writeHead(200).end(JSON.stringify(result || {})); }
-    catch (e) { console.error(e); res.writeHead(500).end(JSON.stringify({ error: e.message })); }
+    catch (e) { console.error(e); res.writeHead(500).end(JSON.stringify({ error: tx(e.message) })); }
   });
 }).listen(PORT, HOST, () => console.log(`agent-chat on http://${HOST}:${PORT}`));
 resumeGame(chatId);
