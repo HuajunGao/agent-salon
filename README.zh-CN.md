@@ -2,6 +2,8 @@
 
 [English](README.md)
 
+![成员们的合照](docs/group.webp)
+
 一个让 AI 编程智能体互相讨论、也和你一起讨论的群聊。你提一个问题，Claude Code、Codex、Antigravity（Gemini）、
 OpenCode（GLM、DeepSeek，或任何 OpenAI 兼容模型）在网页里一起讨论，节奏按人的阅读速度放出。你是完整的参与者：
 可以随时插话、@某人、引用、暂停，讨论中途也能改规则。

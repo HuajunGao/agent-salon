@@ -25,7 +25,7 @@
     --shadow:0 1px 2px rgba(15,17,20,.05), 0 6px 24px -8px rgba(15,17,20,.10);
     --font:"Segoe UI Variable Text","Segoe UI","PingFang SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;
     --font-display:"Segoe UI Variable Display","Segoe UI","PingFang SC","Microsoft YaHei UI",system-ui,sans-serif;
-    --gut:92px; /* the speaker column */
+    --avs:78px; /* the avatar beside a message's header (phones: 70px) */
   }
   * { box-sizing:border-box; }
   html, body { height:100%; }
@@ -128,24 +128,33 @@
   #msgs { flex:1; overflow:auto; padding:var(--s6) max(var(--s5), calc((100% - 840px) / 2)) 180px; scroll-behavior:smooth; }
   /* a script: the speaker hangs in the left column, what they say runs in the right one */
   .msg { position:relative; margin:0 0 20px; }
-  .msg.agent, .msg.user { display:grid; grid-template-columns:var(--gut) minmax(0, 1fr); column-gap:22px; }
-  .msg .gut { display:flex; flex-direction:column; align-items:flex-end; text-align:right; padding-top:3px; min-width:0; }
-  .msg .who { font-weight:600; font-size:var(--t-md); line-height:1.35; color:var(--c, var(--ink)); max-width:100%; overflow-wrap:anywhere; }
-  .msg .gut small { font-size:var(--t-xs); line-height:1.5; color:var(--ink-3); }
+  /* a header (avatar, then name / time / reply over the details), the text full width below it */
+  .msg .hd { display:flex; align-items:center; gap:12px; margin-bottom:8px; min-width:0; }
+  .msg .hd .av { width:var(--avs); height:var(--avs); border-radius:calc(var(--avs) * .28); font-size:calc(var(--avs) * .3); }
+  .msg .hl { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+  .msg .l1 { display:flex; align-items:baseline; gap:8px; min-width:0; }
+  .msg .who { font-weight:600; font-size:var(--t-md); line-height:1.35; color:var(--c, var(--ink)); overflow-wrap:anywhere; }
+  .msg .l1 small { font-size:var(--t-xs); line-height:1.5; color:var(--ink-3); white-space:nowrap; }
+  /* the same member again: no avatar, name and details on one line */
+  .msg.cont { margin-top:-8px; }
+  .msg.cont .hd { margin-bottom:4px; }
+  .msg.cont .hl { flex-direction:row; flex-wrap:wrap; align-items:baseline; gap:2px 8px; }
+  .msg.cont .l1 { display:contents; }
+  .msg.cont .rp { order:1; }
   .msg .num { color:inherit; }
   /* secondary details (turn count, confidence, the snapshot a reply was based on, the id) show when the message is hovered */
-  .msg .dim, .msg .gut .num { opacity:0; transition:opacity .15s; }
-  .msg:hover .dim, .msg:hover .gut .num, .msg:focus-within .dim, .msg.flash .gut .num { opacity:1; }
+  .msg .dim, .msg .l1 .num { opacity:0; transition:opacity .15s; }
+  .msg:hover .dim, .msg:hover .l1 .num, .msg:focus-within .dim, .msg.flash .l1 .num { opacity:1; }
   /* hovering a #N reference marks the message it points to */
   .msg.refhl .tx, .msg.refhl > span { background:color-mix(in srgb, var(--link) 8%, transparent); border-radius:var(--r-sm); }
   /* who is thinking right now, at the end of the stream */
-  #thinking { display:flex; flex-wrap:wrap; gap:4px 18px; margin:-4px 0 20px calc(var(--gut) + 22px); font-size:var(--t-sm); color:var(--ink-3); }
+  #thinking { display:flex; flex-wrap:wrap; gap:4px 18px; margin:-4px 0 20px; font-size:var(--t-sm); color:var(--ink-3); }
   #thinking:empty { display:none; }
   #thinking span { display:inline-flex; align-items:center; gap:6px; }
   #thinking .rowbtn { display:inline-block; width:auto; height:24px; margin:0 0 0 6px; padding:0 10px; }
   #thinking b { font-weight:500; color:var(--c); }
   .msg.flash .num { color:var(--link); }
-  .msg .meta { display:flex; align-items:center; gap:4px 10px; flex-wrap:wrap; min-height:20px; margin-bottom:2px; padding-right:48px;
+  .msg .meta { display:flex; align-items:center; gap:4px 10px; flex-wrap:wrap; min-height:20px;
     font-size:var(--t-xs); color:var(--ink-3); }
   .msg .meta:empty { display:none; }
   .msg .model { max-width:220px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -167,8 +176,8 @@
   .msg .tx hr { margin:1em 0; border:none; border-top:1px solid var(--hair); }
   .msg .tx a:not(.ref) { color:var(--link); text-underline-offset:2px; }
   .msg.agent .tx { padding-left:var(--s3); border-left:2px solid color-mix(in srgb, var(--c) 35%, transparent); }
-  /* hover-only reply action: positioned so it never takes layout space */
-  .msg .rp { position:absolute; right:0; top:0; opacity:0; color:var(--ink-3); cursor:pointer; padding:1px 8px; border-radius:var(--r-sm);
+  /* hover-only reply action, at the end of the name line */
+  .msg .rp { margin-left:auto; opacity:0; color:var(--ink-3); cursor:pointer; padding:1px 8px; border-radius:var(--r-sm);
     font-size:var(--t-xs); background:var(--canvas); transition:opacity .15s; }
   .msg:hover .rp, .msg .rp:focus-visible { opacity:1; }
   .msg .rp:hover { background:var(--sunk); color:var(--ink); }
@@ -182,9 +191,7 @@
   .msg.flash .tx, .msg.flash > span { animation:flash 1.6s ease; }
   #msgs { container-type:inline-size; }
   @container (max-width: 560px) {
-    .msg.agent, .msg.user { grid-template-columns:minmax(0, 1fr); }
-    .msg .gut { flex-direction:row; align-items:baseline; gap:8px; }
-    #thinking { margin-left:0; }
+    .msg { --avs:70px; }
   }
   @keyframes flash { 0%, 40% { background-color:color-mix(in srgb, var(--link) 12%, transparent); } }
   .tag { display:inline-flex; align-items:center; gap:3px; height:19px; padding:0 7px; border-radius:999px; font-size:var(--t-xs);
@@ -225,7 +232,6 @@
   .att-chip button { width:20px; height:20px; flex:none; border-radius:4px; color:var(--ink-3); }
   .att-chip button:hover { background:var(--selected); color:var(--ink); }
   .msg .atts { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
-  .msg .gut .av { width:28px; height:28px; border-radius:9px; margin-bottom:4px; }
   img.av { object-fit:cover; background:var(--hover); }
   .msg .tx img.inl { display:block; max-width:min(320px, 100%); max-height:240px; border-radius:var(--r-md); border:1px solid var(--hair); }
   .msg .atts img { display:block; max-width:min(320px, 100%); max-height:240px; border-radius:var(--r-md); border:1px solid var(--hair); }
@@ -263,7 +269,7 @@
   #tts:not(.on) .wave { opacity:.35; }
   #tts.on.blocked { color:var(--warn); background:var(--warn-soft); }
   .msg.speaking .tx { border-left-color:var(--mod) !important; }
-  .msg.speaking .gut::after { content:"朗读中"; font-size:var(--t-xs); color:var(--mod); }
+  .msg.speaking .l1 .who::after { content:"朗读中"; font-size:var(--t-xs); color:var(--mod); }
   #mic.rec { color:var(--danger); background:var(--danger-soft); animation:pulse 1.2s ease-in-out infinite; }
   #mic:disabled { opacity:.4; cursor:not-allowed; }
   #send { width:30px; height:30px; border-radius:9px; display:grid; place-items:center; background:var(--ink); color:#fff; flex:none; }
@@ -438,7 +444,7 @@
   body.viewer .msg .rp { display:none !important; }
   body.viewer .bar .title { cursor:default; }
   body.viewer .bar .title:hover { background:none; }
-  html[lang=en] .msg.speaking .gut::after { content:"Reading"; }
+  html[lang=en] .msg.speaking .l1 .who::after { content:"Reading"; }
   body.viewer .bar::after { content:"只读"; order:9; margin-left:auto; flex:none; font-size:var(--t-xs); color:var(--ink-3); }
   body.viewer #msgs { padding-bottom:var(--s6); }
   /* touch screens have no hover: show the actions hover would reveal (on the current discussion), bigger rows */
@@ -725,8 +731,12 @@ function renderMsg(m) {
   const talk = messages.filter(x => x.kind === 'user' || x.kind === 'agent');
   const idx = talk.findIndex(x => x.id === m.id);
   const between = m.based_on != null ? talk.slice(0, idx).filter(x => x.id > m.based_on) : [];
-  const gut = `<div class="gut">${m.kind === 'agent' ? av(m.sender) : ''}<span class="who">${esc(label(m.sender))}</span>
-    <small>${hm(m.created_at)} <span class="num" title="${tx('消息编号，正文里的 #{id} 指的就是这条', { id: m.id })}">#${m.id}</span></small></div>`;
+  // the same member right after itself: a compact header without the avatar
+  const prev = messages[messages.findIndex(x => x.id === m.id) - 1], cont = m.kind === 'agent' && prev?.kind === 'agent' && prev.sender === m.sender;
+  if (cont) el.classList.add('cont');
+  const l1 = `<div class="l1"><span class="who">${esc(label(m.sender))}</span>
+    <small>${hm(m.created_at)} <span class="num" title="${tx('消息编号，正文里的 #{id} 指的就是这条', { id: m.id })}">#${m.id}</span></small>
+    <span class="rp" data-reply="${m.id}" title="${tx('引用回复 #{id}', { id: m.id })}">${tx('回复')}</span></div>`;
   const hd = [];
   // the name the member gave itself in this discussion: click to @ it
   if (m.nick) hd.unshift(`<button class="tag nick" data-at="${esc(m.nick)}" title="${tx('它在这场讨论里给自己取的名字，点一下 @ 它')}">${esc(m.nick)}</button>`);
@@ -746,8 +756,8 @@ function renderMsg(m) {
   const ops = m.note_ops && JSON.parse(m.note_ops);
   if (ops?.length) hd.push(`<span title="${tx('这条发言更新了本场讨论的笔记')}">${tx('笔记')} ${ops.map(o => `${{ add: '+', edit: '~', drop: '−' }[o.op]}N${o.n}`).join(' ')}</span>`);
   if (m.turn_no) hd.push(`<span class="dim" title="${tx('本讨论中的第 {n} 次发言', { n: m.turn_no })}">${tx('第 {n} 次', { n: m.turn_no })}</span>`);
-  el.innerHTML = `${gut}<div><div class="meta">${hd.join('')}</div><div class="tx">${md(m.text)}</div>${renderFiles(m)}</div>`
-    + `<span class="rp" data-reply="${m.id}" title="${tx('引用回复 #{id}', { id: m.id })}">${tx('回复')}</span>`;
+  el.innerHTML = `<div class="hd">${m.kind === 'agent' && !cont ? av(m.sender) : ''}<div class="hl">${l1}<div class="meta">${hd.join('')}</div></div></div>`
+    + `<div class="tx">${md(m.text)}</div>${renderFiles(m)}`;
   return el;
 }
 

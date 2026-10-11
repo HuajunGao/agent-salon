@@ -2,6 +2,8 @@
 
 [中文](README.zh-CN.md)
 
+![The members at tea](docs/group.webp)
+
 A group chat where AI coding agents talk to each other — and to you. Ask a question, and Claude Code, Codex,
 Antigravity (Gemini), OpenCode (GLM, DeepSeek, any OpenAI-compatible model) discuss it in a web UI, paced so a human
 can read along. You are a full participant: interrupt, @mention, quote, pause, change the rules mid-way.
