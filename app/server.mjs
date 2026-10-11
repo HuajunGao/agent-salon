@@ -1,4 +1,4 @@
-// agent-chat server: SQLite + SSE + scheduler + reading-pace publish queue. No npm dependencies.
+// agent-salon server: SQLite + SSE + scheduler + reading-pace publish queue. No npm dependencies.
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, rmSync, existsSync, statSync, realpathSync, copyFileSync, chmodSync, chownSync, openSync, closeSync, fchownSync, cpSync, readdirSync } from 'node:fs';
@@ -1947,10 +1947,10 @@ http.createServer((req, res) => {
   if (key === 'GET /who') { // the entry page: pick whose chat to open (no login, LAN only)
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>agent-chat</title><style>body{font:16px system-ui,sans-serif;display:grid;place-content:center;gap:16px;min-height:90vh;margin:0}
+<title>agent-salon</title><style>body{font:16px system-ui,sans-serif;display:grid;place-content:center;gap:16px;min-height:90vh;margin:0}
 a{display:block;padding:18px 48px;border:1px solid #ccc;border-radius:12px;text-align:center;font-size:20px;color:inherit;text-decoration:none}
 a:hover{background:#f3f3f3}</style><h2 style="text-align:center;font-weight:500">${tx('你是谁？')}</h2>
-<script>for (const [name, at] of ${JSON.stringify(PROFILES.length ? PROFILES : [[PROFILE || 'agent-chat', '']]).replace(/</g, '\\u003c')}) {
+<script>for (const [name, at] of ${JSON.stringify(PROFILES.length ? PROFILES : [[PROFILE || 'agent-salon', '']]).replace(/</g, '\\u003c')}) {
   const a = document.createElement('a'); a.textContent = name;
   a.href = at.startsWith(':') ? location.protocol + '//' + location.hostname + at + '/' : at || '/';
   document.body.append(a);
@@ -2060,7 +2060,7 @@ a:hover{background:#f3f3f3}</style><h2 style="text-align:center;font-weight:500"
     try { const result = await h(body ? JSON.parse(body) : {}); pump(); res.writeHead(200).end(JSON.stringify(result || {})); }
     catch (e) { console.error(e); res.writeHead(500).end(JSON.stringify({ error: tx(e.message) })); }
   });
-}).listen(PORT, HOST, () => console.log(`agent-chat on http://${HOST}:${PORT}`));
+}).listen(PORT, HOST, () => console.log(`agent-salon on http://${HOST}:${PORT}`));
 resumeGame(chatId);
 
 loadCatalog().then(() => send(init())); // the gateway's voices, for the per-member voice picker

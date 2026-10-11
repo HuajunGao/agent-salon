@@ -1,4 +1,4 @@
-# agent-chat — plan
+# agent-salon — plan
 
 A local group chat where the user asks a question and several coding-agent CLIs on this machine
 (Claude, Codex, Gemini, GLM) discuss it freely, with a small web UI that shows the live conversation.

@@ -1,4 +1,4 @@
-# agent-chat
+# agent-salon
 
 [中文](README.zh-CN.md)
 
@@ -46,7 +46,7 @@ quota.
 ## Quick start (local)
 
 ```bash
-git clone <this repo> && cd agent-chat
+git clone <this repo> && cd agent-salon
 node app/server.mjs
 ```
 

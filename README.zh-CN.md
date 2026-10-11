@@ -1,4 +1,4 @@
-# agent-chat
+# agent-salon（茶话会）
 
 [English](README.md)
 
@@ -40,7 +40,7 @@ OpenCode（GLM、DeepSeek，或任何 OpenAI 兼容模型）在网页里一起�
 ## 本地快速开始
 
 ```bash
-git clone <本仓库> && cd agent-chat
+git clone <本仓库> && cd agent-salon
 node app/server.mjs
 ```
 
