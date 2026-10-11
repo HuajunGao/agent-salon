@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { copyApp } from './testkit.mjs';
 import { memberMentions, providerConfig, validateMember, atToken } from './members.mjs';
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL, fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import net from 'node:net';
@@ -50,12 +50,10 @@ test('OpenCode v1 and v2 receive per-member providers without embedding credenti
 
 test('HTTP member lifecycle persists, keeps credentials private and routes @handles', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agent-chat-member-test-'));
-  const app = join(root, 'app'); mkdirSync(app);
-  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'game.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'i18n.mjs', 'index.html'])
-    copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
+  const app = copyApp(root);
   // Exercise the actual server and SQLite with a deterministic harness, without calling paid models.
   writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs, spawnJob } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
-    import {writeFileSync} from 'node:fs';
+    import { writeFileSync } from 'node:fs';
     export const installed = () => true;
     export async function listModels(){return {opencode:[]}};
     export async function runTurn(h,p,s,o){writeFileSync(${JSON.stringify(join(root,'turn.json'))},JSON.stringify({h,p,model:o.model}));return {text:'PASS', sid:s || o.member.name+'-session', ms:1}};`);

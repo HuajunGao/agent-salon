@@ -171,7 +171,7 @@ The conversation must move at the user's reading speed, not as fast as agents ca
 
 ### Layout
 ```
-app/        server.mjs, agents.mjs (CLI adapters), moderator.mjs, index.html
+app/        server.mjs (HTTP, startup) + room/flows/jobs/… modules (see CLAUDE.md), agents.mjs (CLI adapters), moderator.mjs, index.html + ui.js
 data/       chat.db, transcript.md   (gitignored)
 workspace/  agents' cwd
 ```

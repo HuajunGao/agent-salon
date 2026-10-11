@@ -14,8 +14,10 @@ No npm dependencies, no build step (the UI's Markdown renderer, marked, is vendo
 raw HTML in messages is escaped and only http(s)/mailto links are kept). Node ≥ 22.5 (uses built-in `node:sqlite`).
 
 - Run locally: `node app/server.mjs` → http://localhost:3517 (`PORT`, `HOST` env; `.claude/launch.json` has a preview config)
-- Syntax check: `node --check app/server.mjs` (and the other `.mjs` files)
-- Tests (real server + SQLite, fake harness, no paid calls): `node --test app/members.test.mjs app/modes.test.mjs app/speech.test.mjs app/stance.test.mjs app/env.test.mjs app/flows.test.mjs`.
+- Syntax check: `for f in app/*.mjs app/ui.js; do node --check "$f"; done`
+- Tests (real server + SQLite, fake harness, no paid calls): `node --test app/schedule.test.mjs app/members.test.mjs app/modes.test.mjs app/speech.test.mjs app/stance.test.mjs app/env.test.mjs app/flows.test.mjs`.
+  The server tests copy the app with `testkit.mjs` `copyApp` (every module but `agents.mjs`, which each test fakes), so a
+  new module needs no test change; `restart()` in flows.test.mjs restarts the server on the same data.
   Verify adapters by importing them directly, e.g.
   `node -e 'import("./app/agents.mjs").then(async m => console.log(await m.runTurn("codex", "1+1?", null, {cwd: "workspace", dataDir: "data", onLive(){}})))'`
   (a second call with the returned `sid` checks session resume). `moderator.mjs` `judge`/`novelty` and `memory.mjs`
@@ -30,11 +32,38 @@ Restart the server only when no agent is thinking (check `/events` state) — th
 
 ## Architecture
 
-- **app/server.mjs** — everything stateful: SQLite (`data/chat.db`: chats, messages, agent_sessions with each agent's
-  CLI session id, decisions log, settings), SSE to the UI, the scheduler, the reading-pace publish queue, the moderator
-  hooks, memory curation and the HTTP API. Members and their configurations live in the members table;
-  a member's harness is picked when it is created (`validateMember`; first start seeds one per installed CLI, `installed`).
-  One "current chat" is global to the server.
+The server is split by what owns which state; imports only go downward (no cycles), lower modules never import
+higher ones. Importing a module starts no timer and no server: `server.mjs` does that at startup.
+- **app/workspace.mjs** — the filesystem: `DATA`/`WORK` paths, `RUNAS` (the agent OS user), each member's workspace,
+  `inWork` (a path really under WORK, through symlinks), avatars, the shared git repo (`git`, `commitShared`).
+- **app/db.mjs** — `data/chat.db`: schema, column migrations, indexes, `q`/`q1`/`run`, `getSetting`/`setSetting`.
+- **app/config.mjs** — owns the members (`NAMES`, `memberConfigs`; seeded once per installed CLI, `saveMember`/
+  `deleteMember`/`setAlias`) and the settings `S` (`saveSettings`); `tx`/`replyLang`, `atOf`/`aliasOf`/`handle`.
+- **app/sse.mjs** — the browsers' connections: `send`, `sendViewers` (shared links), `sendState(Soon)`, `resync`
+  (a full `init`). The snapshots are built in server.mjs and registered with `provide`.
+- **app/chats.mjs** — owns discussions: the current one (`chatId`, `paused`/`circlePaused`, changed only via
+  `setCurrent`/`setPaused`/`endCirclePause`), `chats.state` (`chatState`/`saveState`), mode and `rules`, names
+  (`setNick`, `mentions`, `dmTo`), the message formats (`fmt`, `describe`), `insertMsg` (the only writer of messages,
+  and the game-secrecy gate for what reaches the UI: `secret`/`visible`/`userPlays`), `note`, `logDecision`, and the
+  archive (batched: `archiveSoon`; restart rewrites everything).
+- **app/runtime.mjs** — owns the room's in-memory state: `rt` (each member's status, hand, live output, inbox `jobs`
+  via `tell`), the reply queue `ready` and the `held` notes (both saved in settings `queue`, so a restart publishes
+  replies already written: the member's session has moved past them), `pace` (reading/typing/read-aloud clocks),
+  `raise`, `wrapRound`, and `pump` (the scheduler registers itself; other modules call it to say "look again").
+- **app/schedule.mjs** — pure: `scoreHand`, `readMs`, `mayPublish` (unit-tested in schedule.test.mjs).
+- **app/prompts.mjs** — a chat turn's prompt: `intro` (new session), `turnAsk` (per flow), `notesPrompt`.
+- **app/flows.mjs** — who speaks next per flow: `wake` (a user message), relay, debate (`nextSlot`/`advanceDebate`),
+  game (`gameNext`, `hostDone`, `gameOrder`, `userPlay`, `endGame`/`newGame`, `audit`). Raises hands and moves
+  `chats.state` on; never starts a turn itself.
+- **app/jobs.mjs** — [JOB] processes and [TASK] sessions: start, kill, end (`jobDone`: note, inbox, wake),
+  `recoverJobs` at start, worktree cleanup, `jobReport` for the member's next turn.
+- **app/outsider.mjs**, **app/arena.mjs** — the outsider and the training window (below).
+- **app/room.mjs** — the scheduler and the turn lifecycle: `pump` (publish what is due, start the best eligible hands),
+  `startTurn` (prompt → `runTurn` → parse → `addReady`), `publish`/`publishOne` (reading pace, markers, next hands),
+  the moderator hooks (`assess`, `checkConvergence` — one judgment at a time, `checkShift`, `floorBack`), the Auto
+  opening, memory curation, and the user's actions (`userSends`, `stopAll`, `switchTo`, `setChatMode`).
+- **app/server.mjs** — HTTP only: input checks in the routes, which call the modules above (then `pump`), the `state`/
+  `init` snapshots, static files, and startup (recover jobs, resume a game, timers). One "current chat" is global.
 - **app/agents.mjs** — one adapter per CLI (`AGENTS[name].cmd` builds argv/env, `.parse` consumes one JSON event).
   `runTurn` spawns one headless process per turn, resuming the agent's own CLI session and pushing only unseen
   messages. Also `listModels` (each CLI's model list) and `runAs` (spawn as an unprivileged user).
@@ -45,8 +74,9 @@ Restart the server only when no agent is thinking (check `/events` state) — th
 - **app/moderator.mjs** — Jev calls: `judge` (one request: convergence Score + stalling/debatable/challenged/circling
   Nouls) and `novelty` (one Noul per candidate: would it add something new?).
 - **app/memory.mjs** — `curate`: a configured active member folds the user's new messages into `data/memory.md` (or NO_CHANGE).
-- **app/index.html** — the whole UI (no framework); renders SSE `init`/`state`/`msg` events, re-renders regions only
-  when their HTML changes (`setHTML`) so the 1 s state tick doesn't swallow clicks.
+- **app/index.html** + **app/ui.js** — the UI (no framework): markup and style in the page, logic in ui.js (served at
+  `/ui.js`, syntax-checked in CI); renders SSE `init`/`state`/`msg` events, re-renders regions only when their HTML
+  changes (`setHTML`) so the 1 s state tick doesn't swallow clicks.
 - **app/i18n.mjs** — the UI in English: `EN` keyed by the Chinese text (`{x}` = a value filled in). UI and notes are
   written in Chinese and go through `tx(...)` (server: notes and errors; page: text built in JS, the static page once at
   load). Setting `uiLang` ('' = each browser's language) is served in `<html lang>`; notes are posted in it (or in the last
@@ -68,7 +98,7 @@ turns start only when nothing else is thinking or queued, so each sees the previ
 notes in `chats.state` (resources / setting / key lines): members change them with [NOTE add|edit|drop] lines, the
 user in the UI, and every turn's prompt includes them (`notesPrompt`) so long discussions and stories don't drift.
 Game (博弈; Auto picks it for a request to play, the room then asks for a host if none is @mentioned; state in `chats.state.game`): any game the user describes, hosted by the member the
-first message @mentions (none: the server asks for one). The host (game.mjs hostBrief, server hostDone) announces
+first message @mentions (none: the server asks for one). The host (game.mjs hostBrief, flows.mjs hostDone) announces
 rules, DMs private setups, keeps a private ledger ([STATE], stored in the game state, shown to the user) and picks each
 next step ([PHASE talk n @b @a] / [PHASE orders @a @b] / [PAUSE] / [END]; no marker pauses too; listed handles set who speaks, in that order; unlisted: a random order per lap, turns still one after another); orders
 reach it as `role='order'` DMs. The user can play too (setting `userPlays`, fixed at the game's start as `game.user`;

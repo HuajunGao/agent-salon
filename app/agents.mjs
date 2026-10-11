@@ -323,7 +323,10 @@ const out = (bin, args) => new Promise(res => {
   const read = () => { closeSync(fd); let s = ''; try { s = readFileSync(f, 'utf8'); rmSync(f, { force: true }); } catch {} return s; };
   const p = spawn(bin, args, { env: userEnv(process.env), ...asUser(), stdio: ['ignore', fd, 'ignore'], windowsHide: true });
   const t = setTimeout(() => p.kill(), 90e3);
-  p.on('close', () => { clearTimeout(t); res(read()); }); p.on('error', () => { clearTimeout(t); res(read()); });
+  // A CLI that isn't installed emits 'error' and then 'close': closing the fd twice threw EBADF and crashed the server.
+  let ended = false;
+  const end = () => { if (ended) return; ended = true; clearTimeout(t); res(read()); };
+  p.on('close', end); p.on('error', end);
 });
 const lines = s => s.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 // Claude Code has no list command, but its first stream-json event (init) names the model an alias resolves to, before

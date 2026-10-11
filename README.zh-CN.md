@@ -115,7 +115,7 @@ CLI 没装或没登录的成员，会直接提示怎么解决。
 ## 开发
 
 ```bash
-node --test app/members.test.mjs app/modes.test.mjs app/speech.test.mjs app/stance.test.mjs app/env.test.mjs app/flows.test.mjs
+node --test app/schedule.test.mjs app/members.test.mjs app/modes.test.mjs app/speech.test.mjs app/stance.test.mjs app/env.test.mjs app/flows.test.mjs
 ```
 
 测试会启动真实的服务器，配一个假的 CLI，不产生付费调用。`PLAN.md` 记录设计决策和踩过的 CLI 坑，`CLAUDE.md` 是架构概览。

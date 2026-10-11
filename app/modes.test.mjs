@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { copyApp } from './testkit.mjs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import net from 'node:net';
@@ -11,12 +11,10 @@ import net from 'node:net';
 // Real server + SQLite with a fake harness (records each turn's prompt) and no Jev key, so Auto falls back.
 test('discussion modes: Auto fallback, user override reaches the turn prompt, persists and is recorded', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agent-chat-mode-test-'));
-  const app = join(root, 'app'); mkdirSync(app);
-  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'game.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'i18n.mjs', 'index.html'])
-    copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
+  const app = copyApp(root);
   const turnFile = join(root, 'turn.json');
   writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs, spawnJob } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
-    import {writeFileSync} from 'node:fs';
+    import { writeFileSync } from 'node:fs';
     export const installed = () => true;
     export async function listModels(){return {}};
     export async function runTurn(h,p,s,o){writeFileSync(${JSON.stringify(turnFile)},JSON.stringify({p}));return {text:'我的观点。', sid:'s1', ms:1}};`);

@@ -123,7 +123,7 @@ adjust `deploy/agent-chat@.service` if yours differ. To update: `git pull`, then
 ## Development
 
 ```bash
-node --test app/members.test.mjs app/modes.test.mjs app/speech.test.mjs app/stance.test.mjs app/env.test.mjs app/flows.test.mjs
+node --test app/schedule.test.mjs app/members.test.mjs app/modes.test.mjs app/speech.test.mjs app/stance.test.mjs app/env.test.mjs app/flows.test.mjs
 ```
 
 The tests start a real server with a fake harness: no paid calls. `PLAN.md` holds the design decisions and the CLI

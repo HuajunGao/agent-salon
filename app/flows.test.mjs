@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { copyApp } from './testkit.mjs';
 import { relayNext, debateSetup, debateScript, debateBrief, seatOf, parseReply, applyNotes, rulesOf } from './modes.mjs';
 
 test('story relay: an @mention takes the baton, else the next member in order', () => {
@@ -54,23 +55,20 @@ test('[FILE] lines: a file to attach, taken off the text', () => {
 });
 
 // ---------- the flows on a real server (SQLite, fake harness that records each turn; no Jev key) ----------
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import net from 'node:net';
 
 async function server(t, slowFirst = 0) {
   const root = mkdtempSync(join(tmpdir(), 'agent-chat-flow-test-'));
-  const app = join(root, 'app'); mkdirSync(app);
-  for (const f of ['server.mjs', 'members.mjs', 'modes.mjs', 'game.mjs', 'moderator.mjs', 'memory.mjs', 'speech.mjs', 'i18n.mjs', 'index.html'])
-    copyFileSync(fileURLToPath(new URL(f, import.meta.url)), join(app, f));
+  const app = copyApp(root);
   const log = join(root, 'turns.jsonl');
   // Story turns: the first one passes the baton to @opencode; every turn adds a note. The judge gives a verdict.
   writeFileSync(join(app, 'agents.mjs'), `export { AGENTS, runAs, spawnJob } from ${JSON.stringify(new URL('agents.mjs', import.meta.url).href)};
-    import {appendFileSync, writeFileSync} from 'node:fs';
+    import { appendFileSync, writeFileSync } from 'node:fs';
     let story = 0;
     export const installed = () => true;
     export async function listModels(){return {}};
@@ -556,4 +554,41 @@ test('members attach files from the workspaces and have avatars', async t => {
   assert.equal((await fetch(`${url}/avatar/codex`)).status, 404);
   assert.ok((await init()).state.members.find(x => x.name === 'claude').avatar > 0);
   assert.ok(turns()[0].p.includes('avatar.png'));
+});
+
+test('restart: replies written but not yet published survive it, and nobody is asked again', async t => {
+  const { post, init, until, turns, restart } = await server(t);
+  const id = (await init()).state.chatId;
+  await post('/api/chat/mode', { id, mode: 'roundtable' });
+  await post('/api/send', { text: '重启测试：午饭吃什么？', chat_id: id });
+  await post('/api/typing', { typing: true }); // the user types again: the queue holds
+  for (let i = 0; i < 300 && (await init()).state.queue.length < 4; i++) await new Promise(r => setTimeout(r, 30));
+  let s = await init();
+  assert.equal(s.state.queue.length, 4);
+  assert.equal(s.messages.filter(m => m.kind === 'agent').length, 0);
+  await restart();
+  s = await until(async () => { const x = await init(); return x.messages.filter(m => m.kind === 'agent').length >= 4 && x; });
+  assert.deepEqual(s.messages.filter(m => m.kind === 'agent').map(m => m.sender).sort(), ['agy', 'claude', 'codex', 'opencode']);
+  assert.equal(s.state.queue.length, 0);
+  await new Promise(r => setTimeout(r, 300));
+  assert.equal(turns().length, 4); // their sessions had already moved past these replies
+});
+
+test('a reply finished after the user switched discussions goes to its own discussion, not the open one', async t => {
+  const { post, init, until, turns, url } = await server(t, 4); // the four opening turns take 5 s
+  const a = (await init()).state.chatId;
+  await post('/api/chat/mode', { id: a, mode: 'roundtable' });
+  await post('/api/send', { text: '切换测试：周末去哪？', chat_id: a });
+  await until(async () => turns().length >= 4);
+  const { id: b } = await (await post('/api/chat/new')).json();
+  assert.notEqual(a, b);
+  const exported = () => fetch(`${url}/api/export?id=${a}`).then(r => r.text());
+  await until(async () => ((await exported()).match(/发言。/g) || []).length >= 4);
+  const s = await init();
+  assert.equal(s.state.chatId, b);
+  assert.equal(s.messages.length, 0);       // nothing leaked into the open discussion
+  assert.equal(s.state.queue.length, 0);
+  // the user's message in b gets its own round
+  await post('/api/send', { text: '新话题', chat_id: b });
+  await until(async () => (await init()).messages.filter(m => m.kind === 'agent').length >= 4);
 });

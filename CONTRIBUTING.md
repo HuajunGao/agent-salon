@@ -5,11 +5,11 @@ Issues and pull requests are welcome. Small, focused changes are the easiest to 
 
 ## Ground rules
 
-- **No dependencies, no build step.** Plain Node ≥ 22.5 (built-in `node:sqlite`) and one HTML file. Please keep it that way.
+- **No dependencies, no build step.** Plain Node ≥ 22.5 (built-in `node:sqlite`) and one page (`index.html` + `ui.js`). Please keep it that way.
 - **Run the tests** (a real server with a fake harness, no paid calls):
 
   ```bash
-  node --test app/members.test.mjs app/modes.test.mjs app/speech.test.mjs app/stance.test.mjs app/env.test.mjs app/flows.test.mjs
+  node --test app/schedule.test.mjs app/members.test.mjs app/modes.test.mjs app/speech.test.mjs app/stance.test.mjs app/env.test.mjs app/flows.test.mjs
   ```
 
   A change in behaviour comes with a test that fails without it.
